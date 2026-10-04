@@ -26,6 +26,58 @@
     --input: 214.3 31.8% 91.4%;
     --ring: 222.2 84% 4.9%;
     --radius: 0.5rem;
+
+    /* ============================================================
+       画布 / 节点 / 边视觉变量（Wave3-H §4.4 P1）。
+       panels 只定义变量与面板自身的暗色适配；画布消费方（editor 目录）
+       需把下列硬编码色替换为 var()，清单见 docs/wave3/h-panels.md。
+       ============================================================ */
+    --canvas-bg: 210 40% 98%;            /* 画布底色（现 #f8fafc） */
+    --canvas-grid-dot: 215 25% 80%;      /* React Flow 点阵 */
+    --node-bg: 0 0% 100%;                /* 块白底 */
+    --node-border: 214.3 31.8% 88%;      /* 块边框 */
+    --node-text: 222.2 47.4% 11.2%;      /* 块正文 */
+    --node-muted: 215.4 16.3% 46.9%;     /* 块内次要文字 */
+    --note-yellow: 48 96% 89%;           /* 便签默认色 */
+    --edge-color: 215 25% 65%;           /* 连线默认色 */
+    --edge-label-bg: 0 0% 100%;          /* 线上文字标签底 */
+    --selection-ring: 222.2 47.4% 11.2%; /* 选中框 */
+  }
+
+  /* 深色：与浅色同色相（slate ~222），低饱和、低明度。 */
+  .dark {
+    --background: 222 47% 6%;
+    --foreground: 210 40% 96%;
+    --card: 222 47% 9%;
+    --card-foreground: 210 40% 96%;
+    --popover: 222 47% 10%;
+    --popover-foreground: 210 40% 96%;
+    --primary: 210 40% 96%;
+    --primary-foreground: 222 47% 11%;
+    --secondary: 217 33% 17%;
+    --secondary-foreground: 210 40% 96%;
+    --muted: 217 33% 16%;
+    --muted-foreground: 215 20% 65%;
+    --accent: 217 33% 20%;
+    --accent-foreground: 210 40% 96%;
+    --destructive: 0 62.8% 50.6%;
+    --destructive-foreground: 210 40% 98%;
+    --success: 142 71% 45%;
+    --warning: 38 92% 55%;
+    --border: 217 33% 20%;
+    --input: 217 33% 22%;
+    --ring: 210 40% 90%;
+
+    --canvas-bg: 222 47% 6%;
+    --canvas-grid-dot: 217 33% 25%;
+    --node-bg: 222 47% 11%;
+    --node-border: 217 33% 24%;
+    --node-text: 210 40% 92%;
+    --node-muted: 215 20% 65%;
+    --note-yellow: 45 40% 22%;
+    --edge-color: 215 25% 55%;
+    --edge-label-bg: 222 47% 14%;
+    --selection-ring: 210 40% 90%;
   }
 }
 
@@ -51,9 +103,9 @@ body {
     'Microsoft YaHei', sans-serif;
 }
 
-/* React Flow 画布铺满 */
+/* React Flow 画布铺满（改用变量，暗色跟随 .dark） */
 .react-flow {
-  background: #f8fafc;
+  background: hsl(var(--canvas-bg));
 }
 
 /* ============================================================

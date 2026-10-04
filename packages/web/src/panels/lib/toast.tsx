@@ -53,9 +53,9 @@ export function useToast() {  const push = useToastStore((s) => s.push);
 }
 
 const KIND_STYLE: Record<ToastKind, string> = {
-  success: 'border-l-4 border-l-success bg-white text-foreground shadow-lg',
-  warn: 'border-l-4 border-l-warning bg-white text-foreground shadow-lg',
-  error: 'border-l-4 border-l-destructive bg-white text-foreground shadow-lg',
+  success: 'border-l-4 border-l-success bg-card text-card-foreground shadow-lg',
+  warn: 'border-l-4 border-l-warning bg-card text-card-foreground shadow-lg',
+  error: 'border-l-4 border-l-destructive bg-card text-card-foreground shadow-lg',
 };
 
 function KindIcon({ kind }: { kind: ToastKind }) {
