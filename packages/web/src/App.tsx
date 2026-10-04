@@ -65,7 +65,7 @@ export default function App() {
   useWiringUi((s) => s.trashNonce);
 
   // 导出数据流
-  const { result, sheetsVisible, actions } = useExportModel(panelsApi);
+  const { result, sheetsVisible, actions, scope, setScope } = useExportModel(panelsApi);
 
   // DEV-only：e2e 常驻打印容器（window.__drawpaper_debugSheets）。生产构建 import.meta.env.DEV=false 被剔除。
   const debugSheetsOn = import.meta.env.DEV && typeof window !== 'undefined' && !!window.__drawpaper_debugSheets;
@@ -126,7 +126,7 @@ export default function App() {
       ) : null}
 
       {/* 导出弹窗 + 离屏打印容器 */}
-      <ExportDialog api={panelsApi} actions={actions} />
+      <ExportDialog api={panelsApi} actions={actions} scope={scope} onScopeChange={setScope} />
       {sheetsVisible && result.pages.length > 0 && (
         <PrintSheets result={result} doc={doc} settings={doc.page} edgeLabelsVisible={doc.page.edgeLabels} />
       )}

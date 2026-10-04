@@ -59,6 +59,12 @@ export function createPanelsApi(store: EditorStoreApi): PanelsApi {
     get branchOnly() {
       return store.getState().layoutUi.scopeSelected;
     },
+    get tighten() {
+      return store.getState().layoutUi.tighten;
+    },
+    get backupEnabled() {
+      return store.getState().backupEnabled;
+    },
     get canUndo() {
       return store.getState().canUndo;
     },
@@ -161,6 +167,15 @@ export function createPanelsApi(store: EditorStoreApi): PanelsApi {
     setNodeSpacing: (v) => store.getState().setSpacing(store.getState().doc.layout.rankSpacing, v),
     setBranchOnly: (v) => {
       if (store.getState().layoutUi.scopeSelected !== v) store.getState().toggleScopeSelected();
+    },
+    setTighten: (v) => store.getState().setTighten(v),
+    setBackupEnabled: (v) => {
+      store.getState().setBackupEnabled(v);
+      try {
+        localStorage.setItem('drawpaper-backup-enabled', v ? '1' : '0');
+      } catch {
+        /* 隐私模式忽略 */
+      }
     },
 
     // ---- 页面 / 导出回调 ----

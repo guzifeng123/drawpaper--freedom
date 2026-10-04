@@ -18,7 +18,7 @@ import type { PageMode, PageOrientation } from '@drawpaper/core';
 import type { PanelsApi } from '@/panels/panels-api';
 import { buildExportFileName } from './filename';
 
-export type ExportScope = 'all' | 'selected';
+export type ExportScope = 'all' | 'selected' | 'bbox';
 
 export interface ExportDialogActions {
   /** [打印 / 另存 PDF] 矢量主线：走 window.print()。 */
@@ -56,9 +56,13 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 export function ExportDialog({
   api,
   actions,
+  scope,
+  onScopeChange,
 }: {
   api: PanelsApi;
   actions: ExportDialogActions;
+  scope: ExportScope;
+  onScopeChange: (s: ExportScope) => void;
 }) {
   const src = api.page;
   const [orientation, setOrientationState] = React.useState<PageOrientation>(src.orientation);
@@ -69,7 +73,6 @@ export function ExportDialog({
   const [showPageNumbers, setPageNumbersState] = React.useState(src.showPageNumbers);
   const [colorMode, setColorModeState] = React.useState(src.colorMode);
   const [edgeLabels, setEdgeLabelsState] = React.useState(src.edgeLabels);
-  const [scope, setScope] = React.useState<ExportScope>('all');
 
   const fileName = buildExportFileName({
     title: api.doc?.title ?? '未命名',
@@ -204,16 +207,25 @@ export function ExportDialog({
             <Button
               size="sm"
               variant={scope === 'all' ? 'default' : 'outline'}
-              onClick={() => setScope('all')}
+              onClick={() => onScopeChange('all')}
             >
               全部
             </Button>
             <Button
               size="sm"
               variant={scope === 'selected' ? 'default' : 'outline'}
-              onClick={() => setScope('selected')}
+              onClick={() => onScopeChange('selected')}
             >
               仅选中分支
+            </Button>
+            <Button
+              size="sm"
+              variant={scope === 'bbox' ? 'default' : 'outline'}
+              disabled={(api.selectedNodeIds ?? []).length === 0}
+              title={(api.selectedNodeIds ?? []).length === 0 ? '先在画布框选若干块' : '仅导出选中节点包围盒内的内容'}
+              onClick={() => onScopeChange('bbox')}
+            >
+              仅选中区域
             </Button>
           </Row>
           <Row label="显示分页预览">

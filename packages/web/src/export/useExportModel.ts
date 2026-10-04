@@ -10,7 +10,7 @@ import {
   type PaginateSettings,
 } from '@drawpaper/core';
 import type { PanelsApi } from '@/panels/panels-api';
-import type { ExportDialogActions } from './ExportDialog';
+import { type ExportDialogActions, type ExportScope } from './ExportDialog';
 import {
   collectSheetElements,
   downloadSheetsAsPdf,
@@ -26,12 +26,34 @@ const EMPTY_RESULT: PaginateResult = { pages: [], orphans: [], totalPages: 0, no
 /**
  * 独立可复用的分页计算（所见即所得三模式）。导出按钮与画布分页虚线叠加层共用同一逻辑。
  */
-export function computePanelsPaginate(api: PanelsApi): PaginateResult {
+export function computePanelsPaginate(api: PanelsApi, scope: 'all' | 'selected' | 'bbox' = 'all'): PaginateResult {
   const doc = api.doc;
   if (!doc) return EMPTY_RESULT;
   try {
+    // bbox 范围：仅保留与当前选中节点包围盒相交的节点（含其连接边）。
+    let nodes = doc.nodes;
+    let edges = doc.edges;
+    if (scope === 'bbox') {
+      const sel = new Set(api.selectedNodeIds ?? []);
+      if (sel.size > 0) {
+        const box = {
+          minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity,
+        };
+        for (const n of doc.nodes) {
+          if (!sel.has(n.id)) continue;
+          box.minX = Math.min(box.minX, n.x);
+          box.minY = Math.min(box.minY, n.y);
+          box.maxX = Math.max(box.maxX, n.x + n.width);
+          box.maxY = Math.max(box.maxY, n.y + n.height);
+        }
+        nodes = doc.nodes.filter((n) =>
+          n.x < box.maxX && n.x + n.width > box.minX && n.y < box.maxY && n.y + n.height > box.minY);
+        const ids = new Set(nodes.map((n) => n.id));
+        edges = edges.filter((e) => ids.has(e.source) && ids.has(e.target));
+      }
+    }
     const measured: Record<string, MeasuredSize> = {};
-    for (const n of doc.nodes) measured[n.id] = { width: n.width, height: n.height };
+    for (const n of nodes) measured[n.id] = { width: n.width, height: n.height };
     const settings: PaginateSettings = {
       ...doc.page,
       grayScale: doc.page.colorMode === 'gray',
@@ -41,8 +63,8 @@ export function computePanelsPaginate(api: PanelsApi): PaginateResult {
     if (doc.page.mode === 'flow') {
       const layout = layoutTree(
         {
-          nodes: doc.nodes,
-          edges: doc.edges,
+          nodes,
+          edges,
           rankSpacing: doc.layout.rankSpacing,
           nodeSpacing: doc.layout.nodeSpacing,
           measured,
@@ -50,22 +72,21 @@ export function computePanelsPaginate(api: PanelsApi): PaginateResult {
         'mindmap-down',
       );
       const collapsed: Record<string, boolean> = {};
-      for (const n of doc.nodes) if (n.collapsed) collapsed[n.id] = true;
-      return paginateFlow({ layout, measured, settings, nodes: doc.nodes, edges: doc.edges, collapsed });
+      for (const n of nodes) if (n.collapsed) collapsed[n.id] = true;
+      return paginateFlow({ layout, measured, settings, nodes, edges, collapsed });
     }
 
     const positions: LayoutResult['positions'] = {};
-    for (const n of doc.nodes) positions[n.id] = { x: n.x, y: n.y };
+    for (const n of nodes) positions[n.id] = { x: n.x, y: n.y };
     const layout: LayoutResult = {
       positions,
       collisions: { overlappingPairs: [], detouredNodes: [] },
       notes: [],
     };
-    // 折叠子树：从节点的 collapsed 标志推导 map 传入分页（否则折叠后代会被导出）。
     const collapsed: Record<string, boolean> = {};
-    for (const n of doc.nodes) if (n.collapsed) collapsed[n.id] = true;
+    for (const n of nodes) if (n.collapsed) collapsed[n.id] = true;
     const fn = doc.page.mode === 'fit' ? paginateFit : paginateTiles;
-    return fn({ layout, measured, settings, nodes: doc.nodes, edges: doc.edges, collapsed });
+    return fn({ layout, measured, settings, nodes, edges, collapsed });
   } catch {
     return EMPTY_RESULT;
   }
@@ -84,11 +105,14 @@ export function useExportModel(api: PanelsApi): {
   result: PaginateResult;
   sheetsVisible: boolean;
   actions: ExportDialogActions;
+  scope: ExportScope;
+  setScope: (s: ExportScope) => void;
 } {
   const [result, setResult] = React.useState<PaginateResult>(EMPTY_RESULT);
   const [sheetsVisible, setSheetsVisible] = React.useState(false);
+  const [scope, setScope] = React.useState<ExportScope>('all');
 
-  const computeResult = React.useCallback((): PaginateResult => computePanelsPaginate(api), [api]);
+  const computeResult = React.useCallback((): PaginateResult => computePanelsPaginate(api, scope), [api, scope]);
 
   const afterSheetsRender = React.useCallback(
     async (job: () => Promise<void>) => {
@@ -169,5 +193,5 @@ export function useExportModel(api: PanelsApi): {
     [api, afterSheetsRender, computeResult],
   );
 
-  return { result, sheetsVisible, actions };
+  return { result, sheetsVisible, actions, scope, setScope };
 }

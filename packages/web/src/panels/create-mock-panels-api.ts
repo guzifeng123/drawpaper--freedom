@@ -120,6 +120,8 @@ export function createMockPanelsApi(): PanelsApi {
     saveState: 'saved' as PanelsApi['saveState'],
     savedAt: Date.now() - 1000 * 30,
     branchOnly: false,
+    tighten: true,
+    backupEnabled: false,
     canUndo: false,
     canRedo: false,
     exportOpen: false,
@@ -162,6 +164,12 @@ export function createMockPanelsApi(): PanelsApi {
     layoutPrefs: { mode: 'mindmap-right', rankSpacing: 90, nodeSpacing: 28 },
     get branchOnly() {
       return state.branchOnly;
+    },
+    get tighten() {
+      return state.tighten;
+    },
+    get backupEnabled() {
+      return state.backupEnabled;
     },
     get canUndo() {
       return state.canUndo;
@@ -265,6 +273,12 @@ export function createMockPanelsApi(): PanelsApi {
     },
     setBranchOnly(v) {
       state.branchOnly = v;
+    },
+    setTighten(v) {
+      state.tighten = v;
+    },
+    setBackupEnabled(v) {
+      state.backupEnabled = v;
     },
     setPageSettings(patch) {
       const doc = docById.get(state.currentDocId);

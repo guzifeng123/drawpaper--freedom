@@ -13,7 +13,13 @@ export interface DrawpaperDevHook {
   /** 整体替换当前文档（跳过 UI）。 */
   loadFixture(doc: KBNoteDoc): void;
   /** 读当前文档与视口快照。 */
-  getState(): { doc: KBNoteDoc; viewport: { x: number; y: number; zoom: number }; nodeCount: number };
+  getState(): {
+    doc: KBNoteDoc;
+    viewport: { x: number; y: number; zoom: number };
+    nodeCount: number;
+    layoutUi: { scopeSelected: boolean; tighten: boolean };
+    backupEnabled: boolean;
+  };
   /** 按名调用白名单内的 store action。 */
   invoke(action: string, ...args: unknown[]): unknown;
   /** 常驻渲染离屏打印容器（e2e 截图/矢量 PDF 用）。 */
@@ -59,6 +65,8 @@ const WHITELIST = new Set([
   'reverseEdge',
   'applyAISuggestions',
   'setLayoutMode',
+  'setTighten',
+  'setBackupEnabled',
   // Wave4b P1 e2e：快照 / 回收站 / 模板 / 文档生命周期 / 手动分页符。
   'listDocs',
   'deleteDoc',
@@ -87,6 +95,8 @@ export function installDevHooks(): void {
         doc: s.doc,
         viewport: s.viewport,
         nodeCount: s.doc.nodes.length,
+        layoutUi: { scopeSelected: s.layoutUi.scopeSelected, tighten: s.layoutUi.tighten },
+        backupEnabled: s.backupEnabled,
       };
     },
     invoke(action: string, ...args: unknown[]) {

@@ -63,7 +63,7 @@ export class MobileHostAdapter implements HostAdapter {
     throw new Error('MobileHostAdapter.showOpenFilePicker: use PWA <input type=file> fallback');
   }
 
-  async showSaveFilePicker(filename: string, text: string): Promise<void> {
+  async showSaveFilePicker(_filename: string, _text: string): Promise<void> {
     // Reference skeleton:
     //   const safe = filename.endsWith('.kbnote') ? filename : `${filename}.kbnote`;
     //   await Filesystem.writeFile({
@@ -79,7 +79,6 @@ export class MobileHostAdapter implements HostAdapter {
     // Mobile WebView has no window.print() equivalent that opens a system
     // print dialog. The PWA export flow already produces a PDF blob; on
     // tablet we hand it to the share sheet so the user can pick "Print".
-    // eslint-disable-next-line no-console
     console.warn('[mobile-host] print() deferred to share-sheet export');
   }
 

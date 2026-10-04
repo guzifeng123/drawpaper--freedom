@@ -284,6 +284,11 @@ function CanvasInner({ api }: { api: EditorApi }) {
       if (!target.closest('.react-flow__pane')) return;
       e.preventDefault();
       const pos = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      // 分页预览模式下右键 = 在此插入手动分页符。
+      if (snap.doc.page.showPageBreak) {
+        api.addManualPageBreak('pb_' + Math.random().toString(36).slice(2, 8), pos.x, pos.y);
+        return;
+      }
       if (window.confirm('在此新建块？确定 = 新建文本块，取消 = 不操作')) {
         const id = api.addNode('text', pos.x - 110, pos.y - 30);
         api.setEditingNode(id);
@@ -295,7 +300,7 @@ function CanvasInner({ api }: { api: EditorApi }) {
       el.removeEventListener('dblclick', onDbl, true);
       el.removeEventListener('contextmenu', onCtx, true);
     };
-  }, [api, rf]);
+  }, [api, rf, snap.doc.page.showPageBreak]);
 
   return (
     <div className="relative h-full w-full" ref={wrapRef}>

@@ -133,6 +133,8 @@ export function createEditorApi(store: EditorStoreApi, bridge: ConflictBridge): 
     setMode: (mode) => store.getState().setMode(mode),
     setEditingNode: (id) => store.getState().setEditingNode(id),
     setViewport: (vp) => store.getState().setViewport(vp),
+    addManualPageBreak: (id, x, y) => store.getState().addManualPageBreak(id, x, y),
+    removePageBreak: (id) => store.getState().removePageBreak(id),
 
     // ---- 剪贴板 ----
     copy: () => store.getState().copy(),

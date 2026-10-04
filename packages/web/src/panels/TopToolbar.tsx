@@ -40,6 +40,7 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuCheckboxItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Check } from 'lucide-react';
@@ -257,6 +258,16 @@ export const TopToolbar = React.memo(function TopToolbar({ api }: { api: PanelsA
           <DropdownMenuItem onSelect={() => api.requestSave()}>
             <FileDown /> 立即保存
           </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuCheckboxItem
+            checked={api.backupEnabled}
+            onSelect={(e) => {
+              e.preventDefault();
+              api.setBackupEnabled(!api.backupEnabled);
+            }}
+          >
+            每 10 分钟自动备份
+          </DropdownMenuCheckboxItem>
         </DropdownMenuContent>
       </DropdownMenu>
       <input
@@ -362,6 +373,14 @@ export const TopToolbar = React.memo(function TopToolbar({ api }: { api: PanelsA
                 id="branch-only"
                 checked={api.branchOnly}
                 onCheckedChange={(v) => api.setBranchOnly(v)}
+              />
+            </div>
+            <div className="flex items-center justify-between">
+              <Label htmlFor="tighten">折叠后自动收紧</Label>
+              <Switch
+                id="tighten"
+                checked={api.tighten}
+                onCheckedChange={(v) => api.setTighten(v)}
               />
             </div>
           </div>

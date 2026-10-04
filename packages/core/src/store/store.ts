@@ -188,8 +188,8 @@ export interface EditorState {
   /** 待裁决冲突（null = 无）。 */
   pendingConflicts: PendingConflicts | null;
 
-  /** 布局 UI 偏好（非 doc 持久化）。 */
-  layoutUi: { scopeSelected: boolean };
+  /** 布局 UI 偏好（非 doc 持久化）。tighten：折叠后自动收紧。 */
+  layoutUi: { scopeSelected: boolean; tighten: boolean };
   /** web 侧 ResizeObserver 实测尺寸。 */
   measuredSizes: Record<string, MeasuredSize>;
   /** 布局预览位置（不落 doc）；null = 无预览。 */
@@ -320,6 +320,7 @@ export interface EditorActions {
   setLayoutMode(mode: LayoutMode): void;
   setSpacing(rankSpacing: number, nodeSpacing: number): void;
   toggleScopeSelected(): void;
+  setTighten(on: boolean): void;
 
   // ---- 块属性 ----
   /** 置顶/取消置顶（pinned）。 */
@@ -791,7 +792,7 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
         canUndo: false,
         canRedo: false,
         pendingConflicts: null,
-        layoutUi: { scopeSelected: false },
+        layoutUi: { scopeSelected: false, tighten: true },
         measuredSizes: {},
         layoutPreview: null,
         searchIndex: null,
@@ -1337,6 +1338,7 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
             ),
             // 手动移动过的块作为 manualFixed 钉住（布局 agent 同期接入该字段）。
             manualFixed: s.manuallyMoved,
+            tighten: s.layoutUi.tighten,
           };
           const result = runLayout(input, s.doc.layout.mode);
           set((d) => {
@@ -1386,6 +1388,11 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
         toggleScopeSelected: () => {
           set((d) => {
             d.layoutUi.scopeSelected = !d.layoutUi.scopeSelected;
+          });
+        },
+        setTighten: (on) => {
+          set((d) => {
+            d.layoutUi.tighten = on;
           });
         },
 

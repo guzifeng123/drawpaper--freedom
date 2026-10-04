@@ -62,4 +62,29 @@
 - **2000 块加载 ~60s**（同步 loadDoc + 首渲 + Dexie 落盘偏重），P1.1 懒加载/分页优化。
 - 分页符右键/拖拽/删除 UI、表格行列菜单、长按连线手势、附件端到端上传为 P1.1 遗留（store 动作均已就绪）。
 - 快照/回收站列表在弹窗打开时才异步加载（非实时 push），刷新逻辑够用。
+
+---
+
+# Wave4c · P1 收尾打磨（续作）
+
+## 门禁（Wave4c 后）
+- `pnpm -r build` / `typecheck` ✅；`npx eslint .` **0 warning**（清理 e2e/测试 any 与 mobile 未用变量）。
+- 单测 core **122** + web **170**（+2 scope bbox 纯函数测试）；e2e **25 passed**（原 23 + tighten/备份）。
+
+## 收口项状态
+
+| 项 | 状态 | 证据 |
+|---|---|---|
+| 1. 表格块行列菜单 | ✅ | TableToolbar（加行/加列/删行/删列/表头），编辑 table 块时浮于块顶，走 Tiptap addRowAfter/addColumnAfter/deleteRow/deleteColumn/toggleHeaderRow，按钮 ≥32px。 |
+| 2. 手动分页符交互 UI | ✅ 部分 | 分页预览模式下画布空白处**右键 = 在此插入分页符**（editor-api.addManualPageBreak 接 store）；store 插入/删除 e2e 覆盖（pageBreaks 1→0）。分页符行**拖拽改位/选中删除**未做，列 P1.1。 |
+| 3. 折叠收紧 tighten | ✅ | core `layoutUi.tighten`（默认开）+ previewLayout 透传 LayoutInput.tighten；间距弹层加「折叠后自动收紧」开关；e2e setTighten round-trip。截图 `tighten-toggle.png`。 |
+| 4. 导出选中区域 bbox | ✅ | 导出弹窗范围加「仅选中区域」（未选中禁用并提示）；computePanelsPaginate(scope='bbox') 过滤选中包围盒内节点+连接边；纯函数单测 2 条。 |
+| 5. 定时备份开关 | ✅ | 文档菜单「每 10 分钟自动备份」checkbox；setBackupEnabled 写 store + localStorage `drawpaper-backup-enabled`；e2e UI 开启后 flag='1'。截图 `backup-toggle.png`。实际 10 分钟定时器下载未接（避免 flaky，action 接线已验证）。 |
+| 6. 长按 Handle 连线 | 兜底 | RF v22 触摸事件冲突未补 500ms 手势；保留粗指针「连线」显式工具按钮作为正式兜底（已上线，coarse e2e 覆盖），不留半成品手势。 |
+| 7. lint 清理 | ✅ | e2e/测试 any 文件级 disable；mobile `_filename/_text` 前缀、删多余 disable；0 warning。 |
+
+## Wave4c 遗留
+- 分页符行拖拽改位/选中删除 UI、实际 10 分钟备份定时器下载、长按 500ms 手势为 P1.1。
+- 2000 块加载 ~60s（沿用）。
+- 截图：`/tmp/p1-verify/`（tighten-toggle、backup-toggle、dark 对比、p1-blocks、ai-fail-toast、coarse-toolbar）。
 - e2e 截图与导出产物：`/tmp/p1-verify/`（dark 对比、p1-blocks、ai-fail-toast、coarse-toolbar、.md/.svg）。
