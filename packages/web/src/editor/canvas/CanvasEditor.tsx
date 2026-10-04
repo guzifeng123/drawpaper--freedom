@@ -22,7 +22,7 @@ import { edgeTypes } from '../edges';
 import { useKeyboardShortcuts } from '../state/useKeyboardShortcuts';
 import { computeSnap } from '../lib/geometry';
 import { ConflictDialog } from '../ui/ConflictDialog';
-import { ToastHost, toast } from '../ui/toast';
+import { toast } from '../ui/toast';
 
 /** 折叠节点的后代集合（折叠后映射给 React Flow 时剔除）。 */
 function hiddenAfterCollapse(doc: { nodes: BlockNode[]; edges: CoreEdge[] }): Set<string> {
@@ -119,6 +119,22 @@ function CanvasInner({ api }: { api: EditorApi }) {
     rf.setCenter(n.x + n.width / 2, n.y + n.height / 2, { zoom: Math.max(rf.getZoom(), 0.8), duration: 300 });
   }, [snap.lastFocus]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // 一键整理落位后：ghost 消失（应用/取消）时 fitView 让布局结果进入视野。
+  const wasPreviewing = useRef(false);
+  useEffect(() => {
+    const previewing = !!snap.layoutPreview;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (wasPreviewing.current && !previewing) {
+      // 等 250ms 落位动画结束再 fit。
+      timer = setTimeout(() => rf.fitView({ padding: 0.2, duration: 300 }), 280);
+    }
+    wasPreviewing.current = previewing;
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snap.layoutPreview]);
+
   // ---- 连接校验 ----
   const isValidConnection: IsValidConnection = (conn) => {
     if (conn.source && conn.target && conn.source === conn.target) return false;
@@ -196,29 +212,43 @@ function CanvasInner({ api }: { api: EditorApi }) {
     }
   };
 
-  // 双击空白建块
-  const onDoubleClick = (e: React.MouseEvent) => {
-    const target = e.target as HTMLElement;
-    if (!target.classList.contains('react-flow__pane')) return;
-    const pos = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
-    api.addNode('text', pos.x - 110, pos.y - 30);
-  };
-
-  // 右键菜单（极简）
-  const onContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const pos = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
-    if (window.confirm('在此新建块？确定 = 新建文本块，取消 = 不操作')) {
-      api.addNode('text', pos.x - 110, pos.y - 30);
-    }
-  };
-
   const mode = snap.mode;
   const selectionOnDrag = mode === 'select';
   const panOnDrag = mode === 'pan' ? true : [1, 2];
 
+  // RF v22 不把 onDoubleClick/onContextMenu 透传到 pane；改用包装 div 上的原生监听。
+  const wrapRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const onDbl = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.react-flow__pane')) return;
+      if (target.closest('.react-flow__node')) return;
+      const pos = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      const id = api.addNode('text', pos.x - 110, pos.y - 30);
+      api.setEditingNode(id);
+    };
+    const onCtx = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      if (!target.closest('.react-flow__pane')) return;
+      e.preventDefault();
+      const pos = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      if (window.confirm('在此新建块？确定 = 新建文本块，取消 = 不操作')) {
+        const id = api.addNode('text', pos.x - 110, pos.y - 30);
+        api.setEditingNode(id);
+      }
+    };
+    el.addEventListener('dblclick', onDbl, true);
+    el.addEventListener('contextmenu', onCtx, true);
+    return () => {
+      el.removeEventListener('dblclick', onDbl, true);
+      el.removeEventListener('contextmenu', onCtx, true);
+    };
+  }, [api, rf]);
+
   return (
-    <div className="relative h-full w-full">
+    <div className="relative h-full w-full" ref={wrapRef}>
       <ReactFlow
         nodes={rfNodes}
         edges={rfEdges}
@@ -237,8 +267,6 @@ function CanvasInner({ api }: { api: EditorApi }) {
           if (snap.editingNodeId && snap.editingNodeId !== node.id) api.setEditingNode(null);
         }}
         onMove={(_, vp) => api.setViewport(vp)}
-        onDoubleClick={onDoubleClick}
-        onContextMenu={onContextMenu}
         fitView
         fitViewOptions={{ padding: 0.2 }}
         onlyRenderVisibleElements
@@ -286,7 +314,6 @@ function CanvasInner({ api }: { api: EditorApi }) {
       </ReactFlow>
 
       <ConflictDialog />
-      <ToastHost />
     </div>
   );
 }

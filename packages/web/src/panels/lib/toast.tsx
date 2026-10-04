@@ -101,3 +101,8 @@ export function Toaster() {  const toasts = useToastStore((s) => s.toasts);
 export function __resetToasts() {
   useToastStore.getState().reset();
 }
+
+/** 非 React 侧（适配层 / 快捷键）直接 push 一条 toast。 */
+export function pushToast(kind: ToastKind, message: string, durationMs?: number): void {
+  useToastStore.getState().push(kind, message, durationMs);
+}

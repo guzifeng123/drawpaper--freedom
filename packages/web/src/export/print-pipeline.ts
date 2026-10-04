@@ -58,16 +58,57 @@ function triggerDownload(dataUrl: string, fileName: string): void {
   a.remove();
 }
 
+/** 取当前离屏打印容器里的所有 .sheet 元素。 */
+export function collectSheetElements(): HTMLElement[] {
+  return Array.from(
+    document.querySelectorAll<HTMLElement>('.drawpaper-print-container .sheet'),
+  );
+}
+
+/**
+ * 位图捕获前：把屏幕上 display:none 的打印容器临时「移到屏幕外但可见」。
+ * html-to-image 无法渲染 display:none 的元素，必须让它参与布局。
+ * 返回清理函数：恢复原状。
+ */
+function revealOffScreenForCapture(): () => void {
+  const container = document.querySelector<HTMLElement>('.drawpaper-print-container');
+  if (!container) return () => undefined;
+  const prev = {
+    display: container.style.display,
+    position: container.style.position,
+    left: container.style.left,
+    top: container.style.top,
+    zIndex: container.style.zIndex,
+  };
+  container.style.display = 'block';
+  container.style.position = 'fixed';
+  container.style.left = '-100000px';
+  container.style.top = '0';
+  container.style.zIndex = '-1';
+  return () => {
+    container.style.display = prev.display;
+    container.style.position = prev.position;
+    container.style.left = prev.left;
+    container.style.top = prev.top;
+    container.style.zIndex = prev.zIndex;
+  };
+}
+
 /** 逐页导出高清 PNG（pixelRatio≈3）。 */
 export async function downloadSheetsAsPng(
   sheets: HTMLElement[],
   baseFileName: string,
 ): Promise<void> {
-  for (let i = 0; i < sheets.length; i++) {
-    const el = sheets[i];
-    if (!el) continue;
-    const dataUrl = await toPng(el, { pixelRatio: 3, backgroundColor: '#ffffff' });
-    triggerDownload(dataUrl, buildPageFileName(baseFileName, i));
+  const restore = revealOffScreenForCapture();
+  try {
+    for (let i = 0; i < sheets.length; i++) {
+      const el = sheets[i];
+      if (!el) continue;
+      const dataUrl = await toPng(el, { pixelRatio: 3, backgroundColor: '#ffffff' });
+      triggerDownload(dataUrl, buildPageFileName(baseFileName, i));
+    }
+  } finally {
+    restore();
   }
 }
 
@@ -77,25 +118,23 @@ export async function downloadSheetsAsPdf(
   baseFileName: string,
   orientation: PageOrientation,
 ): Promise<void> {
-  const pdf = await PDFDocument.create();
-  const { width, height } = A4_PT[orientation];
-  for (const el of sheets) {
-    const dataUrl = await toPng(el, { pixelRatio: 3, backgroundColor: '#ffffff' });
-    const pngBytes = await (await fetch(dataUrl)).arrayBuffer();
-    const img = await pdf.embedPng(pngBytes);
-    const page = pdf.addPage([width, height]);
-    page.drawImage(img, { x: 0, y: 0, width, height });
+  const restore = revealOffScreenForCapture();
+  try {
+    const pdf = await PDFDocument.create();
+    const { width, height } = A4_PT[orientation];
+    for (const el of sheets) {
+      const dataUrl = await toPng(el, { pixelRatio: 3, backgroundColor: '#ffffff' });
+      const pngBytes = await (await fetch(dataUrl)).arrayBuffer();
+      const img = await pdf.embedPng(pngBytes);
+      const page = pdf.addPage([width, height]);
+      page.drawImage(img, { x: 0, y: 0, width, height });
+    }
+    const bytes = await pdf.save();
+    const blob = new Blob([bytes], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    triggerDownload(url, baseFileName);
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } finally {
+    restore();
   }
-  const bytes = await pdf.save();
-  const blob = new Blob([bytes], { type: 'application/pdf' });
-  const url = URL.createObjectURL(blob);
-  triggerDownload(url, baseFileName);
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
-}
-
-/** 取当前离屏打印容器里的所有 .sheet 元素。 */
-export function collectSheetElements(): HTMLElement[] {
-  return Array.from(
-    document.querySelectorAll<HTMLElement>('.drawpaper-print-container .sheet'),
-  );
 }

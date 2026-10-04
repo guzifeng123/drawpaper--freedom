@@ -78,3 +78,14 @@ body {
     display: block !important;
   }
 }
+
+/* ============================================================
+   一键整理落位动画：节点 transform 250ms 过渡。
+   拖拽中的节点（RF 加 .dragging）关掉过渡，避免拖拽跟手被拖慢。
+   ============================================================ */
+.react-flow__node {
+  transition: transform 250ms ease;
+}
+.react-flow__node.dragging {
+  transition: none;
+}

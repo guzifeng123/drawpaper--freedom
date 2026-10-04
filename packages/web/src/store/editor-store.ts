@@ -3,6 +3,7 @@ import type { KBNoteDoc } from '@drawpaper/core';
 import { DexieStorageAdapter } from '../storage/db';
 import { WebHostAdapter } from '../host/web-host';
 import { buildIndex, searchDocs } from '../storage/search-index';
+import { createConflictBridge, type ConflictBridge } from '../wiring/conflict-bridge';
 
 /**
  * React 单例 editor store：注入浏览器 storage / host，启动时打开最近文档或新建空白。
@@ -40,9 +41,13 @@ function blankInitialDoc(): KBNoteDoc {
 export const storageAdapter = new DexieStorageAdapter();
 export const hostAdapter = new WebHostAdapter();
 
+/** 多父/成环冲突弹窗桥：store 挂起 → CanvasEditor 的 ConflictDialog 收集结果。 */
+export const conflictBridge: ConflictBridge = createConflictBridge();
+
 export const editorStore = createEditorStore(blankInitialDoc(), {
   storage: storageAdapter,
   host: hostAdapter,
+  resolveConflictUi: (pending) => conflictBridge.handler(pending),
 });
 
 /** 启动后：列出文档 → 打开最近一份；没有则新建。 */
