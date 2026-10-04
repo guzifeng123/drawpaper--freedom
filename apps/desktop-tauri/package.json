@@ -1,0 +1,24 @@
+{
+  "name": "@drawpaper/desktop-tauri",
+  "version": "0.2.0",
+  "private": true,
+  "description": "drawpaper Windows desktop shell (Tauri 2 + WebView2). Frontend is packages/web; this package only owns the Rust shell and build glue.",
+  "type": "module",
+  "scripts": {
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:msi": "tauri build --bundles msi",
+    "build:nsis": "tauri build --bundles nsis",
+    "check": "cargo check --manifest-path src-tauri/Cargo.toml"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.1.0"
+  },
+  "//": [
+    "This package is intentionally NOT part of the root pnpm workspace.",
+    "Root pnpm-workspace.yaml only globs packages/*, so apps/ is invisible to pnpm -r.",
+    "Install deps here in isolation if needed: pnpm i --ignore-workspace (or npm i).",
+    "The web frontend is built by the root workspace; beforeDevCommand/beforeBuildCommand below call into ../../packages/web.",
+    "frontendDist points at ../../packages/web/dist — run `pnpm -r build` at repo root before `tauri build`."
+  ]
+}

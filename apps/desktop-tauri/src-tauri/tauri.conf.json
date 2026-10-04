@@ -1,0 +1,70 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "drawpaper",
+  "version": "0.2.0",
+  "identifier": "com.drawpaper.app",
+  "build": {
+    "beforeDevCommand": "pnpm --filter @drawpaper/web dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "pnpm --filter @drawpaper/web build",
+    "frontendDist": "../../packages/web/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "drawpaper",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "titleBarStyle": "Visible",
+        "dragDropEnabled": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: asset: http://asset.localhost; script-src 'self'; connect-src 'self' https://api.openai.com https://*"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis"],
+    "publisher": "drawpaper contributors",
+    "copyright": "MIT",
+    "shortDescription": "Local-first infinite-canvas knowledge-block note tool",
+    "longDescription": "drawpaper is a local-first, infinite-canvas knowledge-block note tool. This bundle is the Windows desktop shell (Tauri 2 + WebView2). All data stays on-device; no account, no cloud sync.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "wix": {
+        "language": ["zh-CN", "en-US"]
+      },
+      "nsis": {
+        "languages": ["SimpChinese", "English"]
+      },
+      "fileAssociations": [
+        {
+          "ext": ["kbnote"],
+          "description": "drawpaper knowledge-block note",
+          "identifier": "com.drawpaper.app.kbnote",
+          "icon": "icons/icon.ico"
+        }
+      ]
+    },
+    "macOS": {
+      "frameworks": [],
+      "minimumSystemVersion": "10.15"
+    },
+    "linux": {
+      "appDependencies": []
+    }
+  },
+  "plugins": {}
+}

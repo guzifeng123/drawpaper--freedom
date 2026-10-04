@@ -1,0 +1,29 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Minimal capability set for drawpaper desktop shell. Frontend talks to Rust commands via `invoke()`; these permissions only cover the built-in plugins we actually use.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-set-title",
+    "core:window:allow-center",
+    "core:window:allow-set-focus",
+    "core:menu:default",
+    "core:menu:allow-append",
+    "core:menu:allow-set-as-app-menu",
+    "core:event:default",
+    "core:event:allow-emit",
+    "core:event:allow-listen",
+    "dialog:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "dialog:allow-message",
+    "fs:default",
+    "fs:allow-read-text-file",
+    "fs:allow-write-text-file",
+    "fs:allow-read-dir",
+    "fs:allow-exists",
+    "opener:default",
+    "opener:allow-open-path"
+  ]
+}

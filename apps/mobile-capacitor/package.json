@@ -1,0 +1,34 @@
+{
+  "name": "@drawpaper/mobile-capacitor",
+  "version": "0.2.0",
+  "private": true,
+  "description": "drawpaper tablet shell (Capacitor). PWA-first; this folder only owns the native wrapper config and a reference HostAdapter mapping. Not part of the root pnpm workspace.",
+  "type": "module",
+  "scripts": {
+    "sync": "cap sync",
+    "open:android": "cap open android",
+    "open:ios": "cap open ios",
+    "add:android": "cap add android",
+    "add:ios": "cap add ios",
+    "copy:web": "rimraf dist && cp -r ../../packages/web/dist dist"
+  },
+  "dependencies": {
+    "@capacitor/android": "^6.2.0",
+    "@capacitor/app": "^6.0.2",
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/filesystem": "^6.0.2",
+    "@capacitor/ios": "^6.2.0",
+    "@capacitor/share": "^6.0.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^6.2.0",
+    "typescript": "^5.6.3"
+  },
+  "//": [
+    "Standalone package, NOT in root pnpm-workspace.yaml (which only globs packages/*).",
+    "Install here in isolation when wiring native builds: pnpm i --ignore-workspace.",
+    "webDir points at ../../packages/web/dist; run `pnpm -r build` at repo root first.",
+    "This commit ships the PWA-first strategy: iPad/Android users install the PWA; the",
+    "Capacitor wrapper is only needed once we want app-store listings (planning §4.12)."
+  ]
+}
