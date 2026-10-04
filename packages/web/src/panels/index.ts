@@ -1,2 +1,8 @@
-// 占位 barrel：Wave 各 wave 实现填充（见 docs/ARCHITECTURE.md 所有权表）。
-export {};
+// panels barrel：工具栏 / 文档列表 / 搜索 / toast / PanelsApi。
+export * from './panels-api';
+export { createMockPanelsApi } from './create-mock-panels-api';
+export { defaultPageSettings } from './create-mock-panels-api';
+export { TopToolbar } from './TopToolbar';
+export { DocsListPanel } from './DocsListPanel';
+export { SearchPanel } from './SearchPanel';
+export { Toaster, useToast } from './lib/toast';

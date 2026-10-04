@@ -8,6 +8,8 @@
     --foreground: 222.2 84% 4.9%;
     --card: 0 0% 100%;
     --card-foreground: 222.2 84% 4.9%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 84% 4.9%;
     --primary: 222.2 47.4% 11.2%;
     --primary-foreground: 210 40% 98%;
     --secondary: 210 40% 96.1%;
@@ -18,10 +20,22 @@
     --accent-foreground: 222.2 47.4% 11.2%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 210 40% 98%;
+    --success: 142 71% 45%;
+    --warning: 38 92% 50%;
     --border: 214.3 31.8% 91.4%;
     --input: 214.3 31.8% 91.4%;
     --ring: 222.2 84% 4.9%;
     --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  body {
+    color: hsl(var(--foreground));
+    background-color: hsl(var(--background));
   }
 }
 
@@ -40,4 +54,27 @@ body {
 /* React Flow 画布铺满 */
 .react-flow {
   background: #f8fafc;
+}
+
+/* ============================================================
+   打印 / 导出（详见 export/print.css 与 PrintSheets.tsx）
+   打印时隐藏整个应用外壳，只显示离屏打印容器。
+   ============================================================ */
+@media print {
+  body.drawpaper-printing #root {
+    display: none !important;
+  }
+  body.drawpaper-printing {
+    background: #fff;
+  }
+}
+
+/* 屏幕上隐藏打印容器，打印时显示 */
+.drawpaper-print-container {
+  display: none;
+}
+@media print {
+  body.drawpaper-printing .drawpaper-print-container {
+    display: block !important;
+  }
 }
