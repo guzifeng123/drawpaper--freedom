@@ -7,6 +7,7 @@ import {
   type LayoutResult,
   type PaginateResult,
   type MeasuredSize,
+  type PaginateSettings,
 } from '@drawpaper/core';
 import type { PanelsApi } from '@/panels/panels-api';
 import type { ExportDialogActions } from './ExportDialog';
@@ -18,28 +19,25 @@ import {
 } from './print-pipeline';
 import { buildExportFileName } from './filename';
 
-/**
- * 胶水 hook：从 api 取 doc / page 设置，调 core 的 layoutTree + paginate*。
- *
- * 注意：本分支 core 的 layout/paginate 仍是 throw('not implemented') 占位。
- * 这里保持薄封装 + try/catch：不可用时返回空分页结果，导出按钮不崩，
- * 真实分页由 Wave1-B 实现后、Wave2 e2e 联调。**不对本 hook 写单测。**
- */
-export function useExportModel(api: PanelsApi): {
-  result: PaginateResult | null;
-  sheetsVisible: boolean;
-  actions: ExportDialogActions;
-} {
-  const [result, setResult] = React.useState<PaginateResult | null>(null);
-  const [sheetsVisible, setSheetsVisible] = React.useState(false);
+const EMPTY_RESULT: PaginateResult = { pages: [], orphans: [], totalPages: 0, notes: [] };
 
-  const computeResult = React.useCallback((): PaginateResult => {
-    const doc = api.doc;
-    if (!doc) return { pages: [], orphans: [], totalPages: 0 };
-    try {
-      const measured: Record<string, MeasuredSize> = {};
-      for (const n of doc.nodes) measured[n.id] = { width: n.width, height: n.height };
-      const layout: LayoutResult = layoutTree(
+/**
+ * 独立可复用的分页计算（所见即所得三模式）。导出按钮与画布分页虚线叠加层共用同一逻辑。
+ */
+export function computePanelsPaginate(api: PanelsApi): PaginateResult {
+  const doc = api.doc;
+  if (!doc) return EMPTY_RESULT;
+  try {
+    const measured: Record<string, MeasuredSize> = {};
+    for (const n of doc.nodes) measured[n.id] = { width: n.width, height: n.height };
+    const settings: PaginateSettings = {
+      ...doc.page,
+      grayScale: doc.page.colorMode === 'gray',
+      showEdgeLabels: true,
+    };
+
+    if (doc.page.mode === 'flow') {
+      const layout = layoutTree(
         {
           nodes: doc.nodes,
           edges: doc.edges,
@@ -47,23 +45,49 @@ export function useExportModel(api: PanelsApi): {
           nodeSpacing: doc.layout.nodeSpacing,
           measured,
         },
-        doc.layout.mode,
+        'mindmap-down',
       );
-      const fn =
-        doc.page.mode === 'fit' ? paginateFit : doc.page.mode === 'flow' ? paginateFlow : paginateTiles;
-      const r = fn({ layout, measured, settings: doc.page });
-      return r;
-    } catch {
-      // core 尚未实现：返回空分页，UI 不崩。
-      return { pages: [], orphans: [], totalPages: 0 };
+      return paginateFlow({ layout, measured, settings, nodes: doc.nodes, edges: doc.edges });
     }
-  }, [api]);
+
+    const positions: LayoutResult['positions'] = {};
+    for (const n of doc.nodes) positions[n.id] = { x: n.x, y: n.y };
+    const layout: LayoutResult = {
+      positions,
+      collisions: { overlappingPairs: [], detouredNodes: [] },
+      notes: [],
+    };
+    const fn = doc.page.mode === 'fit' ? paginateFit : paginateTiles;
+    return fn({ layout, measured, settings, nodes: doc.nodes, edges: doc.edges });
+  } catch {
+    return EMPTY_RESULT;
+  }
+}
+
+/**
+ * 胶水 hook：从 api 取 doc / page 设置，调 core 的 layoutTree + paginate*（Wave2 接真实数据流）。
+ *
+ * 三模式输入：
+ *  - fit / tiles：以当前画布节点坐标（所见即所得）作为 layout 结果输入分页；
+ *  - flow：先用 core.layoutTree（mindmap-down）重排，再交 paginateFlow 切纵向打印流。
+ *
+ * 三条输出按钮（打印 / PNG / PDF）在 afterSheetsRender 内等 <PrintSheets/> 入 DOM 后执行。
+ */
+export function useExportModel(api: PanelsApi): {
+  result: PaginateResult;
+  sheetsVisible: boolean;
+  actions: ExportDialogActions;
+} {
+  const [result, setResult] = React.useState<PaginateResult>(EMPTY_RESULT);
+  const [sheetsVisible, setSheetsVisible] = React.useState(false);
+
+  const computeResult = React.useCallback((): PaginateResult => computePanelsPaginate(api), [api]);
 
   const afterSheetsRender = React.useCallback(
     async (job: () => Promise<void>) => {
       setSheetsVisible(true);
       // 等 React 把 <PrintSheets/> 提交到 DOM 后再取 sheet 元素。
-      await new Promise((res) => requestAnimationFrame(() => setTimeout(res, 60)));
+      await new Promise((res) => requestAnimationFrame(() => setTimeout(res, 80)));
       try {
         await job();
       } finally {

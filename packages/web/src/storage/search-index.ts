@@ -19,6 +19,24 @@ export function extractPlainText(tiptapJson: unknown): string {
   return parts.join(' ').replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * CJK 友好分词：拉丁/数字按词切；中日韩文字按单字成 token。
+ * 否则整段中文会被当成一个 token，子串搜索（如「调研」在「第一步调研」里）命中不了。
+ */
+function tokenize(text: string): string[] {
+  const lower = text.toLowerCase();
+  const words = lower.split(/[^a-z0-9\u4e00-\u9fff]+/).filter(Boolean);
+  const out: string[] = [];
+  for (const w of words) {
+    // 拉丁/数字整词成 token；CJK 只按单字成 token（不发整串，否则子串命中不了）。
+    const latin = w.replace(/[\u4e00-\u9fff]/g, '');
+    if (latin) out.push(latin);
+    const cjk = w.match(/[\u4e00-\u9fff]/g);
+    if (cjk) out.push(...cjk);
+  }
+  return out;
+}
+
 export type NoteIndex = MiniSearch;
 
 /** 为整份文档构建索引。 */
@@ -26,7 +44,8 @@ export function buildIndex(doc: KBNoteDoc): NoteIndex {
   const ms = new MiniSearch({
     fields: ['nodeId', 'body'],
     storeFields: ['nodeId', 'body'],
-    searchOptions: { prefix: true, combineWith: 'AND' },
+    searchOptions: { prefix: true, combineWith: 'AND', tokenize },
+    tokenize,
   });
   const docs = doc.nodes.map((n) => ({
     id: n.id,
@@ -46,7 +65,7 @@ export interface SearchHit {
 export function searchDocs(index: NoteIndex, query: string): SearchHit[] {
   const q = query.trim();
   if (!q) return [];
-  const results = index.search(q, { prefix: true, combineWith: 'AND' });
+  const results = index.search(q, { prefix: true, combineWith: 'AND', tokenize });
   return results.map((r) => {
     const stored = r as unknown as { nodeId?: string; body?: string };
     return {

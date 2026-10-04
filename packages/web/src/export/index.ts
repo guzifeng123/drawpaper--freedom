@@ -5,7 +5,7 @@ export { ExportDialog, type ExportDialogActions, type ExportScope } from './Expo
 export { PageBreakOverlay, type PageBreakOverlayProps } from './PageBreakOverlay';
 export { PrintSheets, type PrintSheetsProps } from './PrintSheets';
 export { TiptapStatic } from './render/tiptap-static';
-export { useExportModel } from './useExportModel';
+export { useExportModel, computePanelsPaginate } from './useExportModel';
 export {
   A4_PT,
   installPageStyle,

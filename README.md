@@ -2,7 +2,7 @@
 
 本地优先（local-first）的「无限画布 + 富文本知识块 + 父子连线 + 一键整理成思维导图 + 导出 A4 横/纵 PDF」Web PWA 笔记工具。纯本地、无账号、无服务器。
 
-> 当前为 **Wave 0 脚手架**：冻结了 core/web 类型与 API 契约，业务逻辑占位待后续并行实现。
+> 当前为 **M1（P0）闭环**：画布建块/连线/Tab-Enter 建块、一键整理（横/纵/组织树，ghost 预览→落位→undo）、自动保存到 IndexedDB、全文搜索飞块、A4 三模式导出（打印/PNG/PDF）已端到端跑通。详见 `docs/wave2/integration.md`。
 
 ## 技术栈
 
