@@ -71,6 +71,10 @@ export function createEditorApi(store: EditorStoreApi, bridge: ConflictBridge): 
       prefs: { gridSnap: s.prefs.snapToGrid },
       lastFocus: s.lastFocus ? { nodeId: s.lastFocus.nodeId, ts: s.lastFocus.nonce } : null,
       historyEvent: s.historyEvent,
+      // Wave4：聚焦分支 / 标签筛选 / 手动固定节点。
+      focusNodeId: s.focusNodeId,
+      tagFilter: { mode: s.tagFilter.match, tagIds: s.tagFilter.tagIds },
+      manualFixed: s.manuallyMoved,
     };
   };
 
@@ -111,6 +115,7 @@ export function createEditorApi(store: EditorStoreApi, bridge: ConflictBridge): 
     deleteEdge: (id) => store.getState().deleteEdge(id),
     setEdgeColor: (id, color) => store.getState().setEdgeColor(id, color),
     setEdgeLabel: (id, label) => store.getState().setEdgeLabel(id, label),
+    reverseEdge: (id) => store.getState().reverseEdge(id),
 
     // ---- 导图键盘 ----
     tabAddChild: () => store.getState().tabAddChild(),
@@ -154,6 +159,17 @@ export function createEditorApi(store: EditorStoreApi, bridge: ConflictBridge): 
     // ---- 面板接缝（纯 UI 态）----
     openSearch: () => getWiringUi().setSearchOpen(true),
     openExport: () => getWiringUi().setExportOpen(true),
+
+    // ---- P1 聚焦 / 筛选（真实 store）----
+    setFocusNode: (id) => store.getState().setFocusNode(id),
+    setTagFilter: (filter) =>
+      store.getState().setTagFilter({ tagIds: filter.tagIds, match: filter.mode }),
+
+    // ---- P1 附件上传（OPFS 资产管线）----
+    putImageAsset: async (file) => {
+      const r = await store.getState().putImageAsset(file);
+      return { assetRef: r.assetRef ?? r.src, name: file.name, size: file.size };
+    },
 
     // ---- 保存 ----
     save: () => store.getState().requestSave(),

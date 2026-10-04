@@ -1,9 +1,26 @@
 import type { EditorStoreApi, KBNoteDoc } from '@drawpaper/core';
 import { parseKBNote } from '@drawpaper/core';
-import type { PanelsApi, SearchResultItem, DocMeta } from '@/panels/panels-api';
+import type { PanelsApi, SearchResultItem, DocMeta, SnapshotInfo, TrashItem } from '@/panels/panels-api';
 import { pushToast } from '@/panels/lib/toast';
 import { useWiringUi } from './ui-store';
 import { storageAdapter, hostAdapter } from '@/store/editor-store';
+
+/** 大纲内联建块用：一段纯文本的 Tiptap doc。 */
+function paraDoc(text: string): unknown {
+  return {
+    type: 'doc',
+    content: text ? [{ type: 'paragraph', content: [{ type: 'text', text }] }] : [],
+  };
+}
+
+// ---- 快照 / 回收站异步缓存（store.list* 为 async，getter 是同步）----
+// 注意：createPanelsApi 每次 App 渲染都重建（getter 读最新值），缓存必须放模块级，
+// 否则每次渲染都重置 dirty=true → 异步加载 → bump nonce → 再渲染 → 死循环。
+let snapshotDirty = true;
+let trashDirty = true;
+let snapshotCache: SnapshotInfo[] = [];
+let trashCache: TrashItem[] = [];
+let cachedDocId: string | null = null;
 
 /**
  * createPanelsApi —— 把真实 EditorStore + wiring ui store + storage/host 适配为 E 的 PanelsApi。
@@ -171,49 +188,157 @@ export function createPanelsApi(store: EditorStoreApi): PanelsApi {
     flyToNode: (id) => store.getState().flyToNode(id),
 
     // ============================================================
-    // Wave3-H 桩：本分支为满足 PanelsApi 接口自洽的最小编译实现。
-    // 真实 store 动作（reparentNode / 标签 CRUD / 快照 / 回收站 / 模板 /
-    // 活动文件句柄 / setFocusNode / 筛选下发）由存储 agent 同期在 store 实现，
-    // Wave4 总装时在此替换为真实接线；此处只做能从现有状态读到的部分。
+    // Wave4 总装：把 Wave3-H 桩全部换成真实 store 动作。
+    // store.tagFilter 形状 {tagIds,types,colors,match} ↔ PanelsApi
+    // TagFilterState {tagIds,blockTypes,colors,match}：types↔blockTypes 整形。
     // ============================================================
     get tags() {
       return store.getState().doc.tags;
     },
     get tagFilter() {
-      return { tagIds: [], blockTypes: [], colors: [], match: 'any' as const };
+      const f = store.getState().tagFilter;
+      return { tagIds: f.tagIds, blockTypes: f.types, colors: f.colors, match: f.match };
     },
     get focusNodeId() {
-      return null;
+      return store.getState().focusNodeId;
     },
     get activeFile() {
-      return { name: null };
+      return store.getState().activeFile ?? { name: null };
     },
     get snapshots() {
-      return [] as import('@/panels/panels-api').SnapshotInfo[];
+      // 异步列表：读取时若缓存过期则触发加载，加载完成 bump ui.nonce 驱动重渲染。
+      void refreshSnapshots();
+      return snapshotCache;
     },
     get trash() {
-      return [] as import('@/panels/panels-api').TrashItem[];
+      void refreshTrash();
+      return trashCache;
     },
-    createTag: () => undefined,
-    renameTag: () => undefined,
-    changeTagColor: () => undefined,
-    deleteTag: () => undefined,
-    setTagFilter: () => undefined,
-    clearTagFilter: () => undefined,
+    createTag: (name, color) => {
+      store.getState().createTag(name, color);
+    },
+    renameTag: (id, name) => store.getState().renameTag(id, name),
+    changeTagColor: (id, color) => store.getState().setTagColor(id, color),
+    deleteTag: (id) => store.getState().deleteTag(id),
+    setTagFilter: (patch) => {
+      // blockTypes → types 整形后下发 store。
+      store.getState().setTagFilter({
+        tagIds: patch.tagIds,
+        types: patch.blockTypes,
+        colors: patch.colors,
+        match: patch.match,
+      });
+    },
+    clearTagFilter: () => store.getState().clearTagFilter(),
     toggleCollapseNode: (id) => store.getState().toggleCollapse(id),
-    reparentNode: () => undefined,
-    addChildBlock: () => '',
-    addSiblingBlock: () => '',
-    setFocusNode: () => undefined,
-    openLocalFile: () => undefined,
-    saveAsLocalFile: () => undefined,
-    createDocFromTemplate: () => undefined,
-    takeSnapshot: () => undefined,
-    restoreSnapshot: () => undefined,
-    deleteSnapshot: () => undefined,
-    restoreFromTrash: () => undefined,
-    purgeFromTrash: () => undefined,
-    emptyTrash: () => undefined,
+    reparentNode: (nodeId, newParentId, index) => store.getState().reparentNode(nodeId, newParentId, index),
+    addChildBlock: (parentId, text) => {
+      const s = store.getState();
+      const parent = parentId ? s.doc.nodes.find((n) => n.id === parentId) : undefined;
+      const x = (parent?.x ?? 0) + (parent?.width ?? 240) + 120;
+      const y = parent?.y ?? 0;
+      const id = s.addNode('text', x, y);
+      s.updateContent(id, paraDoc(text));
+      if (parentId) s.addEdge(parentId, id);
+      return id;
+    },
+    addSiblingBlock: (afterNodeId, text) => {
+      const s = store.getState();
+      const after = s.doc.nodes.find((n) => n.id === afterNodeId);
+      const parentEdge = after ? s.doc.edges.find((e) => e.target === afterNodeId) : undefined;
+      const parentId = parentEdge?.source ?? null;
+      const x = after?.x ?? 0;
+      const y = (after?.y ?? 0) + (after?.height ?? 80) + 40;
+      const id = s.addNode('text', x, y);
+      s.updateContent(id, paraDoc(text));
+      if (parentId) s.addEdge(parentId, id);
+      return id;
+    },
+    setFocusNode: (id) => store.getState().setFocusNode(id),
+    openLocalFile: () => void store.getState().openLocalFile(),
+    saveAsLocalFile: () => void store.getState().saveLocalFileAs(),
+    createDocFromTemplate: (templateId) => {
+      store.getState().createDocFromTemplate(templateId);
+      pushToast('success', '已从模板新建文档');
+    },
+    takeSnapshot: (label) => {
+      void store.getState().snapshotDoc(label).then(() => {
+        snapshotDirty = true;
+        useWiringUi.getState().bumpSnapshots();
+      });
+    },
+    restoreSnapshot: (id) => {
+      void store.getState().restoreSnapshot(id).then(() => {
+        snapshotDirty = true;
+        pushToast('success', '已恢复快照');
+      });
+    },
+    deleteSnapshot: (id) => {
+      void storageAdapter.deleteSnapshot?.(id).then(() => {
+        snapshotDirty = true;
+        useWiringUi.getState().bumpSnapshots();
+      });
+    },
+    restoreFromTrash: (id) => {
+      void store.getState().restoreTrash(id).then(() => {
+        trashDirty = true;
+        void store.getState().listDocs();
+        pushToast('success', '已从回收站恢复');
+      });
+    },
+    purgeFromTrash: (id) => {
+      void store.getState().purgeTrash(id).then(() => {
+        trashDirty = true;
+        useWiringUi.getState().bumpTrash();
+      });
+    },
+    emptyTrash: () => {
+      void store.getState().emptyTrash().then(() => {
+        trashDirty = true;
+        useWiringUi.getState().bumpTrash();
+      });
+    },
+  };
+
+  const refreshSnapshots = async (): Promise<void> => {
+    const docId = store.getState().currentDocId;
+    if (!snapshotDirty && docId === cachedDocId) return;
+    snapshotDirty = false;
+    cachedDocId = docId;
+    if (!docId) {
+      snapshotCache = [];
+      return;
+    }
+    try {
+      const list = await store.getState().listSnapshots(docId);
+      const title = store.getState().doc?.title ?? '';
+      snapshotCache = list.map((s) => ({
+        id: s.id,
+        at: s.takenAt,
+        label: s.label ?? '',
+        docTitle: title,
+      }));
+      useWiringUi.getState().bumpSnapshots();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  const refreshTrash = async (): Promise<void> => {
+    if (!trashDirty) return;
+    trashDirty = false;
+    try {
+      const list = await store.getState().listTrash();
+      trashCache = list.map((t) => ({
+        id: t.id,
+        title: t.title,
+        deletedAt: t.trashedAt,
+        kind: 'doc' as const,
+      }));
+      useWiringUi.getState().bumpTrash();
+    } catch {
+      /* ignore */
+    }
   };
 
   return api;
