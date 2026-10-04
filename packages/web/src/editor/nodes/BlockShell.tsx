@@ -137,13 +137,13 @@ export const BlockShell = memo(function BlockShell({
   };
 
   const shellStyle: React.CSSProperties = {
-    background: block.style.bg ?? undefined,
-    borderColor: selected ? '#3b82f6' : block.style.border ?? '#e2e8f0',
+    background: block.style.bg ?? 'hsl(var(--node-bg))',
+    borderColor: selected ? '#3b82f6' : block.style.border ?? 'hsl(var(--node-border))',
   };
 
   return (
     <div
-      className={`relative flex h-full w-full flex-col rounded-lg border bg-white shadow-sm transition-shadow ${
+      className={`relative flex h-full w-full flex-col rounded-lg border text-[hsl(var(--node-text))] shadow-sm transition-shadow ${
         selected ? 'shadow-md ring-2 ring-blue-400/40' : ''
       } ${shellClassName} ${isEditing ? 'nodrag nowheel' : ''}`}
       style={shellStyle}

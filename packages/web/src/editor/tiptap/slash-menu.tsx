@@ -169,7 +169,7 @@ export function SlashMenu({ editor, onCommand }: SlashMenuProps) {
 
   return createPortal(
     <div
-      className="fixed z-50 w-56 overflow-hidden rounded-lg border bg-white shadow-lg"
+      className="fixed z-50 w-56 overflow-hidden rounded-lg border bg-[hsl(var(--popover))] text-[hsl(var(--popover-foreground))] shadow-lg"
       style={{ left: pos.x, top: pos.y }}
       onMouseDown={(e) => e.preventDefault()}
     >
@@ -179,14 +179,14 @@ export function SlashMenu({ editor, onCommand }: SlashMenuProps) {
           <button
             key={item.id}
             className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs ${
-              i === active ? 'bg-slate-100' : ''
+              i === active ? 'bg-[hsl(var(--accent))]' : ''
             }`}
             onMouseEnter={() => setActive(i)}
             onClick={() => apply(item)}
           >
-            <span className="text-slate-500">{item.icon}</span>
+            <span className="text-[hsl(var(--muted-foreground))]">{item.icon}</span>
             <span className="flex-1">{item.label}</span>
-            {item.hint && <span className="text-[10px] text-slate-400">{item.hint}</span>}
+            {item.hint && <span className="text-[10px] text-[hsl(var(--muted-foreground))]">{item.hint}</span>}
           </button>
         ))}
       </div>
