@@ -108,6 +108,29 @@ body {
   background: hsl(var(--canvas-bg));
 }
 
+/* 边标签底/文字（暗色跟随变量） */
+.react-flow__edge-textbg {
+  fill: hsl(var(--edge-label-bg));
+}
+.react-flow__edge-text {
+  fill: hsl(var(--node-muted));
+}
+
+/* RF Controls / MiniMap 容器跟随暗色 */
+.react-flow__controls,
+.react-flow__minimap {
+  background: hsl(var(--popover));
+  border-color: hsl(var(--border));
+}
+.react-flow__controls button {
+  background: hsl(var(--popover));
+  border-bottom: 1px solid hsl(var(--border));
+  color: hsl(var(--popover-foreground));
+}
+.react-flow__controls button:hover {
+  background: hsl(var(--accent));
+}
+
 /* ============================================================
    打印 / 导出（详见 export/print.css 与 PrintSheets.tsx）
    打印时隐藏整个应用外壳，只显示离屏打印容器。

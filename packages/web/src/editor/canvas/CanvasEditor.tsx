@@ -337,7 +337,7 @@ function CanvasInner({ api }: { api: EditorApi }) {
 
         {/* 粗指针（触屏/手写笔）：显式工具按钮组（选择/连线/平移），≥44px 触控热区 */}
         {coarse && (
-          <Panel position="top-left" className="flex gap-1 rounded-lg border bg-white/90 p-1 shadow">
+          <Panel position="top-left" className="flex gap-1 rounded-lg border bg-[hsl(var(--popover))]/90 text-[hsl(var(--popover-foreground))] p-1 shadow">
             <button
               className={`flex h-11 w-11 items-center justify-center rounded ${snap.mode === 'select' ? 'bg-blue-100 text-blue-600' : 'text-slate-500'}`}
               title="选择 (V)"
@@ -366,7 +366,9 @@ function CanvasInner({ api }: { api: EditorApi }) {
           pannable
           zoomable
           position="bottom-right"
-          nodeColor={(n) => (n.type === 'layout-ghost' ? '#93c5fd' : '#e2e8f0')}
+          bgColor="hsl(var(--canvas-bg))"
+          maskColor="hsl(var(--background) / 0.7)"
+          nodeColor={(n) => (n.type === 'layout-ghost' ? '#93c5fd' : 'hsl(var(--node-border))')}
         />
 
         {/* 对齐参考线 */}
@@ -379,7 +381,7 @@ function CanvasInner({ api }: { api: EditorApi }) {
         )}
 
         {/* 右下角自建缩放控件（百分比 + 适应/100%） */}
-        <Panel position="bottom-right" className="!mb-16 mr-2 flex items-center gap-1 rounded border bg-white px-1 py-0.5 text-[10px] shadow">
+        <Panel position="bottom-right" className="!mb-16 mr-2 flex items-center gap-1 rounded border bg-[hsl(var(--popover))] text-[hsl(var(--popover-foreground))] px-1 py-0.5 text-[10px] shadow">
           <button className="px-1" onClick={() => rf.zoomOut()}>
             −
           </button>

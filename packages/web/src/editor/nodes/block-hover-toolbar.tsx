@@ -47,23 +47,23 @@ export function BlockHoverToolbar({ block, childCount }: BlockHoverToolbarProps)
 
   return (
     <div
-      className="flex items-center gap-0.5 rounded-md border bg-white px-1 py-0.5 shadow-md"
+      className="flex items-center gap-0.5 rounded-md border bg-[hsl(var(--popover))] text-[hsl(var(--popover-foreground))] px-1 py-0.5 shadow-md"
       onMouseDown={(e) => e.stopPropagation()}
     >
       <button
         title="块类型"
-        className="relative flex items-center gap-0.5 rounded px-1 py-0.5 text-[11px] text-slate-600 hover:bg-slate-100"
+        className="relative flex items-center gap-0.5 rounded px-1 py-0.5 text-[11px] text-[hsl(var(--muted-foreground))] hover:bg-[hsl(var(--accent))]"
         onClick={() => setTypeOpen((v) => !v)}
       >
         <Shapes size={12} />
         {TYPE_LABEL[block.type]}
       </button>
       {typeOpen && (
-        <div className="absolute left-0 top-6 z-50 w-28 rounded-md border bg-white py-1 shadow-lg">
+        <div className="absolute left-0 top-6 z-50 w-28 rounded-md border bg-[hsl(var(--popover))] text-[hsl(var(--popover-foreground))] py-1 shadow-lg">
           {ALL_BLOCK_TYPES.map((t) => (
             <button
               key={t}
-              className="block w-full px-2 py-0.5 text-left text-[11px] hover:bg-slate-100"
+              className="block w-full px-2 py-0.5 text-left text-[11px] hover:bg-[hsl(var(--accent))]"
               onClick={() => {
                 api.setBlockType(block.id, t);
                 setTypeOpen(false);
@@ -75,19 +75,19 @@ export function BlockHoverToolbar({ block, childCount }: BlockHoverToolbarProps)
         </div>
       )}
 
-      <span className="mx-0.5 h-3 w-px bg-slate-200" />
+      <span className="mx-0.5 h-3 w-px bg-[hsl(var(--border))]" />
 
       {BLOCK_COLORS.map((c) => (
         <button
           key={c.name}
           title={c.name}
-          className="h-3.5 w-3.5 rounded-full border border-slate-200"
-          style={{ background: c.bg === 'transparent' ? '#fff' : c.bg }}
+          className="h-3.5 w-3.5 rounded-full border border-[hsl(var(--border))]"
+          style={{ background: c.bg === 'transparent' ? 'hsl(var(--node-bg))' : c.bg }}
           onClick={() => api.setBlockStyle(block.id, { bg: c.bg === 'transparent' ? undefined : c.bg })}
         />
       ))}
 
-      <span className="mx-0.5 h-3 w-px bg-slate-200" />
+      <span className="mx-0.5 h-3 w-px bg-[hsl(var(--border))]" />
 
       <button
         title={block.pinned ? '取消置顶' : '置顶'}
