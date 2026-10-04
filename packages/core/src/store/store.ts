@@ -12,7 +12,7 @@ import type {
   PageSettings,
   Viewport,
 } from '../model/index.js';
-import { DEFAULT_EDGE_COLOR, DOC_FORMAT, CURRENT_DOC_VERSION } from '../model/index.js';
+import { DEFAULT_EDGE_COLOR, DOC_FORMAT, CURRENT_DOC_VERSION, EMPTY_TIPTAP_DOC, DEFAULT_NODE_SIZES } from '../model/index.js';
 import { createCommandStack } from './command.js';
 import type { Command, CommandStack } from './command.js';
 import type { DocMeta, StorageAdapter } from './adapters.js';
@@ -197,6 +197,8 @@ export interface EditorActions {
   addNode(type: BlockType, x: number, y: number): string;
   /** 批量新建块。 */
   addNodes(nodes: BlockNode[]): void;
+  /** 粘贴/拖拽图片：dataURL 直接进 image 块，返回新块 id。 */
+  addImageBlock(dataUrl: string, x: number, y: number): string;
   /** 删除块（连同其出入边）。 */
   deleteNode(id: string): void;
   /** 删除多个块。 */
@@ -209,6 +211,8 @@ export interface EditorActions {
   resizeNode(id: string, width: number, height: number): void;
   /** 更新块样式（颜色/背景/边框补丁）。 */
   updateNodeStyle(id: string, patch: Partial<BlockStyle>): void;
+  /** 切换块类型（斜杠菜单 / hover 工具条）；内容重置为该类型空稿，尺寸取默认。 */
+  setBlockType(id: string, type: BlockType): void;
 
   // ---- 边（父子）----
   /** 新增父子边；若产生多父/成环，挂起冲突等待 resolveConflicts。 */
@@ -323,6 +327,11 @@ export type EditorStoreApi = StoreApi<EditorStore>;
 /** 深拷贝（core 无 structuredClone；doc 全是 JSON 数据）。 */
 function deepClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+/** 空 Tiptap doc 数据的全新副本（structuredClone 在 core 被禁，用 JSON 克隆）。 */
+function emptyDocData(): unknown {
+  return deepClone(EMPTY_TIPTAP_DOC);
 }
 
 function makeBlock(id: string, type: BlockType, x: number, y: number): BlockNode {
@@ -649,6 +658,35 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
             }),
           });
         },
+        addImageBlock: (dataUrl, x, y) => {
+          const id = nanoid();
+          const size = DEFAULT_NODE_SIZES.image;
+          const node: BlockNode = {
+            id,
+            type: 'image',
+            x,
+            y,
+            width: size.width,
+            height: size.height,
+            content: { format: 'tiptap-json', data: emptyDocData() },
+            parentId: null,
+            pinned: false,
+            locked: false,
+            collapsed: false,
+            tags: [],
+            style: {},
+            image: { src: dataUrl, alt: '' },
+          };
+          runCommand({
+            name: 'add-image-block',
+            execute: (d) => ({ ...d, nodes: [...d.nodes, node] }),
+            undo: (d) => ({ ...d, nodes: d.nodes.filter((n) => n.id !== id) }),
+          });
+          set((d) => {
+            d.selection = new Set([id]);
+          });
+          return id;
+        },
         deleteNode: (id) => {
           const { doc } = get();
           const node = doc.nodes.find((n) => n.id === id);
@@ -730,6 +768,47 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
             name: 'update-node-style',
             execute: (d) => mapNode(d, id, (n) => ({ ...n, style: { ...n.style, ...patch } })),
             undo: (d) => mapNode(d, id, (n) => ({ ...n, style: { ...node.style } })),
+          });
+        },
+
+        setBlockType: (id, type) => {
+          const node = get().doc.nodes.find((n) => n.id === id);
+          if (!node) return;
+          const prev = {
+            type: node.type,
+            content: node.content,
+            width: node.width,
+            height: node.height,
+            todo: node.todo,
+            image: node.image,
+          };
+          const size = DEFAULT_NODE_SIZES[type] ?? DEFAULT_NODE_SIZES.text;
+          runCommand({
+            name: 'set-block-type',
+            execute: (d) =>
+              mapNode(d, id, (n) => {
+                const next: BlockNode = {
+                  ...n,
+                  type,
+                  content: { format: 'tiptap-json', data: emptyDocData() },
+                  width: size.width,
+                  height: size.height,
+                };
+                if (type === 'todo') next.todo = { checked: false };
+                else delete next.todo;
+                if (type !== 'image') delete next.image;
+                return next;
+              }),
+            undo: (d) =>
+              mapNode(d, id, (n) => ({
+                ...n,
+                type: prev.type,
+                content: prev.content,
+                width: prev.width,
+                height: prev.height,
+                todo: prev.todo,
+                image: prev.image,
+              })),
           });
         },
 
