@@ -9,6 +9,12 @@ import Placeholder from '@tiptap/extension-placeholder';
 import Image from '@tiptap/extension-image';
 import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
+import Table from '@tiptap/extension-table';
+import TableRow from '@tiptap/extension-table-row';
+import TableCell from '@tiptap/extension-table-cell';
+import TableHeader from '@tiptap/extension-table-header';
+import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
+import { lowlight } from './highlight';
 import { buildMarkdownInputRules } from './input-rules';
 
 /**
@@ -46,6 +52,8 @@ export function createBlockEditor(opts: CreateBlockEditorOptions): Editor {
     extensions: [
       StarterKit.configure({
         heading: { levels: [1, 2, 3] },
+        // 用 CodeBlockLowlight 替代内置 codeBlock（否则重名覆盖，无 hljs）
+        codeBlock: false,
         // history 在块级编辑器里保留（块内 undo）；画布级 undo 走 EditorApi。
       }),
       Underline,
@@ -64,6 +72,13 @@ export function createBlockEditor(opts: CreateBlockEditorOptions): Editor {
       TaskList,
       TaskItem.configure({ nested: true }),
       MarkdownInputRules,
+      // P1：表格（可编辑，Tab 跳格走 Tiptap 自带 handleTabNext/Prev）
+      Table.configure({ resizable: false, HTMLAttributes: { class: 'drawpaper-table' } }),
+      TableRow,
+      TableHeader,
+      TableCell,
+      // P1：代码块 + lowlight 语法高亮
+      CodeBlockLowlight.configure({ lowlight }),
     ],
     onUpdate: ({ editor }) => {
       opts.onUpdate?.(editor.getJSON());
@@ -80,7 +95,7 @@ let _staticExts: readonly unknown[] | null = null;
 export function getStaticExtensions(): readonly unknown[] {
   if (_staticExts) return _staticExts;
   _staticExts = [
-    StarterKit.configure({ heading: { levels: [1, 2, 3] } }),
+    StarterKit.configure({ heading: { levels: [1, 2, 3] }, codeBlock: false }),
     Underline,
     Highlight.configure({ multicolor: true }),
     TextStyle,
@@ -88,6 +103,12 @@ export function getStaticExtensions(): readonly unknown[] {
     Image,
     TaskList,
     TaskItem.configure({ nested: true }),
+    // P1 静态渲染同样需要 table / codeBlock 扩展，才能输出 <table> 与 hljs class。
+    Table.configure({ resizable: false, HTMLAttributes: { class: 'drawpaper-table' } }),
+    TableRow,
+    TableHeader,
+    TableCell,
+    CodeBlockLowlight.configure({ lowlight }),
   ];
   return _staticExts;
 }

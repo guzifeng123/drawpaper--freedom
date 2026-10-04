@@ -27,6 +27,11 @@ interface BlockShellProps {
   contentClassName?: string;
   /** 图片块：四角等比缩放。 */
   keepAspectRatio?: boolean;
+  /**
+   * 自定义编辑 UI（P1 特殊块：公式/书签/附件/提醒）。
+   * 提供后，双击进入编辑时渲染它而非 Tiptap（这些块不是富文本）。
+   */
+  renderEditor?: () => ReactNode;
 }
 
 export const BlockShell = memo(function BlockShell({
@@ -36,6 +41,7 @@ export const BlockShell = memo(function BlockShell({
   shellClassName = '',
   contentClassName = '',
   keepAspectRatio = false,
+  renderEditor,
 }: BlockShellProps) {
   const api = useEditorApi();
   const editingNodeId = useEditingNodeId();
@@ -44,9 +50,9 @@ export const BlockShell = memo(function BlockShell({
   const bodyRef = useRef<HTMLDivElement>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
 
-  // 进入编辑：挂载真实 Tiptap Editor
+  // 进入编辑：挂载真实 Tiptap Editor（特殊块提供 renderEditor 时跳过）
   useEffect(() => {
-    if (!isEditing) return;
+    if (!isEditing || renderEditor) return;
     const ed = createBlockEditor({
       content: block.content.data,
       autofocus: 'end',
@@ -193,7 +199,9 @@ export const BlockShell = memo(function BlockShell({
 
       {/* 内容区 */}
       <div ref={bodyRef} className={`min-h-6 flex-1 overflow-hidden px-3 py-0 text-sm leading-5 ${contentClassName}`}>
-        {isEditing && editor ? (
+        {isEditing && renderEditor ? (
+          renderEditor()
+        ) : isEditing && editor ? (
           <>
             <div className="tiptap-content" data-nodeeditor>
               <EditorContent editor={editor} />

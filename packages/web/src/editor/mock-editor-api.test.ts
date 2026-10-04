@@ -93,4 +93,41 @@ describe('mock EditorApi', () => {
     expect(doc.format).toBe('knowledge-block-notes');
     expect(doc.nodes).toEqual([]);
   });
+
+  it('P1：reverseEdge 交换两端与句柄位', () => {
+    const api = createMockEditorApi();
+    const a = api.addNode('text', 0, 0);
+    const b = api.addNode('text', 100, 0);
+    api.addEdge(a, b);
+    const edgeId = api.getState().doc.edges[0]!.id;
+    api.reverseEdge?.(edgeId);
+    const e = api.getState().doc.edges[0]!;
+    expect(e.source).toBe(b);
+    expect(e.target).toBe(a);
+    expect(e.sourceHandle).toBe('left');
+    expect(e.targetHandle).toBe('right');
+  });
+
+  it('P1：setFocusNode / setTagFilter 进入快照', () => {
+    const api = createMockEditorApi();
+    api.setFocusNode?.('n_x');
+    expect(api.getState().focusNodeId).toBe('n_x');
+    api.setTagFilter?.({ mode: 'all', tagIds: ['t1'] });
+    expect(api.getState().tagFilter).toEqual({ mode: 'all', tagIds: ['t1'] });
+  });
+
+  it('P1：putImageAsset 返回引用 id', async () => {
+    const api = createMockEditorApi();
+    const r = await api.putImageAsset?.(new File(['x'], 'a.pdf', { type: 'application/pdf' }));
+    expect(r?.assetRef).toBeTruthy();
+    expect(r?.name).toBe('a.pdf');
+  });
+
+  it('P1：新块型默认尺寸取 editor 表（非 core 回退 260x80）', () => {
+    const api = createMockEditorApi();
+    const id = api.addNode('code', 0, 0);
+    const n = api.getState().doc.nodes.find((x) => x.id === id)!;
+    expect(n.width).toBe(320);
+    expect(n.height).toBe(130);
+  });
 });

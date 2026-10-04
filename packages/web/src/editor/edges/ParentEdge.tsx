@@ -1,20 +1,27 @@
 import { memo, useState } from 'react';
-import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps } from '@xyflow/react';
+import { BaseEdge, EdgeLabelRenderer, getBezierPath, useStore, type EdgeProps } from '@xyflow/react';
 import { EDGE_COLORS, DEFAULT_EDGE_COLOR } from '@drawpaper/core';
 import { useEditorApi } from '../canvas/editor-context';
+import { ArrowLeftRight } from 'lucide-react';
 
 /**
  * ParentEdge —— 唯一的边类型：带实心箭头的贝塞尔有向父子边。
  * - 颜色取 edge.style.stroke（映射自 core EDGE_COLORS）
- * - 选中加粗 + 6 色浮层（core EDGE_COLORS/DEFAULT_EDGE_COLOR，禁止硬编码别的色值）
+ * - 选中加粗 + 6 色浮层；多选时色板批量改色（P1 §4.3）
+ * - 反转方向按钮（api.reverseEdge，含句柄位交换）
  * - 自由文字标签：双击标签弹小 input，提交 api.setEdgeLabel
+ * - data.dimmed：悬停高亮/聚焦/筛选降透明时隐藏浮层
  */
 
 export const ParentEdge = memo(function ParentEdge(props: EdgeProps) {
-  const { id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, selected, markerEnd } = props;
+  const { id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, selected, markerEnd, data } = props;
   const api = useEditorApi();
   const [label, setLabel] = useState<string>(typeof props.label === 'string' ? props.label : '');
   const [editingLabel, setEditingLabel] = useState(false);
+
+  // 选中的全部边（多选批量改色用）
+  const selectedEdges = useStore((s) => s.edges.filter((e) => e.selected));
+  const dimmed = (data as { dimmed?: boolean } | undefined)?.dimmed ?? false;
 
   const [path, labelX, labelY] = getBezierPath({
     sourceX,
@@ -26,6 +33,13 @@ export const ParentEdge = memo(function ParentEdge(props: EdgeProps) {
   });
 
   const color = (props.style?.stroke as string | undefined) ?? DEFAULT_EDGE_COLOR.hex;
+
+  const applyColor = (hex: string) => {
+    // 多选时批量改色；仅当前边被选中时改自己
+    const targets = selectedEdges.length > 1 ? selectedEdges.map((e) => e.id) : [id];
+    for (const eid of targets) api.setEdgeColor(eid, hex);
+  };
+
   return (
     <>
       <BaseEdge
@@ -38,8 +52,8 @@ export const ParentEdge = memo(function ParentEdge(props: EdgeProps) {
         }}
       />
 
-      {/* 边色板（选中时浮在边中点） */}
-      {selected && (
+      {/* 边色板 + 反转（选中且未降透明时浮在边中点） */}
+      {selected && !dimmed && (
         <EdgeLabelRenderer>
           <div
             className="nodrag nopan pointer-events-auto absolute flex items-center gap-1 rounded-full border bg-white px-1.5 py-1 shadow-md"
@@ -54,10 +68,21 @@ export const ParentEdge = memo(function ParentEdge(props: EdgeProps) {
                 style={{ background: c.hex }}
                 onClick={(e) => {
                   e.stopPropagation();
-                  api.setEdgeColor(id, c.hex);
+                  applyColor(c.hex);
                 }}
               />
             ))}
+            <span className="mx-0.5 h-3 w-px bg-slate-200" />
+            <button
+              title="反转方向"
+              className="rounded p-0.5 text-slate-500 hover:text-blue-600"
+              onClick={(e) => {
+                e.stopPropagation();
+                api.reverseEdge?.(id);
+              }}
+            >
+              <ArrowLeftRight size={12} />
+            </button>
           </div>
         </EdgeLabelRenderer>
       )}

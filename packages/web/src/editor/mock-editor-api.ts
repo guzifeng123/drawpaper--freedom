@@ -21,6 +21,7 @@ import type {
   PendingConflicts,
 } from './editor-api';
 import { DEFAULT_NODE_SIZE, defaultContentForType } from './content-defaults';
+import { EMPTY_TAG_FILTER, type TagFilter } from './lib/filter-match';
 
 /** 空文档工厂（新建画布）。 */
 export function createEmptyDoc(title = '未命名画布'): KBNoteDoc {
@@ -124,6 +125,9 @@ export function createMockEditorApi(initialDoc: KBNoteDoc = createEmptyDoc()): E
     prefs: { gridSnap: false },
     lastFocus: null,
     historyEvent: null,
+    focusNodeId: null,
+    tagFilter: EMPTY_TAG_FILTER,
+    manualFixed: new Set<string>(),
 
     _undo: [],
     _redo: [],
@@ -170,6 +174,9 @@ export function createMockEditorApi(initialDoc: KBNoteDoc = createEmptyDoc()): E
         prefs: s.prefs,
         lastFocus: s.lastFocus,
         historyEvent: s.historyEvent,
+        focusNodeId: s.focusNodeId,
+        tagFilter: s.tagFilter,
+        manualFixed: s.manualFixed,
       };
       return cached;
     },
@@ -316,6 +323,24 @@ export function createMockEditorApi(initialDoc: KBNoteDoc = createEmptyDoc()): E
     setEdgeLabel(id, label) {
       const doc = get().doc;
       get()._setDoc({ ...doc, edges: doc.edges.map((e) => (e.id === id ? { ...e, label } : e)) });
+    },
+
+    reverseEdge(id) {
+      const doc = get().doc;
+      get()._commit({
+        ...doc,
+        edges: doc.edges.map((e) => {
+          if (e.id !== id) return e;
+          // 交换两端与句柄位（句柄位直接互换：left↔right）
+          return {
+            ...e,
+            source: e.target,
+            target: e.source,
+            sourceHandle: e.targetHandle,
+            targetHandle: e.sourceHandle,
+          };
+        }),
+      });
     },
 
     tabAddChild() {
@@ -574,6 +599,19 @@ export function createMockEditorApi(initialDoc: KBNoteDoc = createEmptyDoc()): E
     openExport() {},
     save() {
       useStore.setState({ saveState: 'saved' });
+    },
+
+    setFocusNode(id) {
+      useStore.setState({ focusNodeId: id });
+    },
+
+    setTagFilter(filter: TagFilter) {
+      useStore.setState({ tagFilter: filter });
+    },
+
+    async putImageAsset(file: File) {
+      // mock：不走网络/OPFS，直接返回引用 id（Wave4 真实 store 落 OPFS）。
+      return { assetRef: 'asset_' + nanoid(8), name: file.name, size: file.size };
     },
   };
 

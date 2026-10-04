@@ -1,0 +1,132 @@
+/* ============================================================
+   editor-theme.css —— drawpaper 编辑器内联样式（Wave3-I）
+   - 全部硬编码色改为 shadcn 惯例 CSS 变量 + 浅色 fallback（面板 agent 后续合入深色值）
+   - 高亮.js 主题（CSS 变量适配深色）
+   - KaTeX 颜色适配（字体本地打包，无 CDN）
+   - 表格块样式
+   - 触屏：touch-action、≥44px 连接热区、禁 iOS 双击缩放
+   ============================================================ */
+
+:root {
+  /* 面板 agent 后续补充的编辑器专用变量（先给浅色 fallback） */
+  --editor-grid: #cbd5e1;
+  --editor-handle: #94a3b8;
+  --edge-label-bg: rgba(255, 255, 255, 0.9);
+  --code-bg: #0b1020;
+  --code-fg: #e6edf3;
+}
+
+/* ---- React Flow 画布与网格 ---- */
+.react-flow {
+  background: hsl(var(--background, 0 0% 100%));
+}
+.react-flow__pane {
+  /* 触屏：手势由 Pointer Events / React Flow 统一处理，禁用浏览器默认滚动手势 */
+  touch-action: none;
+}
+/* 禁 iOS 双击缩放 / 橡皮筋（配合 viewport maximum-scale） */
+.react-flow__node,
+.react-flow__handle {
+  touch-action: manipulation;
+}
+
+/* ---- 连接点热区 ≥44px（视觉小点 + 透明大点击区）---- */
+.react-flow__handle {
+  width: 44px;
+  height: 44px;
+  background: transparent;
+  border: none;
+  min-width: 44px;
+  min-height: 44px;
+}
+.react-flow__handle::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 9999px;
+  background: var(--editor-handle, #94a3b8);
+  border: 1.5px solid hsl(var(--card, 0 0% 100%));
+}
+.react-flow__handle.connectingto::after,
+.react-flow__handle.valid::after {
+  background: #3b82f6;
+}
+
+/* ---- 表格块 ---- */
+.drawpaper-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 12px;
+}
+.drawpaper-table td,
+.drawpaper-table th {
+  border: 1px solid hsl(var(--border, 214.3 31.8% 91.4%));
+  padding: 4px 8px;
+  min-width: 40px;
+}
+.drawpaper-table th {
+  background: hsl(var(--muted, 210 40% 96.1%));
+  font-weight: 600;
+}
+
+/* ---- 代码块：highlight.js 主题（CSS 变量适配深色）---- */
+.hljs {
+  color: var(--code-fg, #e6edf3);
+  background: transparent;
+}
+.hljs-comment,
+.hljs-quote {
+  color: #8b949e;
+}
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-doctag {
+  color: #ff7b72;
+}
+.hljs-string,
+.hljs-section,
+.hljs-name {
+  color: #a5d6ff;
+}
+.hljs-number,
+.hljs-literal,
+.hljs-meta {
+  color: #79c0ff;
+}
+.hljs-title,
+.hljs-built_in {
+  color: #d2a8ff;
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-variable {
+  color: #79c0ff;
+}
+.hljs-builtin-name,
+.hljs-type {
+  color: #ffa657;
+}
+
+/* ---- KaTeX 颜色适配（深色下文字跟随前景色）---- */
+.equation-html .katex {
+  color: hsl(var(--foreground, 222.2 84% 4.9%));
+  font-size: 1.05em;
+}
+.equation-html .katex-error {
+  color: #e11d48;
+  font-size: 12px;
+}
+
+/* ---- 边标签底 ---- */
+.react-flow__edgelabel-renderer > div:not(.nodrag) {
+  background: var(--edge-label-bg, rgba(255, 255, 255, 0.9));
+}
+
+/* ---- 降透明度过渡（聚焦/筛选/悬停高亮）---- */
+.react-flow__node,
+.react-flow__edge-path {
+  transition: opacity 0.15s ease;
+}

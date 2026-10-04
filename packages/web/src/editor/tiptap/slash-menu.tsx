@@ -16,6 +16,12 @@ import {
   Underline as UnderlineIcon,
   Highlighter,
   Link2,
+  Table as TableIcon,
+  SquareCode,
+  Sigma,
+  BookMarked,
+  Paperclip,
+  CalendarClock,
 } from 'lucide-react';
 import type { BlockType } from '@drawpaper/core';
 
@@ -48,6 +54,12 @@ const ITEMS: SlashItem[] = [
   { id: 'image', label: '图片', icon: <Image size={14} />, command: { kind: 'block', blockType: 'image' } },
   { id: 'note', label: '便签', icon: <StickyNote size={14} />, command: { kind: 'block', blockType: 'note' } },
   { id: 'group', label: '分组', icon: <Group size={14} />, command: { kind: 'block', blockType: 'group' } },
+  { id: 'table', label: '表格', icon: <TableIcon size={14} />, command: { kind: 'block', blockType: 'table' } },
+  { id: 'code', label: '代码块', icon: <SquareCode size={14} />, command: { kind: 'block', blockType: 'code' } },
+  { id: 'equation', label: '数学公式', icon: <Sigma size={14} />, command: { kind: 'block', blockType: 'equation' } },
+  { id: 'bookmark', label: '网页书签', icon: <BookMarked size={14} />, command: { kind: 'block', blockType: 'bookmark' } },
+  { id: 'attachment', label: '附件', icon: <Paperclip size={14} />, command: { kind: 'block', blockType: 'attachment' } },
+  { id: 'reminder', label: '日期/提醒', icon: <CalendarClock size={14} />, command: { kind: 'block', blockType: 'reminder' } },
   { id: 'bold', label: '粗体', icon: <Bold size={14} />, command: { kind: 'inline', action: 'bold' } },
   { id: 'italic', label: '斜体', icon: <Italic size={14} />, command: { kind: 'inline', action: 'italic' } },
   { id: 'underline', label: '下划线', icon: <UnderlineIcon size={14} />, command: { kind: 'inline', action: 'underline' } },
