@@ -13,7 +13,7 @@ async function boot(page: Page) {
   await page.waitForTimeout(200);
 }
 
-function baseDoc(nodes: any[], edges: any[] = []) {
+function baseDoc(nodes: any[], edges: any[] = []): any {
   return {
     format: 'knowledge-block-notes', version: 1, id: 'p1doc', title: 'P1验收',
     board: { createdAt: 0, updatedAt: 0 },
@@ -43,7 +43,7 @@ test.describe('P1 验收加固', () => {
     await page.evaluate(() => window.__drawpaper__!.invoke('reparentNode', 'b', 'a'));
     await page.waitForTimeout(200);
     const st = await page.evaluate(() => {
-      const d = window.__drawpaper__!.getState().doc;
+      const d: any = window.__drawpaper__!.getState().doc;
       return { bParent: d.nodes.find((x: any) => x.id === 'b').parentId, edgeCount: d.edges.length };
     });
     expect(st.bParent).toBe('a');
@@ -52,7 +52,7 @@ test.describe('P1 验收加固', () => {
     await page.evaluate(() => window.__drawpaper__!.invoke('reparentNode', 'a', 'b'));
     await page.waitForTimeout(200);
     const afterCycle = await page.evaluate(() => {
-      const d = window.__drawpaper__!.getState().doc;
+      const d: any = window.__drawpaper__!.getState().doc;
       return { a_parent: d.nodes.find((x: any) => x.id === 'a').parentId };
     });
     console.log('CYCLE_GUARD', JSON.stringify(afterCycle));
@@ -80,7 +80,7 @@ test.describe('P1 验收加固', () => {
     // 拍快照（snapshotDoc 返回 void，改后用 listSnapshots 取 id）。
     await page.evaluate(async () => { await window.__drawpaper__!.invoke('snapshotDoc', 'v1'); });
     await page.waitForTimeout(400);
-    const snaps = await page.evaluate(async (id) => await window.__drawpaper__!.invoke('listSnapshots', id), docId);
+    const snaps: any = await page.evaluate(async (id) => await window.__drawpaper__!.invoke('listSnapshots', id), docId);
     expect(Array.isArray(snaps) ? snaps.length : 0).toBeGreaterThanOrEqual(1);
     const snapId = snaps[0].id;
     // 改文档：加一个块。
@@ -182,6 +182,21 @@ test.describe('P1 验收加固', () => {
     expect(after.nodes).toBe(before.nodes);
     expect(after.edges).toBe(before.edges);
     await page.screenshot({ path: `${OUT}/ai-fail-toast.png` });
+  });
+
+  test('手动分页符：addManualPageBreak/removePageBreak 经 store 生效', async ({ page }) => {
+    await boot(page);
+    await page.evaluate((d) => window.__drawpaper__!.loadFixture(d), baseDoc([n('a', 100, 100, 'A')]));
+    await page.waitForTimeout(200);
+    await page.evaluate(() => window.__drawpaper__!.invoke('addManualPageBreak', 'pb1', 0, 500));
+    await page.waitForTimeout(150);
+    const afterAdd = await page.evaluate(() => window.__drawpaper__!.getState().doc.page.pageBreaks.length);
+    expect(afterAdd).toBeGreaterThanOrEqual(1);
+    await page.evaluate(() => window.__drawpaper__!.invoke('removePageBreak', 'pb1'));
+    await page.waitForTimeout(150);
+    const afterRemove = await page.evaluate(() => window.__drawpaper__!.getState().doc.page.pageBreaks.length);
+    console.log('PAGEBREAK', { afterAdd, afterRemove });
+    expect(afterRemove).toBe(afterAdd - 1);
   });
 
   test('触屏冒烟：coarse pointer 显式工具按钮组可见', async ({ browser }) => {
