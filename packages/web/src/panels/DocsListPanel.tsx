@@ -123,7 +123,7 @@ export const DocsListPanel = React.memo(function DocsListPanel({ api }: { api: P
 
   if (collapsed) {
     return (
-      <aside className="absolute bottom-4 left-4 top-16 z-10 flex w-10 flex-col items-center rounded-lg border bg-white/95 py-2 shadow-sm">
+      <aside className="absolute bottom-4 left-4 top-16 z-10 flex w-10 flex-col items-center rounded-lg border bg-card/95 py-2 shadow-sm">
         <button
           type="button"
           onClick={() => setCollapsed(false)}
@@ -137,7 +137,7 @@ export const DocsListPanel = React.memo(function DocsListPanel({ api }: { api: P
   }
 
   return (
-    <aside className="absolute bottom-4 left-4 top-16 z-10 flex w-56 flex-col rounded-lg border bg-white/95 shadow-sm">
+    <aside className="absolute bottom-4 left-4 top-16 z-10 flex w-56 flex-col rounded-lg border bg-card/95 shadow-sm">
       <div className="flex items-center justify-between border-b px-2 py-1.5">
         <span className="text-xs font-semibold text-muted-foreground">文档</span>
         <div className="flex items-center">

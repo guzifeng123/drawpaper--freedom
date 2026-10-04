@@ -78,7 +78,7 @@ export const SearchPanel = React.memo(function SearchPanel({ api }: { api: Panel
   };
 
   return (
-    <div className="absolute right-4 top-14 z-30 flex w-96 flex-col rounded-lg border bg-white shadow-lg">
+    <div className="absolute right-4 top-14 z-30 flex w-96 flex-col rounded-lg border bg-card shadow-lg">
       <div className="flex items-center gap-2 border-b px-3 py-2">
         <Search className="h-4 w-4 text-muted-foreground" />
         <Input

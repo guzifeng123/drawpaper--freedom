@@ -169,6 +169,51 @@ export function createPanelsApi(store: EditorStoreApi): PanelsApi {
       if (item) store.getState().flyToNode(item.nodeId);
     },
     flyToNode: (id) => store.getState().flyToNode(id),
+
+    // ============================================================
+    // Wave3-H 桩：本分支为满足 PanelsApi 接口自洽的最小编译实现。
+    // 真实 store 动作（reparentNode / 标签 CRUD / 快照 / 回收站 / 模板 /
+    // 活动文件句柄 / setFocusNode / 筛选下发）由存储 agent 同期在 store 实现，
+    // Wave4 总装时在此替换为真实接线；此处只做能从现有状态读到的部分。
+    // ============================================================
+    get tags() {
+      return store.getState().doc.tags;
+    },
+    get tagFilter() {
+      return { tagIds: [], blockTypes: [], colors: [], match: 'any' as const };
+    },
+    get focusNodeId() {
+      return null;
+    },
+    get activeFile() {
+      return { name: null };
+    },
+    get snapshots() {
+      return [] as import('@/panels/panels-api').SnapshotInfo[];
+    },
+    get trash() {
+      return [] as import('@/panels/panels-api').TrashItem[];
+    },
+    createTag: () => undefined,
+    renameTag: () => undefined,
+    changeTagColor: () => undefined,
+    deleteTag: () => undefined,
+    setTagFilter: () => undefined,
+    clearTagFilter: () => undefined,
+    toggleCollapseNode: (id) => store.getState().toggleCollapse(id),
+    reparentNode: () => undefined,
+    addChildBlock: () => '',
+    addSiblingBlock: () => '',
+    setFocusNode: () => undefined,
+    openLocalFile: () => undefined,
+    saveAsLocalFile: () => undefined,
+    createDocFromTemplate: () => undefined,
+    takeSnapshot: () => undefined,
+    restoreSnapshot: () => undefined,
+    deleteSnapshot: () => undefined,
+    restoreFromTrash: () => undefined,
+    purgeFromTrash: () => undefined,
+    emptyTrash: () => undefined,
   };
 
   return api;

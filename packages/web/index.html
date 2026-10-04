@@ -8,6 +8,20 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
     <meta name="theme-color" content="#0f172a" />
     <title>drawpaper · 知识块连线笔记</title>
+    <!-- Wave3-H 主题首屏无闪烁：React 挂载前同步决定 <html> 是否加 .dark。
+         localStorage key 与 panels/lib/theme.ts 的 drawpaper-theme 保持一致。 -->
+    <script>
+      (function () {
+        try {
+          var mode = localStorage.getItem('drawpaper-theme') || 'system';
+          var dark =
+            mode === 'dark' ||
+            (mode === 'system' &&
+              window.matchMedia('(prefers-color-scheme: dark)').matches);
+          if (dark) document.documentElement.classList.add('dark');
+        } catch (e) {}
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

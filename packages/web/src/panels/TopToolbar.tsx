@@ -11,6 +11,15 @@ import {
   SlidersHorizontal,
   Search,
   FileDown,
+  LayoutTemplate,
+  Camera,
+  Trash2,
+  Tag,
+  Sun,
+  Moon,
+  Monitor,
+  Focus,
+  X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Toolbar, ToolbarSeparator } from '@/components/ui/toolbar';
@@ -30,7 +39,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { Check } from 'lucide-react';
 import type { PanelsApi } from './panels-api';
+import { TemplatesDialog } from './TemplatesDialog';
+import { SnapshotsDialog } from './SnapshotsDialog';
+import { TrashDialog } from './TrashDialog';
+import { TagManagerDialog } from './TagManagerDialog';
+import { useThemeStore, type ThemeMode } from './lib/theme';
 
 function formatTime(ts: number): string {
   const d = new Date(ts);
@@ -88,6 +103,14 @@ function TitleRename({ api }: { api: PanelsApi }) {
 }
 
 function SaveStatus({ api }: { api: PanelsApi }) {
+  // 已绑定本地文件时显示「已保存到 xxx.kbnote」；否则显示自动保存时间。
+  if (api.activeFile?.name) {
+    return (
+      <span className="text-xs text-muted-foreground" title="已绑定本地 .kbnote 文件">
+        已保存到 {api.activeFile.name}
+      </span>
+    );
+  }
   if (api.saveState === 'saving') {
     return <span className="text-xs text-muted-foreground">保存中…</span>;
   }
@@ -99,12 +122,51 @@ function SaveStatus({ api }: { api: PanelsApi }) {
   return null;
 }
 
+const THEME_ICON: Record<ThemeMode, React.ComponentType<{ className?: string }>> = {
+  light: Sun,
+  dark: Moon,
+  system: Monitor,
+};
+
+/** 主题三态切换（light/dark/system），持久化 localStorage。 */
+function ThemeToggle() {
+  const mode = useThemeStore((s) => s.mode);
+  const setMode = useThemeStore((s) => s.setMode);
+  const Icon = THEME_ICON[mode];
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" title="主题：浅色 / 深色 / 跟随系统">
+          <Icon className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuLabel>主题</DropdownMenuLabel>
+        {(['light', 'dark', 'system'] as ThemeMode[]).map((m) => {
+          const Icon = THEME_ICON[m];
+          return (
+            <DropdownMenuItem key={m} onSelect={() => setMode(m)}>
+              <Icon className="h-3.5 w-3.5" />
+              {m === 'light' ? '浅色' : m === 'dark' ? '深色' : '跟随系统'}
+              {mode === m ? <Check className="ml-auto h-3.5 w-3.5" /> : null}
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 /**
- * 顶部工具栏：文档标题 / 保存状态 / 文档操作 / 撤销重做 / 布局 / 间距 / 导出 / 搜索。
- * 布局按钮只切模式并触发预览确认流（确认 UI 在画布侧）。
+ * 顶部工具栏：文档标题 / 保存状态 / 文档操作 / 撤销重做 / 布局 / 间距 / 导出 / 搜索 /
+ * 标签 / 主题 / 聚焦分支（Wave3-H 新增活动文件状态、模板/快照/回收站入口）。
  */
 export const TopToolbar = React.memo(function TopToolbar({ api }: { api: PanelsApi }) {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const [templatesOpen, setTemplatesOpen] = React.useState(false);
+  const [snapshotsOpen, setSnapshotsOpen] = React.useState(false);
+  const [trashOpen, setTrashOpen] = React.useState(false);
+  const [tagsOpen, setTagsOpen] = React.useState(false);
   const { layoutPrefs } = api;
 
   const pickLayout = (mode: PanelsApi['layoutPrefs']['mode']) => {
@@ -112,8 +174,10 @@ export const TopToolbar = React.memo(function TopToolbar({ api }: { api: PanelsA
     api.previewLayout();
   };
 
+  const focusRoot = api.selectedNodeIds.length === 1 ? api.selectedNodeIds[0]! : null;
+
   return (
-    <header className="absolute left-0 right-0 top-0 z-20 flex h-12 items-center gap-2 border-b bg-white/85 px-3 backdrop-blur">
+    <header className="absolute left-0 right-0 top-0 z-20 flex h-12 items-center gap-2 border-b bg-card/85 px-3 backdrop-blur">
       <span className="text-sm font-bold tracking-tight">drawpaper</span>
       <Separator orientation="vertical" className="!h-5" />
 
@@ -132,11 +196,28 @@ export const TopToolbar = React.memo(function TopToolbar({ api }: { api: PanelsA
           <DropdownMenuItem onSelect={() => api.newDoc()}>
             <FilePlus2 /> 新建文档
           </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setTemplatesOpen(true)}>
+            <LayoutTemplate /> 从模板新建…
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => api.openLocalFile()}>
+            <FolderOpen /> 打开本地 .kbnote…
+          </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => fileInputRef.current?.click()}>
             <FolderOpen /> 导入 .kbnote
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => api.currentDocId && api.exportKbnote(api.currentDocId)}>
             <Save /> 导出 .kbnote
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => api.saveAsLocalFile()}>
+            <Save /> 另存为本地 .kbnote…
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => setSnapshotsOpen(true)}>
+            <Camera /> 快照历史…
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setTrashOpen(true)}>
+            <Trash2 /> 回收站…
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem onSelect={() => api.requestSave()}>
@@ -246,6 +327,29 @@ export const TopToolbar = React.memo(function TopToolbar({ api }: { api: PanelsA
       </Popover>
 
       <div className="ml-auto flex items-center gap-2">
+        {/* 聚焦分支 */}
+        {api.focusNodeId ? (
+          <Badge variant="secondary" className="gap-1">
+            <Focus className="h-3 w-3" /> 聚焦中
+            <button
+              type="button"
+              aria-label="取消聚焦"
+              className="rounded hover:text-destructive"
+              onClick={() => api.setFocusNode(null)}
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </Badge>
+        ) : focusRoot ? (
+          <Button variant="outline" size="sm" onClick={() => api.setFocusNode(focusRoot)} title="只看这一支，其余淡化">
+            <Focus className="h-4 w-4" /> 聚焦此分支
+          </Button>
+        ) : null}
+
+        <Button variant="ghost" size="icon" onClick={() => setTagsOpen(true)} title="标签管理">
+          <Tag className="h-4 w-4" />
+        </Button>
+        <ThemeToggle />
         <Button variant="outline" size="sm" onClick={() => api.openSearch()} title="全文搜索 (Ctrl/Cmd+F)">
           <Search className="h-4 w-4" /> 搜索
         </Button>
@@ -256,6 +360,12 @@ export const TopToolbar = React.memo(function TopToolbar({ api }: { api: PanelsA
           <Badge variant="warning">分页预览中</Badge>
         ) : null}
       </div>
+
+      {/* Wave3-H 弹层 */}
+      <TemplatesDialog open={templatesOpen} onOpenChange={setTemplatesOpen} api={api} />
+      <SnapshotsDialog open={snapshotsOpen} onOpenChange={setSnapshotsOpen} api={api} />
+      <TrashDialog open={trashOpen} onOpenChange={setTrashOpen} api={api} />
+      <TagManagerDialog open={tagsOpen} onOpenChange={setTagsOpen} api={api} />
     </header>
   );
 });
