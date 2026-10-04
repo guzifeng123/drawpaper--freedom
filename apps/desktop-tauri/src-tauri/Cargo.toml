@@ -1,0 +1,45 @@
+[package]
+name = "drawpaper"
+version = "0.2.0"
+description = "drawpaper — local-first infinite-canvas knowledge-block note tool (Windows desktop shell)"
+edition = "2021"
+rust-version = "1.77"
+authors = ["drawpaper contributors"]
+license = "MIT"
+
+# The library crate is where Tauri 2 apps put app logic; main.rs just calls lib::run().
+[lib]
+name = "drawpaper_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.1", features = [] }
+
+[dependencies]
+tauri = { version = "2.1", features = ["protocol-asset"] }
+tauri-plugin-dialog = "2.0"
+tauri-plugin-fs = "2.0"
+tauri-plugin-opener = "2.0"
+# Single-instance plugin: prevents two Windows processes when user double-clicks
+# a second .kbnote file while the app is already running; forwards the argv path
+# to the running instance via the `second-instance` event.
+tauri-plugin-single-instance = "2.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Recents list / auto-save folder metadata lives in a small JSON file next to
+# the app config dir; no extra KV store dependency.
+dirs = "5"
+log = "0.4"
+env_logger = "0.11"
+
+[features]
+# This feature is used for production builds where `devPath` points to the filesystem
+# and the embed resources sidecar is unnecessary.
+custom-protocol = ["tauri/custom-protocol"]
+
+[profile.release]
+panic = "abort"
+codegen-units = 1
+lto = true
+opt-level = "s"
+strip = true
