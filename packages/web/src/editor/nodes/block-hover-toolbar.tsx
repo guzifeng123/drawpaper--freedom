@@ -3,6 +3,10 @@ import { Pin, ChevronDown, Copy, Trash2, Shapes } from 'lucide-react';
 import { P0_BLOCK_TYPES, type BlockNode, type BlockType } from '@drawpaper/core';
 import { useEditorApi } from '../canvas/editor-context';
 
+/** P1 新块型（块类型切换器与 P0 并列）。 */
+const P1_BLOCK_TYPES: readonly BlockType[] = ['table', 'code', 'equation', 'bookmark', 'attachment', 'reminder'];
+const ALL_BLOCK_TYPES: readonly BlockType[] = [...P0_BLOCK_TYPES, ...P1_BLOCK_TYPES];
+
 /** 8 色标签色板（块背景色；第一项为无色）。 */
 export const BLOCK_COLORS: readonly { name: string; bg: string }[] = [
   { name: '无色', bg: 'transparent' },
@@ -56,7 +60,7 @@ export function BlockHoverToolbar({ block, childCount }: BlockHoverToolbarProps)
       </button>
       {typeOpen && (
         <div className="absolute left-0 top-6 z-50 w-28 rounded-md border bg-white py-1 shadow-lg">
-          {P0_BLOCK_TYPES.map((t) => (
+          {ALL_BLOCK_TYPES.map((t) => (
             <button
               key={t}
               className="block w-full px-2 py-0.5 text-left text-[11px] hover:bg-slate-100"

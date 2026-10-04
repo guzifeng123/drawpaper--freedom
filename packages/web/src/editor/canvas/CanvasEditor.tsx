@@ -20,9 +20,13 @@ import { EditorApiContext, useEditorSnapshot } from './editor-context';
 import { nodeTypes, resolveNodeType } from '../nodes';
 import { edgeTypes } from '../edges';
 import { useKeyboardShortcuts } from '../state/useKeyboardShortcuts';
+import { useCoarsePointer } from '../state/use-coarse-pointer';
 import { computeSnap } from '../lib/geometry';
+import { collectFocusSet, collectConnectedSet, collectEdgeChain, applyManualFixed } from '../lib/graph-trace';
+import { nodeMatchesFilter } from '../lib/filter-match';
 import { ConflictDialog } from '../ui/ConflictDialog';
 import { toast } from '../ui/toast';
+import { MousePointer2, Spline, Hand } from 'lucide-react';
 
 /** 折叠节点的后代集合（折叠后映射给 React Flow 时剔除）。 */
 function hiddenAfterCollapse(doc: { nodes: BlockNode[]; edges: CoreEdge[] }): Set<string> {
@@ -60,10 +64,32 @@ function CanvasInner({ api }: { api: EditorApi }) {
 
   const [selectedEdgeIds, setSelectedEdgeIds] = useState<Set<string>>(new Set());
   const [guideLines, setGuideLines] = useState<{ orientation: 'vertical' | 'horizontal'; pos: number }[]>([]);
+  const [hoverNodeId, setHoverNodeId] = useState<string | null>(null);
+  const [hoverEdgeId, setHoverEdgeId] = useState<string | null>(null);
   const rafRef = useRef<number>(0);
+  const coarse = useCoarsePointer();
 
   // 折叠过滤
   const hidden = useMemo(() => hiddenAfterCollapse(snap.doc), [snap.doc]);
+
+  // P1 高亮/降透明度集合：悬停逻辑链优先，否则聚焦分支，再否则标签筛选。
+  const dimSet = useMemo<Set<string> | null>(() => {
+    // 1) 悬停一条边/节点 → 高亮整条连通逻辑链，其余降透明
+    if (hoverEdgeId) return collectEdgeChain(snap.doc.edges, hoverEdgeId);
+    if (hoverNodeId) return collectConnectedSet(snap.doc.edges, hoverNodeId);
+    // 2) 聚焦分支：非「祖先链+子树」降透明
+    if (snap.focusNodeId) return collectFocusSet(snap.doc.edges, snap.focusNodeId);
+    // 3) 标签筛选：非命中节点降透明（空筛选 = 不筛）
+    const filter = snap.tagFilter;
+    if (filter && filter.tagIds.length) {
+      const set = new Set<string>();
+      for (const n of snap.doc.nodes) {
+        if (nodeMatchesFilter(n.tags, filter)) set.add(n.id);
+      }
+      return set;
+    }
+    return null;
+  }, [snap.doc, snap.focusNodeId, snap.tagFilter, hoverNodeId, hoverEdgeId]);
 
   // 真节点 → RF nodes
   const rfNodes = useMemo(() => {
@@ -77,38 +103,45 @@ function CanvasInner({ api }: { api: EditorApi }) {
         selected: snap.selection.has(n.id),
         width: n.width,
         height: n.height,
+        style: dimSet ? { opacity: dimSet.has(n.id) ? 1 : 0.2 } : undefined,
       }));
-    // 一键整理预览 ghost（叠加在世界坐标上）
-    const ghosts = Object.entries(snap.layoutPreview ?? {}).map(([id, g]) => ({
-      id: `ghost:${id}`,
-      type: 'layout-ghost',
-      position: { x: g.x, y: g.y },
-      data: {},
-      width: g.width,
-      height: g.height,
-    }));
+    // 一键整理预览 ghost（叠加在世界坐标上）；manualFixed（手动移动过）不画 ghost
+    const ghosts = Object.entries(applyManualFixed(snap.layoutPreview ?? {}, snap.manualFixed ?? new Set()))
+      .map(([id, g]) => ({
+        id: `ghost:${id}`,
+        type: 'layout-ghost',
+        position: { x: g.x, y: g.y },
+        data: {},
+        width: g.width,
+        height: g.height,
+      }));
     return [...real, ...ghosts];
-  }, [snap.doc, snap.selection, hidden, snap.layoutPreview]);
+  }, [snap.doc, snap.selection, hidden, snap.layoutPreview, snap.manualFixed, dimSet]);
 
   // 真边 → RF edges
   const rfEdges = useMemo(() => {
     return snap.doc.edges
       .filter((e) => !hidden.has(e.source) && !hidden.has(e.target))
-      .map((e) => ({
-        id: e.id,
-        source: e.source,
-        target: e.target,
-        sourceHandle: e.sourceHandle,
-        targetHandle: e.targetHandle,
-        sourcePosition: e.sourceHandle,
-        targetPosition: e.targetHandle,
-        type: 'parent',
-        selected: selectedEdgeIds.has(e.id),
-        label: e.label,
-        style: { stroke: e.style.color },
-        markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18, color: e.style.color },
-      }));
-  }, [snap.doc, hidden, selectedEdgeIds]);
+      .map((e) => {
+        // 高亮集合内的边才不透明；两端都在集合内才算「逻辑链上的边」
+        const onChain = dimSet ? dimSet.has(e.source) && dimSet.has(e.target) : true;
+        return {
+          id: e.id,
+          source: e.source,
+          target: e.target,
+          sourceHandle: e.sourceHandle,
+          targetHandle: e.targetHandle,
+          sourcePosition: e.sourceHandle,
+          targetPosition: e.targetHandle,
+          type: 'parent',
+          selected: selectedEdgeIds.has(e.id),
+          label: e.label,
+          data: { dimmed: !onChain },
+          style: { stroke: e.style.color, opacity: onChain ? 1 : 0.15 },
+          markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18, color: e.style.color },
+        };
+      });
+  }, [snap.doc, hidden, selectedEdgeIds, dimSet]);
 
   // 飞块：搜索/大纲 lastFocus → setCenter + 高亮
   useEffect(() => {
@@ -283,6 +316,10 @@ function CanvasInner({ api }: { api: EditorApi }) {
         onNodeClick={(_, node) => {
           if (snap.editingNodeId && snap.editingNodeId !== node.id) api.setEditingNode(null);
         }}
+        onNodeMouseEnter={(_, node) => setHoverNodeId(node.id)}
+        onNodeMouseLeave={() => setHoverNodeId(null)}
+        onEdgeMouseEnter={(_, edge) => setHoverEdgeId(edge.id)}
+        onEdgeMouseLeave={() => setHoverEdgeId(null)}
         onMove={(_, vp) => api.setViewport(vp)}
         fitView
         fitViewOptions={{ padding: 0.2 }}
@@ -295,8 +332,36 @@ function CanvasInner({ api }: { api: EditorApi }) {
         proOptions={{ hideAttribution: false }}
         defaultViewport={snap.viewport}
       >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1.2} color="#cbd5e1" />
+        <Background variant={BackgroundVariant.Dots} gap={20} size={1.2} color="var(--editor-grid, #cbd5e1)" />
         <Controls position="bottom-left" />
+
+        {/* 粗指针（触屏/手写笔）：显式工具按钮组（选择/连线/平移），≥44px 触控热区 */}
+        {coarse && (
+          <Panel position="top-left" className="flex gap-1 rounded-lg border bg-white/90 p-1 shadow">
+            <button
+              className={`flex h-11 w-11 items-center justify-center rounded ${snap.mode === 'select' ? 'bg-blue-100 text-blue-600' : 'text-slate-500'}`}
+              title="选择 (V)"
+              onClick={() => api.setMode('select')}
+            >
+              <MousePointer2 size={20} />
+            </button>
+            <button
+              className={`flex h-11 w-11 items-center justify-center rounded ${snap.mode === 'connect' ? 'bg-blue-100 text-blue-600' : 'text-slate-500'}`}
+              title="连线 (C)"
+              onClick={() => api.setMode('connect')}
+            >
+              <Spline size={20} />
+            </button>
+            <button
+              className={`flex h-11 w-11 items-center justify-center rounded ${snap.mode === 'pan' ? 'bg-blue-100 text-blue-600' : 'text-slate-500'}`}
+              title="平移"
+              onClick={() => api.setMode('pan')}
+            >
+              <Hand size={20} />
+            </button>
+          </Panel>
+        )}
+
         <MiniMap
           pannable
           zoomable

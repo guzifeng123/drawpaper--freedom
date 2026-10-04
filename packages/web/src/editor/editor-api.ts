@@ -8,6 +8,7 @@ import type {
   SaveState,
   Viewport,
 } from '@drawpaper/core';
+import type { TagFilter } from './lib/filter-match';
 
 /**
  * EditorApi —— Wave1-D 画布编辑层与「真实 store（Wave1-C）」之间的结构型接缝。
@@ -82,6 +83,19 @@ export interface EditorSnapshot {
   lastFocus: { nodeId: string; ts: number } | null;
   /** 最近一次 undo/redo 事件（含命令名 + 递增 nonce）；宏撤销后画布据此回位相机。 */
   historyEvent: { kind: 'undo' | 'redo'; name: string; nonce: number } | null;
+  /**
+   * 聚焦分支的节点 id（P1 §4.4）。非聚焦集合（祖先链+子树之外）的节点降透明度/隐藏。
+   * null = 不聚焦。由 store/面板 agent 驱动，editor 消费。
+   * 可选：并行接缝，Wave4 真实 store 接齐；消费侧用 `?? null` 兜底。
+   */
+  focusNodeId?: string | null;
+  /** 标签筛选（P1 §4.8）：非命中节点降透明度。空筛选 = 不筛选。 */
+  tagFilter?: TagFilter;
+  /**
+   * 手动移动过、应被「增量整理」跳过的节点 id（不画 ghost）。
+   * store 侧接线由 Wave4 完成；editor 仅消费。
+   */
+  manualFixed?: ReadonlySet<string>;
 }
 
 /** 块样式补丁（外观操作：8 色标签色点 = bg；文字色 = color）。 */
@@ -120,6 +134,8 @@ export interface EditorApi {
   deleteEdge(id: string): void;
   setEdgeColor(id: string, color: string): void;
   setEdgeLabel(id: string, label: string): void;
+  /** 反转边方向（父↔子），含 source/targetHandle 位交换（P1 §4.3）。可选：Wave4 接真实 store。 */
+  reverseEdge?(id: string): void;
 
   // ---- 导图键盘建块 ----
   tabAddChild(): void;
@@ -166,4 +182,17 @@ export interface EditorApi {
 
   // ---- 保存（触发 store 防抖落盘）----
   save(): void;
+
+  // ---- P1 聚焦 / 筛选（UI 态，由面板/大纲驱动；可选，Wave4 接真实 store）----
+  /** 聚焦某分支；传 null 取消聚焦。 */
+  setFocusNode?(id: string | null): void;
+  /** 设置标签筛选（any/all 语义）。 */
+  setTagFilter?(filter: TagFilter): void;
+
+  // ---- P1 附件上传（经存储 agent；mock 先行；可选，Wave4 接真实 store）----
+  /**
+   * 上传一个附件，返回 assetRef 引用 id（JSON 内只存引用，Blob 存 OPFS）。
+   * 图片仍走 addImageBlock；这里是通用附件（非图片）。
+   */
+  putImageAsset?(file: File): Promise<{ assetRef: string; name: string; size: number }>;
 }
