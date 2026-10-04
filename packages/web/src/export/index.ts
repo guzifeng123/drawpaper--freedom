@@ -1,2 +1,16 @@
-// 占位 barrel：Wave 各 wave 实现填充（见 docs/ARCHITECTURE.md 所有权表）。
-export {};
+// export barrel：导出弹窗 / 分页叠加 / 打印管线 / 文件名 / 胶水 hook。
+export * from './filename';
+export * from './layout-utils';
+export { ExportDialog, type ExportDialogActions, type ExportScope } from './ExportDialog';
+export { PageBreakOverlay, type PageBreakOverlayProps } from './PageBreakOverlay';
+export { PrintSheets, type PrintSheetsProps } from './PrintSheets';
+export { TiptapStatic } from './render/tiptap-static';
+export { useExportModel } from './useExportModel';
+export {
+  A4_PT,
+  installPageStyle,
+  runVectorPrint,
+  downloadSheetsAsPng,
+  downloadSheetsAsPdf,
+  collectSheetElements,
+} from './print-pipeline';
