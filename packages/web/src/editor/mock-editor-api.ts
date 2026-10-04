@@ -457,6 +457,9 @@ export function createMockEditorApi(initialDoc: KBNoteDoc = createEmptyDoc()): E
     setViewport(vp: Viewport) {
       useStore.setState({ viewport: vp });
     },
+    addManualPageBreak() {},
+    removePageBreak() {},
+    setPageBreaks() {},
 
     copy() {
       const doc = get().doc;

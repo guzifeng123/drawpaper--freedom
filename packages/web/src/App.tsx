@@ -1,9 +1,11 @@
-import { useMemo } from 'react';
-import { editorStore, conflictBridge } from '@/store/editor-store';
+import { useMemo, useEffect } from 'react';
+import { editorStore, conflictBridge, hostAdapter } from '@/store/editor-store';
 import { useEditorStore } from '@/store';
 import { createEditorApi } from '@/wiring/create-editor-api';
 import { createPanelsApi } from '@/wiring/create-panels-api';
 import { createAiApi } from '@/wiring/create-ai-api';
+import { createBackupScheduler } from '@/wiring/backup-scheduler';
+import { pushToast } from '@/panels/lib/toast';
 import { useWiringUi } from '@/wiring/ui-store';
 import { CanvasEditor } from '@/editor/canvas/CanvasEditor';
 import { TopToolbar } from '@/panels/TopToolbar';
@@ -65,7 +67,30 @@ export default function App() {
   useWiringUi((s) => s.trashNonce);
 
   // 导出数据流
-  const { result, sheetsVisible, actions } = useExportModel(panelsApi);
+  const { result, sheetsVisible, actions, scope, setScope } = useExportModel(panelsApi);
+
+  // 定时备份调度：backupEnabled 开启且 dirty 时每 10 分钟下载一份 .kbnote 备份。
+  const backupEnabled = useEditorStore((s) => s.backupEnabled);
+  useEffect(() => {
+    if (!backupEnabled) return;
+    const sched = createBackupScheduler({
+      isEnabled: () => editorStore.getState().backupEnabled,
+      isDirty: () => editorStore.getState().dirty,
+      runBackup: () => {
+        const s = editorStore.getState();
+        const stamp = new Date();
+        const p = (n: number) => String(n).padStart(2, '0');
+        const name = `${s.doc.title || '未命名画布'}_备份_${stamp.getFullYear()}${p(stamp.getMonth() + 1)}${p(stamp.getDate())}-${p(stamp.getHours())}${p(stamp.getMinutes())}`;
+        void hostAdapter.showSaveFilePicker(name, s.exportKBNoteText());
+      },
+      onBackupDone: () => {
+        editorStore.getState().requestSave();
+        pushToast('success', '已创建定时备份');
+      },
+    });
+    sched.start();
+    return () => sched.stop();
+  }, [backupEnabled]);
 
   // DEV-only：e2e 常驻打印容器（window.__drawpaper_debugSheets）。生产构建 import.meta.env.DEV=false 被剔除。
   const debugSheetsOn = import.meta.env.DEV && typeof window !== 'undefined' && !!window.__drawpaper_debugSheets;
@@ -97,6 +122,12 @@ export default function App() {
             result={overlayResult}
             viewport={viewport}
             onDragOrigin={(o) => panelsApi.setPageOrigin(o)}
+            breaks={(panelsApi.doc?.page.pageBreaks ?? []) as unknown as { id: string; x: number; y: number }[]}
+            onMoveBreak={(id, x, y) => {
+              const cur = (panelsApi.doc?.page.pageBreaks ?? []) as unknown as { id: string; x: number; y: number }[];
+              editorApi.setPageBreaks(cur.map((b) => (b.id === id ? { ...b, x, y } : b)));
+            }}
+            onDeleteBreak={(id) => editorApi.removePageBreak(id)}
           />
         </div>
       )}
@@ -126,7 +157,7 @@ export default function App() {
       ) : null}
 
       {/* 导出弹窗 + 离屏打印容器 */}
-      <ExportDialog api={panelsApi} actions={actions} />
+      <ExportDialog api={panelsApi} actions={actions} scope={scope} onScopeChange={setScope} />
       {sheetsVisible && result.pages.length > 0 && (
         <PrintSheets result={result} doc={doc} settings={doc.page} edgeLabelsVisible={doc.page.edgeLabels} />
       )}

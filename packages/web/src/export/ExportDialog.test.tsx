@@ -15,7 +15,7 @@ function setup() {
     onExportSvg: vi.fn(),
     onExportMarkdown: vi.fn(),
   };
-  render(<ExportDialog api={api} actions={actions} />);
+  render(<ExportDialog api={api} actions={actions} scope="all" onScopeChange={() => {}} />);
   return { api, actions };
 }
 

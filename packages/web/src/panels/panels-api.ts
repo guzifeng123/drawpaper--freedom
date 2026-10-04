@@ -98,6 +98,10 @@ export interface PanelsApi {
   layoutPrefs: LayoutPrefs;
   /** 「仅整理选中分支」开关。 */
   branchOnly: boolean;
+  /** 「折叠后自动收紧」开关（LayoutInput.tighten）。 */
+  tighten: boolean;
+  /** 定时备份开关。 */
+  backupEnabled: boolean;
   canUndo: boolean;
   canRedo: boolean;
 
@@ -133,6 +137,8 @@ export interface PanelsApi {
   setRankSpacing(v: number): void;
   setNodeSpacing(v: number): void;
   setBranchOnly(v: boolean): void;
+  setTighten(on: boolean): void;
+  setBackupEnabled(on: boolean): void;
 
   // ---- 页面 / 导出回调 ----
   setPageSettings(patch: Partial<PageSettings>): void;

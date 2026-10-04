@@ -6,6 +6,7 @@ import { useEditorApi, useEditingNodeId, useChildCount } from '../canvas/editor-
 import { createBlockEditor } from '../tiptap/createBlockEditor';
 import { SlashMenu, type SlashCommand } from '../tiptap/slash-menu';
 import { BlockHoverToolbar } from './block-hover-toolbar';
+import { TableToolbar } from './table-toolbar';
 import type { AppNode } from './types';
 
 /**
@@ -203,6 +204,7 @@ export const BlockShell = memo(function BlockShell({
           renderEditor()
         ) : isEditing && editor ? (
           <>
+            {block.type === 'table' && <TableToolbar editor={editor} />}
             <div className="tiptap-content" data-nodeeditor>
               <EditorContent editor={editor} />
             </div>

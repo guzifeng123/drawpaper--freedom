@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any -- e2e 夹具形状宽松 */
 import { test, expect, type Page } from '@playwright/test';
 
 /**
@@ -197,6 +198,66 @@ test.describe('P1 验收加固', () => {
     const afterRemove = await page.evaluate(() => window.__drawpaper__!.getState().doc.page.pageBreaks.length);
     console.log('PAGEBREAK', { afterAdd, afterRemove });
     expect(afterRemove).toBe(afterAdd - 1);
+  });
+
+  test('tighten 开关：setTighten 透传 store', async ({ page }) => {
+    await boot(page);
+    await page.evaluate(() => window.__drawpaper__!.invoke('setTighten', false));
+    await page.waitForTimeout(100);
+    const tight = await page.evaluate(() => window.__drawpaper__!.getState().layoutUi.tighten);
+    console.log('TIGHTEN', tight);
+    expect(tight).toBe(false);
+    await page.evaluate(() => window.__drawpaper__!.invoke('setTighten', true));
+  });
+
+  test('分页符完整交互：插入→拖动改位→Delete 删除', async ({ page }) => {
+    await boot(page);
+    const doc = baseDoc([n('a', 100, 100, 'A'), n('b', 500, 400, 'B')]);
+    doc.page.showPageBreak = true;
+    await page.evaluate((d) => window.__drawpaper__!.loadFixture(d), doc);
+    await page.waitForTimeout(500);
+    // 插入分页符。
+    await page.evaluate(() => window.__drawpaper__!.invoke('addManualPageBreak', 'pb1', 300, 200));
+    await page.waitForTimeout(400);
+    const handle = page.locator('[data-testid="manual-break"][data-break-id="pb1"]');
+    await expect(handle).toBeVisible();
+
+    // 拖动改位。
+    const box = await handle.boundingBox();
+    await page.mouse.move(box!.x + 6, box!.y + 6);
+    await page.mouse.down();
+    await page.mouse.move(box!.x + 120, box!.y + 6, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+    const moved = await page.evaluate(() => {
+      const b: any = (window.__drawpaper__!.getState().doc.page.pageBreaks as any[]).find((x) => x.id === 'pb1');
+      return b?.x;
+    });
+    console.log('BREAK_X_AFTER_DRAG', moved);
+    expect(moved).toBeGreaterThan(300);
+
+    // 点选后 Delete 删除。
+    await handle.click();
+    await page.waitForTimeout(150);
+    await page.keyboard.press('Delete');
+    await page.waitForTimeout(300);
+    const afterDelete = await page.evaluate(() => (window.__drawpaper__!.getState().doc.page.pageBreaks as any[]).length);
+    console.log('BREAKS_AFTER_DELETE', afterDelete);
+    expect(afterDelete).toBe(0);
+  });
+
+  test('定时备份开关：UI 开启后 localStorage 持久化', async ({ page }) => {
+    await boot(page);
+    // 文档菜单 → 每 10 分钟自动备份。
+    await page.locator('button:has-text("文档")').first().click();
+    await page.getByText('每 10 分钟自动备份').click();
+    await page.waitForTimeout(200);
+    const flag = await page.evaluate(() => localStorage.getItem('drawpaper-backup-enabled'));
+    console.log('BACKUP_FLAG', flag);
+    expect(flag).toBe('1');
+    // store 状态同步。
+    const enabled = await page.evaluate(() => window.__drawpaper__!.getState().backupEnabled);
+    expect(enabled).toBe(true);
   });
 
   test('触屏冒烟：coarse pointer 显式工具按钮组可见', async ({ browser }) => {
