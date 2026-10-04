@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "jsx": "react-jsx",
+    "types": ["vite/client"],
+    "noEmit": true,
+    "allowImportingTsExtensions": false,
+    "moduleResolution": "Bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src", "e2e"],
+  "exclude": ["dist", "node_modules", "playwright-report", "test-results"]
+}

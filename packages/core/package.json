@@ -1,0 +1,58 @@
+{
+  "name": "@drawpaper/core",
+  "version": "0.0.0",
+  "description": "drawpaper core — pure-TS, DOM-free domain model, graph, layout, paginate, serialize, store contracts.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./model": {
+      "types": "./dist/model/index.d.ts",
+      "import": "./dist/model/index.js"
+    },
+    "./graph": {
+      "types": "./dist/graph/index.d.ts",
+      "import": "./dist/graph/index.js"
+    },
+    "./layout": {
+      "types": "./dist/layout/index.d.ts",
+      "import": "./dist/layout/index.js"
+    },
+    "./paginate": {
+      "types": "./dist/paginate/index.d.ts",
+      "import": "./dist/paginate/index.js"
+    },
+    "./serialize": {
+      "types": "./dist/serialize/index.d.ts",
+      "import": "./dist/serialize/index.js"
+    },
+    "./store": {
+      "types": "./dist/store/index.d.ts",
+      "import": "./dist/store/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "d3-hierarchy": "^3.1.2",
+    "immer": "^10.1.1",
+    "nanoid": "^5.0.8",
+    "zod": "^3.23.8",
+    "zustand": "^5.0.1"
+  },
+  "devDependencies": {
+    "@types/d3-hierarchy": "^3.1.7",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  }
+}

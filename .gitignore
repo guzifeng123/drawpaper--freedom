@@ -1,0 +1,30 @@
+# deps
+node_modules/
+.pnpm-store/
+
+# build output
+dist/
+build/
+*.tsbuildinfo
+*.tscbuildinfo
+
+# test
+coverage/
+playwright-report/
+test-results/
+playwright/.cache/
+
+# misc
+.DS_Store
+*.local
+.env
+.env.*
+!.env.example
+
+# editor
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# vite / pwa
+dev-dist/

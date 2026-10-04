@@ -1,0 +1,27 @@
+{
+  "name": "drawpaper",
+  "version": "0.0.0",
+  "private": true,
+  "description": "drawpaper — local-first infinite-canvas knowledge-block note tool (web PWA). Monorepo root.",
+  "type": "module",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @drawpaper/web dev",
+    "build": "pnpm -r --filter \"./packages/*\" build",
+    "test": "pnpm -r --filter \"./packages/*\" test",
+    "test:watch": "pnpm --filter @drawpaper/core test:watch",
+    "lint": "eslint .",
+    "typecheck": "pnpm -r --filter \"./packages/*\" typecheck",
+    "e2e": "pnpm --filter @drawpaper/web e2e"
+  },
+  "devDependencies": {
+    "eslint": "^9.13.0",
+    "@eslint/js": "^9.13.0",
+    "typescript-eslint": "^8.12.0",
+    "typescript": "^5.6.3",
+    "globals": "^15.11.0"
+  }
+}
