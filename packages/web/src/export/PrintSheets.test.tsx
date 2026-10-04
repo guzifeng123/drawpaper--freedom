@@ -43,9 +43,11 @@ function makeResult(): PaginateResult {
   return {
     totalPages: 2,
     orphans: [{ nodeId: 'n2', severity: 'warn', message: '孤块' }],
+    notes: [],
     pages: [
       {
         index: 0,
+        pageNumber: 1,
         worldRect: { x: 0, y: 0, width: 500, height: 700 },
         nodeIds: ['n1'],
         edgeIds: [],
@@ -54,6 +56,7 @@ function makeResult(): PaginateResult {
       },
       {
         index: 1,
+        pageNumber: 2,
         worldRect: { x: 500, y: 0, width: 500, height: 700 },
         nodeIds: ['n2'],
         edgeIds: [],

@@ -3,6 +3,7 @@
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import globals from 'globals';
+import reactHooks from 'eslint-plugin-react-hooks';
 
 /**
  * 浏览器/DOM 运行时全局黑名单。core 包中出现这些即报错。
@@ -77,6 +78,17 @@ export default tseslint.config(
         'warn',
         { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
       ],
+    },
+  },
+  // ---- packages/web: React hooks 规则（仅 web；core 是 DOM-free 纯逻辑，不加载）----
+  // 只启用经典两条（rules-of-hooks / exhaustive-deps），不引入 React Compiler 的
+  // set-state-in-effect / immutability 等新门禁——后者会要求重写 Wave1 既有组件。
+  {
+    plugins: { 'react-hooks': reactHooks },
+    files: ['packages/web/**/*.{ts,tsx}'],
+    rules: {
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
     },
   },
   // ---- packages/core: 纯 TS，零 DOM/React/浏览器全局 ----

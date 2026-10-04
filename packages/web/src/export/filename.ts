@@ -8,7 +8,8 @@ import type { PageOrientation } from '@drawpaper/core';
 /** 清洗文件名字符：非法字符替换为下划线，折叠空白，截断长度。 */
 export function sanitizeFileName(title: string): string {
   return title
-    // 非法文件名字符 / 控制字符
+    // 非法文件名字符 / 控制字符（0x00-0x1f 必须剔除，no-control-regex 此处为有意为之）
+    // eslint-disable-next-line no-control-regex -- 文件名清洗需剔除 C0 控制字符
     .replace(/[\\/:*?"<>|\x00-\x1f]/g, '_')
     // 折叠连续空白
     .replace(/\s+/g, ' ')
