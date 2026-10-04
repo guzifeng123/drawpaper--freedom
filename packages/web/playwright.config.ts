@@ -1,9 +1,9 @@
 import { defineConfig, devices } from '@playwright/test';
 
-// 本机 playwright 浏览器装在 /home/user/ms-playwright（默认 /opt 路径不可写）。
-if (!process.env['PLAYWRIGHT_BROWSERS_PATH']) {
-  process.env['PLAYWRIGHT_BROWSERS_PATH'] = '/home/user/ms-playwright';
-}
+// 本机 playwright 浏览器（chromium 1243）实际装在 /home/user/ms-playwright。
+// 无条件强制覆盖：shell 可能全局导出 PLAYWRIGHT_BROWSERS_PATH=/opt/vm/preinstall/...
+// （该路径缺 chromium_headless_shell），若不覆盖会导致干净环境下浏览器找不到。
+process.env['PLAYWRIGHT_BROWSERS_PATH'] = '/home/user/ms-playwright';
 
 /**
  * Playwright e2e 配置：chromium，webServer 自动起 preview（build 后）或 dev。
