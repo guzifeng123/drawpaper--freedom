@@ -3,6 +3,8 @@ import type { KBNoteDoc } from '@drawpaper/core';
 import { DexieStorageAdapter } from '../storage/db';
 import { WebHostAdapter } from '../host/web-host';
 import { buildIndex, searchDocs } from '../storage/search-index';
+import { activeFileManager } from '../storage/fsa';
+import { TEMPLATE_REGISTRY } from '../storage/templates';
 import { createConflictBridge, type ConflictBridge } from '../wiring/conflict-bridge';
 
 /**
@@ -49,6 +51,8 @@ export const editorStore = createEditorStore(blankInitialDoc(), {
   storage: storageAdapter,
   host: hostAdapter,
   resolveConflictUi: (pending) => conflictBridge.handler(pending),
+  templates: TEMPLATE_REGISTRY,
+  fsa: activeFileManager,
 });
 
 /** 启动后：列出文档 → 打开最近一份；没有则新建。 */
@@ -60,6 +64,15 @@ async function bootstrap(): Promise<void> {
     await editorStore.getState().openDoc(recent.id);
   } else {
     editorStore.getState().newDoc();
+  }
+  // 尝试恢复上次活动本地文件句柄（需用户重新授权；失败则保持 IndexedDB 自动保存）。
+  try {
+    const name = await activeFileManager.restoreActiveFile();
+    if (name) {
+      editorStore.setState({ activeFile: { name } });
+    }
+  } catch {
+    /* 无活动句柄或未授权 */
   }
   startSearchSync();
 }
