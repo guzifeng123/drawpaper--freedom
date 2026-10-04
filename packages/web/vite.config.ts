@@ -29,6 +29,8 @@ export default defineConfig({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
+        // P1 接入大纲/标签/AI 面板后单 chunk 略超 2MiB 预缓存上限；提到 4MiB。
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
       },
     }),
   ],

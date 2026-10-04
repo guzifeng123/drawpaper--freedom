@@ -1,5 +1,5 @@
 import * as React from 'react';
-import { Printer, ImageDown, FileDown } from 'lucide-react';
+import { Printer, ImageDown, FileDown, FileCode, FileText } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   Dialog,
@@ -27,6 +27,10 @@ export interface ExportDialogActions {
   onExportPng: () => void;
   /** 直接下载 PDF（pdf-lib 位图合成）。 */
   onExportPdf: () => void;
+  /** 导出矢量 SVG（每页一个 .svg）。 */
+  onExportSvg: () => void;
+  /** 导出 Markdown 大纲（.md）。 */
+  onExportMarkdown: () => void;
 }
 
 const MODE_DESC: Record<PageMode, string> = {
@@ -236,6 +240,12 @@ export function ExportDialog({
             </Button>
             <Button variant="outline" onClick={actions.onExportPdf}>
               <FileDown className="h-4 w-4" /> 直接下载 PDF
+            </Button>
+            <Button variant="outline" onClick={actions.onExportSvg}>
+              <FileCode className="h-4 w-4" /> 矢量 SVG
+            </Button>
+            <Button variant="outline" onClick={actions.onExportMarkdown}>
+              <FileText className="h-4 w-4" /> Markdown
             </Button>
           </div>
         </DialogFooter>

@@ -17,6 +17,8 @@ import {
   downloadSheetsAsPng,
   runVectorPrint,
 } from './print-pipeline';
+import { buildPagesSvg, downloadSvgPages } from './svg-export';
+import { docToMarkdown, downloadTextFile } from './markdown-export';
 import { buildExportFileName } from './filename';
 
 const EMPTY_RESULT: PaginateResult = { pages: [], orphans: [], totalPages: 0, notes: [] };
@@ -135,6 +137,33 @@ export function useExportModel(api: PanelsApi): {
           });
           await downloadSheetsAsPdf(sheets, name, api.page.orientation);
         });
+      },
+      onExportSvg: () => {
+        if (!api.doc) return;
+        const r = computeResult();
+        if (r.pages.length === 0) return;
+        const svgs = buildPagesSvg(r, api.doc, {
+          orientation: api.page.orientation,
+          gray: api.page.colorMode === 'gray',
+        });
+        const name = buildExportFileName({
+          title: api.doc.title ?? '未命名',
+          date: new Date(),
+          orientation: api.page.orientation,
+          ext: 'svg',
+        });
+        downloadSvgPages(svgs, name);
+      },
+      onExportMarkdown: () => {
+        if (!api.doc) return;
+        const md = docToMarkdown(api.doc);
+        const name = buildExportFileName({
+          title: api.doc.title ?? '未命名',
+          date: new Date(),
+          orientation: api.page.orientation,
+          ext: 'md',
+        });
+        downloadTextFile(name, md);
       },
     }),
     [api, afterSheetsRender, computeResult],

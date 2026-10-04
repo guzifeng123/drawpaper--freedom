@@ -12,6 +12,8 @@ function setup() {
     onPrint: vi.fn(),
     onExportPng: vi.fn(),
     onExportPdf: vi.fn(),
+    onExportSvg: vi.fn(),
+    onExportMarkdown: vi.fn(),
   };
   render(<ExportDialog api={api} actions={actions} />);
   return { api, actions };

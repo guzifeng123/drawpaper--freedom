@@ -20,6 +20,9 @@ import {
   Monitor,
   Focus,
   X,
+  Radar,
+  Sparkles,
+  ListTree,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Toolbar, ToolbarSeparator } from '@/components/ui/toolbar';
@@ -46,6 +49,7 @@ import { SnapshotsDialog } from './SnapshotsDialog';
 import { TrashDialog } from './TrashDialog';
 import { TagManagerDialog } from './TagManagerDialog';
 import { useThemeStore, type ThemeMode } from './lib/theme';
+import { useWiringUi } from '@/wiring/ui-store';
 
 function formatTime(ts: number): string {
   const d = new Date(ts);
@@ -154,6 +158,36 @@ function ThemeToggle() {
         })}
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+/** 左侧大纲面板开关。 */
+function OutlineToggle() {
+  const open = useWiringUi((s) => s.outlineOpen);
+  return (
+    <Button
+      variant={open ? 'default' : 'ghost'}
+      size="icon"
+      onClick={() => useWiringUi.getState().setOutlineOpen(!open)}
+      title="大纲面板"
+    >
+      <ListTree className="h-4 w-4" />
+    </Button>
+  );
+}
+
+/** 右侧 AI 辅助面板开关。 */
+function AiToggle() {
+  const open = useWiringUi((s) => s.aiPanelOpen);
+  return (
+    <Button
+      variant={open ? 'default' : 'ghost'}
+      size="icon"
+      onClick={() => useWiringUi.getState().setAiPanelOpen(!open)}
+      title="AI 辅助"
+    >
+      <Sparkles className="h-4 w-4" />
+    </Button>
   );
 }
 
@@ -277,6 +311,14 @@ export const TopToolbar = React.memo(function TopToolbar({ api }: { api: PanelsA
         >
           <Network className="h-4 w-4" /> 组织树
         </Toggle>
+        <Toggle
+          size="sm"
+          pressed={layoutPrefs.mode === 'radial'}
+          onPressedChange={() => pickLayout('radial')}
+          title="放射状布局"
+        >
+          <Radar className="h-4 w-4" /> 放射
+        </Toggle>
       </Toolbar>
 
       {/* 间距弹层 */}
@@ -349,6 +391,8 @@ export const TopToolbar = React.memo(function TopToolbar({ api }: { api: PanelsA
         <Button variant="ghost" size="icon" onClick={() => setTagsOpen(true)} title="标签管理">
           <Tag className="h-4 w-4" />
         </Button>
+        <OutlineToggle />
+        <AiToggle />
         <ThemeToggle />
         <Button variant="outline" size="sm" onClick={() => api.openSearch()} title="全文搜索 (Ctrl/Cmd+F)">
           <Search className="h-4 w-4" /> 搜索
