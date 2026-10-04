@@ -1,2 +1,13 @@
-// 占位 barrel：Wave 各 wave 实现填充（见 docs/ARCHITECTURE.md 所有权表）。
-export {};
+// Wave1-D 画布编辑层公开出口。
+export { CanvasEditor } from './canvas/CanvasEditor';
+export { EditorApiContext, useEditorApi, useEditorSnapshot } from './canvas/editor-context';
+export type {
+  EditorApi,
+  EditorSnapshot,
+  PendingConflicts,
+  LayoutGhost,
+  ConflictResolutionInput,
+} from './editor-api';
+export { createMockEditorApi, createEmptyDoc } from './mock-editor-api';
+export { createBlockEditor } from './tiptap/createBlockEditor';
+export { StaticHtml, tiptapJsonToHtml } from './tiptap/static';
