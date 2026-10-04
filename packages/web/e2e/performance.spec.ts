@@ -15,7 +15,7 @@ async function sampleFps(page: import('@playwright/test').Page, interact: 'drag'
     await new Promise((r) => setTimeout(r, 200));
     const frames: number[] = [];
     let raf = 0;
-    let start = performance.now();
+    const start = performance.now();
     await new Promise<void>((resolve) => {
       const tick = (t: number) => {
         frames.push(t);
