@@ -1,2 +1,2 @@
-// 占位 barrel：Wave 各 wave 实现填充（见 docs/ARCHITECTURE.md 所有权表）。
-export {};
+// HostAdapter 的 web 实现统一导出。
+export * from './web-host';

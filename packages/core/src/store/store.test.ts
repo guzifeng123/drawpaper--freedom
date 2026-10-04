@@ -1,0 +1,268 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { createEditorStore } from './store.js';
+import type { EditorStoreApi } from './store.js';
+import type { BlockNode, Edge, KBNoteDoc } from '../model/index.js';
+
+let store: EditorStoreApi;
+
+function mkNode(id: string, x = 0, y = 0): BlockNode {
+  return {
+    id,
+    type: 'text',
+    x,
+    y,
+    width: 220,
+    height: 80,
+    content: { format: 'tiptap-json', data: { type: 'doc', content: [] } },
+    parentId: null,
+    pinned: false,
+    locked: false,
+    collapsed: false,
+    tags: [],
+    style: {},
+  };
+}
+
+function mkEdge(id: string, source: string, target: string): Edge {
+  return {
+    id,
+    source,
+    target,
+    sourceHandle: 'right',
+    targetHandle: 'left',
+    label: '',
+    directed: true,
+    style: { color: '#94A3B8' },
+  };
+}
+
+function baseDoc(nodes: BlockNode[], edges: Edge[]): KBNoteDoc {
+  return {
+    format: 'knowledge-block-notes',
+    version: 1,
+    id: 'doc1',
+    title: 't',
+    board: { createdAt: 0, updatedAt: 0 },
+    nodes,
+    edges,
+    tags: [],
+    layout: { mode: 'mindmap-right', rankSpacing: 90, nodeSpacing: 28 },
+    viewport: { x: 0, y: 0, zoom: 1 },
+    page: {
+      size: 'A4',
+      orientation: 'portrait',
+      marginMm: 15,
+      mode: 'fit',
+      showPageBreak: true,
+      colorMode: 'color',
+      header: false,
+      footer: false,
+      showPageNumbers: false,
+      pageBreaks: [],
+    },
+    assetRefs: [],
+  };
+}
+
+/** 无冲突 analyzer（默认）：避免命中未实现的 graph.detectConflicts。 */
+function noopAnalyzer() {
+  return () => ({ multiParents: [], cycles: [] });
+}
+
+/** 简单多父检测 stub：入边 >1 即多父。 */
+function multiParentAnalyzer() {
+  return (nodes: BlockNode[], edges: Edge[]) => {
+    const incoming = new Map<string, string[]>();
+    for (const e of edges) {
+      const list = incoming.get(e.target) ?? [];
+      list.push(e.id);
+      incoming.set(e.target, list);
+    }
+    const multiParents = [...incoming.entries()]
+      .filter(([, ids]) => ids.length > 1)
+      .map(([nodeId, parentEdgeIds]) => ({
+        nodeId,
+        parentEdgeIds,
+        parentIds: parentEdgeIds
+          .map((id) => edges.find((e) => e.id === id)?.source)
+          .filter((x): x is string => Boolean(x)),
+      }));
+    return { multiParents, cycles: [] };
+  };
+}
+
+describe('EditorStore 节点 CRUD', () => {
+  beforeEach(() => {
+    store = createEditorStore(baseDoc([mkNode('a')], []), { analyzer: noopAnalyzer() });
+  });
+
+  it('addNode / deleteNode cascades edges', () => {
+    const id = store.getState().addNode('text', 10, 10);
+    expect(store.getState().doc.nodes.map((n) => n.id)).toContain(id);
+    store.getState().addEdge('a', id);
+    expect(store.getState().doc.edges).toHaveLength(1);
+    store.getState().deleteNode(id);
+    expect(store.getState().doc.nodes.map((n) => n.id)).not.toContain(id);
+    expect(store.getState().doc.edges).toHaveLength(0);
+  });
+
+  it('move/resize/content coalesce and undo restores original', () => {
+    store.getState().setSelection(['a']);
+    store.getState().moveNode('a', 100, 100);
+    store.getState().moveNode('a', 120, 120);
+    store.getState().resizeNode('a', 300, 200);
+    store.getState().updateContent('a', { text: 'v2' });
+    store.getState().updateContent('a', { text: 'v3' });
+    const node = () => store.getState().doc.nodes.find((n) => n.id === 'a')!;
+    expect(node().x).toBe(120);
+    expect(node().width).toBe(300);
+    expect(node().content.data).toEqual({ text: 'v3' });
+    // undo content（coalesced：一次回到编辑前）
+    store.getState().undo();
+    expect(node().content.data).toEqual({ type: 'doc', content: [] });
+    // undo resize
+    store.getState().undo();
+    expect(node().width).toBe(220);
+    // undo move (coalesced) -> back to 0,0
+    store.getState().undo();
+    expect(node().x).toBe(0);
+    expect(node().y).toBe(0);
+  });
+});
+
+describe('Tab / Enter / Shift+Tab', () => {
+  it('builds and rewires tree structure', () => {
+    store = createEditorStore(baseDoc([mkNode('root')], []), { analyzer: noopAnalyzer() });
+    store.getState().setEditingNode('root');
+    store.getState().tabAddChild();
+    const child = store.getState().doc.nodes.find((n) => n.id !== 'root')!;
+    expect(store.getState().doc.edges.map((e) => [e.source, e.target])).toEqual([['root', child.id]]);
+
+    store.getState().setEditingNode(child.id);
+    store.getState().enterAddSibling();
+    expect(store.getState().doc.edges).toHaveLength(2);
+
+    // Shift+Tab on child: remove root->child (root has no parent, so child becomes root)
+    store.getState().setEditingNode(child.id);
+    store.getState().shiftTabDemote();
+    expect(store.getState().doc.edges.find((e) => e.target === child.id)).toBeUndefined();
+  });
+});
+
+describe('冲突裁决（多父 / 成环 / 取消）', () => {
+  it('multi-parent resolution keeps chosen primary and deletes others; undo restores', async () => {
+    const resolver = vi.fn().mockResolvedValue({ choosePrimaryParent: { c: 'e1' }, breakEdgeIds: [] });
+    store = createEditorStore(
+      baseDoc([mkNode('a'), mkNode('b'), mkNode('c')], [mkEdge('e1', 'a', 'c')]),
+      { analyzer: multiParentAnalyzer(), resolveConflictUi: resolver },
+    );
+    store.getState().addEdge('b', 'c');
+    expect(resolver).toHaveBeenCalledTimes(1);
+    // 等待 promise 结算
+    await vi.waitFor(() => {
+      expect(store.getState().doc.edges.map((e) => e.id)).toEqual(['e1']);
+    });
+    // undo 裁决宏，恢复 b->c
+    store.getState().undo();
+    expect(store.getState().doc.edges).toHaveLength(2);
+  });
+
+  it('cancel resolution rolls back the triggered edge', async () => {
+    const resolver = vi.fn().mockResolvedValue(null);
+    store = createEditorStore(
+      baseDoc([mkNode('a'), mkNode('b'), mkNode('c')], [mkEdge('e1', 'a', 'c')]),
+      { analyzer: multiParentAnalyzer(), resolveConflictUi: resolver },
+    );
+    store.getState().addEdge('b', 'c');
+    await vi.waitFor(() => {
+      expect(store.getState().doc.edges.map((e) => e.id)).toEqual(['e1']);
+    });
+  });
+
+  it('cycle resolution breaks chosen edge', async () => {
+    const resolver = vi.fn().mockResolvedValue({ choosePrimaryParent: {}, breakEdgeIds: ['ey'] });
+    store = createEditorStore(
+      baseDoc([mkNode('a'), mkNode('b')], [mkEdge('ey', 'a', 'b'), mkEdge('ex', 'b', 'a')]),
+      {
+        analyzer: () => ({ multiParents: [], cycles: [{ nodeIds: ['a', 'b'], edgeIds: ['ex', 'ey'] }] }),
+        resolveConflictUi: resolver,
+      },
+    );
+    store.getState().addEdge('a', 'b'); // duplicate -> ignored, but trigger conflict path manually
+    // 直接调 resolveConflicts 触发断边
+    store.setState((s) => {
+      s.pendingConflicts = { multiParents: [], cycles: [{ nodeIds: ['a', 'b'], edgeIds: ['ex', 'ey'] }], triggerEdgeIds: [] };
+    });
+    store.getState().resolveConflicts({ choosePrimaryParent: {}, breakEdgeIds: ['ey'] });
+    expect(store.getState().doc.edges.map((e) => e.id)).toEqual(['ex']);
+  });
+});
+
+describe('布局预览 / 确认（宏单次 undo）', () => {
+  it('confirmLayout places nodes and a single undo restores all', () => {
+    store = createEditorStore(baseDoc([mkNode('a', 0, 0)], []), {
+      analyzer: noopAnalyzer(),
+      layoutEngine: () => ({ positions: { a: { x: 500, y: 300 } } }),
+    });
+    store.getState().setMeasuredSizes({ a: { width: 220, height: 80 } });
+    store.getState().previewLayout();
+    expect(store.getState().layoutPreview).toEqual({ a: { x: 500, y: 300 } });
+    store.getState().confirmLayout();
+    const node = store.getState().doc.nodes[0]!;
+    expect(node.x).toBe(500);
+    expect(store.getState().layoutPreview).toBeNull();
+    store.getState().undo();
+    expect(store.getState().doc.nodes[0]!.x).toBe(0);
+  });
+});
+
+describe('自动保存 500ms 防抖', () => {
+  it('saves only once after burst of mutations and sets savedAt', async () => {
+    vi.useFakeTimers();
+    const saveDoc = vi.fn().mockResolvedValue(undefined);
+    const t = 1000;
+    store = createEditorStore(baseDoc([mkNode('a')], []), {
+      analyzer: noopAnalyzer(),
+      storage: { saveDoc, loadDoc: vi.fn(), listDocs: vi.fn().mockResolvedValue([]), deleteDoc: vi.fn(), getAsset: vi.fn(), putAsset: vi.fn(), deleteAsset: vi.fn() },
+      now: () => t,
+    });
+    store.getState().addNode('text', 1, 1);
+    store.getState().moveNode('a', 5, 5);
+    store.getState().updateContent('a', { t: 1 });
+    expect(saveDoc).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(500);
+    await vi.waitFor(() => expect(saveDoc).toHaveBeenCalledTimes(1));
+    expect(store.getState().saveState).toBe('saved');
+    expect(store.getState().savedAt).toBe(1000);
+    vi.useRealTimers();
+  });
+});
+
+describe('剪贴板 / 导入导出', () => {
+  it('paste remaps ids with no leftover references', () => {
+    store = createEditorStore(
+      baseDoc([mkNode('n1', 0, 0), mkNode('n2', 300, 0)], [mkEdge('e1', 'n1', 'n2')]),
+      { analyzer: noopAnalyzer() },
+    );
+    store.getState().setSelection(['n1', 'n2']);
+    store.getState().copy();
+    store.getState().paste();
+    const ids = store.getState().doc.nodes.map((n) => n.id);
+    expect(ids).toHaveLength(4);
+    // 新粘贴的边不引用旧 id（保留原边 e1）
+    const oldIds = new Set(['n1', 'n2']);
+    const newEdges = store.getState().doc.edges.filter((e) => e.id !== 'e1');
+    for (const e of newEdges) {
+      expect(oldIds.has(e.source)).toBe(false);
+      expect(oldIds.has(e.target)).toBe(false);
+    }
+  });
+
+  it('export/import round-trips through serialize', () => {
+    store = createEditorStore(baseDoc([mkNode('a')], []), { analyzer: noopAnalyzer() });
+    store.getState().addNode('heading', 20, 20);
+    const text = store.getState().exportKBNoteText();
+    store.getState().importKBNoteText(text);
+    expect(store.getState().doc.nodes.map((n) => n.id)).toHaveLength(2);
+  });
+});
