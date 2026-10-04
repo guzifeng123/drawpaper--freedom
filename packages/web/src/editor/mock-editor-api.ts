@@ -459,6 +459,7 @@ export function createMockEditorApi(initialDoc: KBNoteDoc = createEmptyDoc()): E
     },
     addManualPageBreak() {},
     removePageBreak() {},
+    setPageBreaks() {},
 
     copy() {
       const doc = get().doc;

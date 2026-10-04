@@ -88,3 +88,24 @@
 - 2000 块加载 ~60s（沿用）。
 - 截图：`/tmp/p1-verify/`（tighten-toggle、backup-toggle、dark 对比、p1-blocks、ai-fail-toast、coarse-toolbar）。
 - e2e 截图与导出产物：`/tmp/p1-verify/`（dark 对比、p1-blocks、ai-fail-toast、coarse-toolbar、.md/.svg）。
+
+---
+
+# Wave4d · 收尾闭环（最后一轮）
+
+## 门禁（Wave4d 后）
+- `pnpm -r build` / `typecheck` ✅；`npx eslint .` **0 warning**。
+- 单测 core **122** + web **173**（+3 backup-scheduler fake-timer 单测）；e2e **26 passed**（原 25 + 分页符完整交互）。
+
+## 本轮闭环
+
+| 项 | 状态 | 证据 |
+|---|---|---|
+| 1. 手动分页符完整交互 | ✅ | PageBreakOverlay 重写：每个手动分页符渲染为可拖动竖线手柄（pointer capture，拖动 >2px 标记 moved，松手写回 setPageBreaks）；点选高亮、Delete/Backspace 删除、Esc 取消选中。e2e：插入→拖动（x 300→368）→Delete 删除（pageBreaks 1→0）。截图 `pagebreak-handle.png`。 |
+| 2. 定时备份真正跑起来 | ✅ | web 接线层 `wiring/backup-scheduler.ts`（时钟/动作全注入，常量 `BACKUP_INTERVAL_MS=10min`）：backupEnabled 开启且 dirty 才到点下载 `{标题}_备份_{YYYYMMDD-HHmm}.kbnote` + toast + 清 dirty；关闭即 stop。fake-timer 单测 3 条（开启+dirty触发/无dirty不触发/关闭不触发）。App.tsx useEffect 随 backupEnabled start/stop。 |
+
+## Wave4d 遗留（最终）
+- **长按 Handle 500ms 连线手势**：RF v22 触摸事件冲突，保留粗指针「连线」显式工具按钮作正式兜底（已上线），不留半成品。
+- **2000 块加载 ~60s**（同步 loadDoc + 首渲偏重），P1.1 懒加载/分页优化。
+- 备注：`setPageSettings` 仅替换 doc.page 不替换 doc 引用，React `useEditorStore(s=>s.doc)` 不重渲导致分页预览开关切换需配合 doc 引用变化才刷新（e2e 直接在 fixture 内置 showPageBreak 绕开）——小体验项，列 P1.1。
+- 截图：`/tmp/p1-verify/pagebreak-handle.png`（A4 虚线页 + 玫瑰色可拖分页符手柄）。

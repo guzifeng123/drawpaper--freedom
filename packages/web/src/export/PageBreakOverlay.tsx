@@ -1,56 +1,111 @@
 import * as React from 'react';
-import type { PaginateResult } from '@drawpaper/core';
-import type { Viewport } from '@drawpaper/core';
+import type { PaginateResult, Viewport } from '@drawpaper/core';
+
+export interface ManualBreak {
+  id: string;
+  x: number;
+  y: number;
+}
 
 /**
  * 画布上的 A4 分页虚线叠加层（纯展示组件）。
  *
- * 设计：接受「已算好的 PaginateResult」与当前视口变换作为 props，
- * 不直接读 store / React Flow 内部状态，便于单测与复用。
  * - 按每页 worldRect 画虚线 A4 矩形 + 页码。
  * - 分页原点手柄可整体拖动 → onDragOrigin。
- * - 含孤块的页面标黄角标。
- * - 仅在外层传入 showPageBreak 时由父级挂载。
+ * - 手动分页符（breaks）渲染为可拖动竖线手柄；点选高亮，Delete/Backspace 删除，Esc 取消选中。
  */
 export interface PageBreakOverlayProps {
   result: PaginateResult;
   viewport: Viewport;
-  /** 分页原点整体拖动回调（世界坐标）。 */
   onDragOrigin?: (origin: { x: number; y: number }) => void;
+  /** 手动分页符列表（世界坐标）。 */
+  breaks?: ManualBreak[];
+  /** 松手后防抖写回新位置。 */
+  onMoveBreak?: (id: string, x: number, y: number) => void;
+  /** 删除分页符。 */
+  onDeleteBreak?: (id: string) => void;
 }
 
 export const PageBreakOverlay = React.memo(function PageBreakOverlay({
   result,
   viewport,
   onDragOrigin,
+  breaks = [],
+  onMoveBreak,
+  onDeleteBreak,
 }: PageBreakOverlayProps) {
   const { zoom, x: vx, y: vy } = viewport;
   const orphanNodeIds = new Set(result.orphans.map((o) => o.nodeId));
+  const [selectedId, setSelectedId] = React.useState<string | null>(null);
 
-  const dragState = React.useRef<{ startX: number; startY: number; originX: number; originY: number } | null>(null);
+  const dragState = React.useRef<{
+    id: string; startX: number; startY: number; origX: number; origY: number;
+  } | null>(null);
 
   const onPointerDown = (e: React.PointerEvent) => {
     if (!onDragOrigin) return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    // 当前原点 = 第一页 worldRect 左上（拖动基准）
     const first = result.pages[0];
     dragState.current = {
+      id: '__origin__',
       startX: e.clientX,
       startY: e.clientY,
-      originX: first?.worldRect.x ?? 0,
-      originY: first?.worldRect.y ?? 0,
+      origX: first?.worldRect.x ?? 0,
+      origY: first?.worldRect.y ?? 0,
     };
   };
   const onPointerMove = (e: React.PointerEvent) => {
     const ds = dragState.current;
-    if (!ds || !onDragOrigin) return;
+    if (!ds || ds.id !== '__origin__' || !onDragOrigin) return;
     const dx = (e.clientX - ds.startX) / zoom;
     const dy = (e.clientY - ds.startY) / zoom;
-    onDragOrigin({ x: ds.originX + dx, y: ds.originY + dy });
+    onDragOrigin({ x: ds.origX + dx, y: ds.origY + dy });
   };
   const onPointerUp = () => {
     dragState.current = null;
   };
+
+  // 分页符手柄拖动（独立 pointer capture，写回 onMoveBreak）。
+  const breakDrag = React.useRef<{
+    id: string; startX: number; startY: number; origX: number; origY: number; moved: boolean;
+  } | null>(null);
+  const onBreakDown = (e: React.PointerEvent, b: ManualBreak) => {
+    e.stopPropagation();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    setSelectedId(b.id);
+    breakDrag.current = { id: b.id, startX: e.clientX, startY: e.clientY, origX: b.x, origY: b.y, moved: false };
+  };
+  const onBreakMove = (e: React.PointerEvent) => {
+    const bd = breakDrag.current;
+    if (!bd || !onMoveBreak) return;
+    const dx = (e.clientX - bd.startX) / zoom;
+    const dy = (e.clientY - bd.startY) / zoom;
+    if (Math.abs(dx) + Math.abs(dy) > 2) bd.moved = true;
+  };
+  const onBreakUp = (e: React.PointerEvent) => {
+    const bd = breakDrag.current;
+    if (bd?.moved && onMoveBreak) {
+      const dx = (e.clientX - bd.startX) / zoom;
+      const dy = (e.clientY - bd.startY) / zoom;
+      onMoveBreak(bd.id, bd.origX + dx, bd.origY + dy);
+    }
+    breakDrag.current = null;
+  };
+
+  // Delete/Backspace 删除选中分页符；Esc 取消选中。
+  React.useEffect(() => {
+    if (!selectedId) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSelectedId(null);
+      } else if ((e.key === 'Delete' || e.key === 'Backspace') && onDeleteBreak) {
+        onDeleteBreak(selectedId);
+        setSelectedId(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedId, onDeleteBreak]);
 
   return (
     <div
@@ -78,6 +133,42 @@ export const PageBreakOverlay = React.memo(function PageBreakOverlay({
                 孤块
               </span>
             ) : null}
+          </div>
+        );
+      })}
+
+      {/* 手动分页符：可拖动竖线手柄 */}
+      {breaks.map((b) => {
+        const left = b.x * zoom + vx;
+        const top = b.y * zoom + vy;
+        const sel = selectedId === b.id;
+        return (
+          <div
+            key={b.id}
+            data-testid="manual-break"
+            data-break-id={b.id}
+            className="pointer-events-auto absolute"
+            style={{
+              left,
+              top,
+              width: 12,
+              height: (result.pages[0]?.worldRect.height ?? 800) * zoom,
+              marginLeft: -6,
+              touchAction: 'none',
+              cursor: 'grab',
+            }}
+            onPointerDown={(e) => onBreakDown(e, b)}
+            onPointerMove={onBreakMove}
+            onPointerUp={(e) => onBreakUp(e)}
+          >
+            <div
+              className={`absolute w-0.5 ${sel ? 'bg-rose-500' : 'bg-rose-400/80'}`}
+              style={{ height: '100%', left: 6 }}
+            />
+            <div
+              className={`absolute h-3 w-3 rounded-full border-2 ${sel ? 'border-rose-600 bg-rose-500' : 'border-white bg-rose-400'}`}
+              style={{ left: 2, top: -6 }}
+            />
           </div>
         );
       })}

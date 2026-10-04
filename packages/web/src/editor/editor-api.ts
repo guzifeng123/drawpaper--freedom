@@ -155,6 +155,7 @@ export interface EditorApi {
   setViewport(vp: Viewport): void;
   addManualPageBreak(id: string, x: number, y: number): void;
   removePageBreak(id: string): void;
+  setPageBreaks(breaks: { id: string; x: number; y: number }[]): void;
 
   // ---- 剪贴板 ----
   copy(): void;
