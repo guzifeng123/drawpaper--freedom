@@ -1,0 +1,54 @@
+import { describe, it, expect } from 'vitest';
+import type { KBNoteDoc } from '@drawpaper/core';
+import type { PaginateResult, PageSheet } from '@drawpaper/core';
+import { buildPagesSvg } from './svg-export';
+
+function doc(): KBNoteDoc {
+  return {
+    format: 'knowledge-block-notes',
+    version: 1,
+    id: 'doc_1',
+    title: 't',
+    board: { createdAt: 0, updatedAt: 0 },
+    tags: [],
+    layout: { mode: 'mindmap-right', rankSpacing: 90, nodeSpacing: 28 },
+    viewport: { x: 0, y: 0, zoom: 1 },
+    page: { size: 'A4', orientation: 'portrait', marginMm: 15, mode: 'tiles', showPageBreak: true, colorMode: 'color', header: true, footer: true, showPageNumbers: true, edgeLabels: true, pageBreaks: [] },
+    assetRefs: [],
+    nodes: [
+      { id: 'n1', type: 'text', x: 0, y: 0, width: 200, height: 100, content: { format: 'tiptap-json', data: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: '节点一文本' }] }] } }, parentId: null, pinned: false, locked: false, collapsed: false, tags: [], style: {} },
+      { id: 'n2', type: 'text', x: 300, y: 0, width: 200, height: 100, content: { format: 'tiptap-json', data: { type: 'doc', content: [] } }, parentId: null, pinned: false, locked: false, collapsed: false, tags: [], style: {} },
+    ],
+    edges: [{ id: 'e1', source: 'n1', target: 'n2', sourceHandle: 'right', targetHandle: 'left', label: '', directed: true, style: { color: '#93C5FD' } }],
+  } as unknown as KBNoteDoc;
+}
+
+function result(): PaginateResult {
+  const sheet: PageSheet = {
+    index: 0,
+    pageNumber: 0,
+    worldRect: { x: 0, y: 0, width: 700, height: 1000 },
+    nodeIds: ['n1', 'n2'],
+    edgeIds: ['e1'],
+    continuations: [{ token: 'cont:e1x', edgeId: 'e1x', pageIndex: 0, x: 10, y: 10, peerPageIndex: 1 }],
+    scale: 1,
+    nodeDrawOffsets: { n1: { x: 60, y: 60 }, n2: { x: 360, y: 60 } },
+    headerText: '页眉',
+    footerText: '页脚',
+  };
+  return { pages: [sheet], orphans: [], totalPages: 1, notes: [] };
+}
+
+describe('buildPagesSvg', () => {
+  it('包含节点文本、箭头 marker、续接圆圈、页眉页脚', () => {
+    const [svg] = buildPagesSvg(result(), doc(), { orientation: 'portrait' });
+    expect(svg).toContain('<svg');
+    expect(svg).toContain('节点一文本');
+    expect(svg).toContain('url(#arrow)');
+    expect(svg).toContain('<marker id="arrow"');
+    expect(svg).toContain('<circle');
+    expect(svg).toContain('页眉');
+    expect(svg).toContain('页脚');
+    expect(svg).toContain('data-node-id="n1"');
+  });
+});

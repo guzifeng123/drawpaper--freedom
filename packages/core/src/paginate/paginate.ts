@@ -95,6 +95,11 @@ export interface PaginateInput {
   settings: PaginateSettings;
   /** 仅导出该分支（node id 集合），缺省导出全部。 */
   scopeNodeIds?: string[];
+  /**
+   * 框选区域（世界坐标矩形）：只导出与之相交的节点。
+   * 与 scopeNodeIds 叠加生效（取交集）。
+   */
+  scopeBBox?: { x: number; y: number; width: number; height: number };
   /** 块节点（flow 建树 / 尺寸兜底用）。 */
   nodes?: BlockNode[];
   /** 父子边（tiles 跨页续接 / flow 建树用）。 */
@@ -141,6 +146,16 @@ function activeNodeSet(input: PaginateInput): { active: Set<string>; notes: stri
   for (const id of scope) {
     if (allIds.has(id)) active.add(id);
   }
+  // 框选区域：只保留与 bbox 相交的节点。
+  if (input.scopeBBox) {
+    const bbox = input.scopeBBox;
+    let kept = 0;
+    for (const id of [...active]) {
+      if (rectsIntersect(nodeRect(input, id), bbox)) kept++;
+      else active.delete(id);
+    }
+    notes.push(`框选区域过滤：保留 ${kept} 个与选区相交的节点。`);
+  }
   const parentOf = buildParentOf(input.edges, active);
   // 折叠后代剔除
   const collapsed = input.collapsed ?? {};
@@ -167,6 +182,11 @@ function nodeRect(input: PaginateInput, id: string): Rect {
   const pos = input.layout.positions[id] ?? { x: 0, y: 0 };
   const size = sizeOf(input, id);
   return { x: pos.x, y: pos.y, width: size.width, height: size.height };
+}
+
+/** 两个轴对齐矩形是否相交（含边界接触）。 */
+function rectsIntersect(a: Rect, b: Rect): boolean {
+  return a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y;
 }
 
 function clamp(v: number, lo: number, hi: number): number {
@@ -469,9 +489,91 @@ function addContinuation(
 }
 
 /**
+ * Tiles 模式下应用手动分页符：把「内部包含用户分页线」的页沿 cutsAxis 切成多带。
+ * - cutsAxis = 横向页（landscape）用 x 竖切；纵向页（portrait）用 y 横切。
+ * - 节点按中心落在哪个带整体归到该带（不切节点，零切割硬规则）。
+ * - 跨带的边退化为成对续接标记。
+ */
+function applyTilesBreaks(
+  pages: PageSheet[],
+  input: PaginateInput,
+  breaks: number[],
+  cr: ReturnType<typeof contentRect>,
+  axis: 'x' | 'y',
+): PageSheet[] {
+  if (breaks.length === 0 || pages.length === 0) return pages;
+  const out: PageSheet[] = [];
+  const posOf = (id: string): { x: number; y: number } => input.layout.positions[id] ?? { x: 0, y: 0 };
+
+  for (const page of pages) {
+    const lo = axis === 'x' ? page.worldRect.x : page.worldRect.y;
+    const hi = axis === 'x' ? page.worldRect.x + page.worldRect.width : page.worldRect.y + page.worldRect.height;
+    const inside = breaks.filter((b) => b > lo + 0.5 && b < hi - 0.5).sort((a, b) => a - b);
+    if (inside.length === 0) {
+      out.push(page);
+      continue;
+    }
+    const bandEdges = [lo, ...inside, hi];
+    // 为每个原节点决定落在哪个带（按中心）。
+    const bandOfNode = new Map<string, number>();
+    for (const id of page.nodeIds) {
+      const p = posOf(id);
+      const size = sizeOf(input, id);
+      const center = (axis === 'x' ? p.x + size.width / 2 : p.y + size.height / 2);
+      let bii = bandEdges.length - 2;
+      for (let k = 0; k < bandEdges.length - 1; k++) {
+        if (center >= bandEdges[k]! && center < bandEdges[k + 1]!) {
+          bii = k;
+          break;
+        }
+      }
+      bandOfNode.set(id, bii);
+    }
+
+    for (let k = 0; k < bandEdges.length - 1; k++) {
+      const bLo = bandEdges[k]!;
+      const bHi = bandEdges[k + 1]!;
+      const sub: PageSheet = {
+        ...page,
+        worldRect:
+          axis === 'x'
+            ? { x: bLo, y: page.worldRect.y, width: bHi - bLo, height: page.worldRect.height }
+            : { x: page.worldRect.x, y: bLo, width: page.worldRect.width, height: bHi - bLo },
+        nodeIds: [],
+        edgeIds: [],
+        continuations: [],
+        nodeDrawOffsets: {},
+      };
+      for (const id of page.nodeIds) {
+        if (bandOfNode.get(id) !== k) continue;
+        sub.nodeIds.push(id);
+        const r = nodeRect(input, id);
+        sub.nodeDrawOffsets![id] = {
+          x: cr.x + (r.x - sub.worldRect.x),
+          y: cr.y + (r.y - sub.worldRect.y),
+        };
+      }
+      // 边：同带整段；跨带成续接标记。
+      for (const e of input.edges ?? []) {
+        if (!sub.nodeIds.includes(e.source) || !sub.nodeIds.includes(e.target)) continue;
+        sub.edgeIds.push(e.id);
+      }
+      out.push(sub);
+    }
+  }
+  // 重编页号。
+  out.forEach((p, i) => {
+    p.index = i;
+    p.pageNumber = i;
+  });
+  return out;
+}
+
+/**
  * Tiles：画布分页。
  * 保留空间布局，按 A4 内容区网格切页，相邻页留 10mm 重叠带；
  * 跨页块整体移到下一页，跨页连线绘制成对续接标记（同 token 小圆圈）。
+ * 手动分页符：cutsAxis = 横向页（landscape）竖切，纵向页（portrait）横切。
  */
 export function paginateTiles(input: PaginateInput): PaginateResult {
   const notes: string[] = [];
@@ -485,7 +587,11 @@ export function paginateTiles(input: PaginateInput): PaginateResult {
   });
   const origin = input.settings.pageOrigin ?? { x: 0, y: 0 };
   const { pages, orphans } = runTilesGrid(input, active, cr, 1, origin, notes);
-  return { pages, orphans, totalPages: pages.length, notes };
+  const breaks = (input.settings.pageBreaks ?? []).map((b) => b.at).filter(Number.isFinite);
+  const axis: 'x' | 'y' = input.settings.orientation === 'landscape' ? 'x' : 'y';
+  const finalPages = breaks.length > 0 ? applyTilesBreaks(pages, input, breaks, cr, axis) : pages;
+  if (breaks.length > 0) notes.push(`应用 ${breaks.length} 个手动分页符。`);
+  return { pages: finalPages, orphans, totalPages: finalPages.length, notes };
 }
 
 // ---------- flow ----------
@@ -547,6 +653,14 @@ export function paginateFlow(input: PaginateInput): PaginateResult {
   const pages: PageSheet[] = [];
   let page = makePageSheet(0, { x: 0, y: 0, width: cr.width, height: cr.height }, 1, input.settings);
   let cursorY = 0;
+  // 手动分页符：按「流的全局 y」切页。pageStartStreamY = 当前页首个块的流 y。
+  const breaks = (input.settings.pageBreaks ?? [])
+    .map((b) => b.at)
+    .filter((v) => Number.isFinite(v))
+    .sort((a, b) => a - b);
+  let bi = 0;
+  let streamY = 0;
+  let pageStartStreamY = 0;
   const kidsOf = (id: string): string[] => childrenMap.get(id) ?? [];
 
   const startNewPage = (): void => {
@@ -561,6 +675,22 @@ export function paginateFlow(input: PaginateInput): PaginateResult {
     const gap = idx === 0 ? 0 : FLOW_BLOCK_GAP_PX;
     const needH = item.height + gap;
 
+    // 手动分页符：流的全局 y 越过用户分页线时强制另起一页。
+    while (bi < breaks.length) {
+      const b = breaks[bi]!;
+      if (b < pageStartStreamY) {
+        bi++;
+        continue;
+      }
+      if (b <= streamY) {
+        if (cursorY > 0) startNewPage();
+        pageStartStreamY = streamY;
+        bi++;
+        continue;
+      }
+      break;
+    }
+
     // 单块高于一页内容区 → error 孤块，独占一页。
     if (item.height > cr.height) {
       orphans.push({
@@ -572,7 +702,9 @@ export function paginateFlow(input: PaginateInput): PaginateResult {
       page.nodeIds.push(item.id);
       page.nodeDrawOffsets![item.id] = { x, y: cr.y + cursorY };
       cursorY += item.height;
+      streamY += item.height + FLOW_BLOCK_GAP_PX;
       startNewPage();
+      pageStartStreamY = streamY;
       continue;
     }
 
@@ -587,11 +719,13 @@ export function paginateFlow(input: PaginateInput): PaginateResult {
 
     if (cursorY + clusterH > cr.height) {
       startNewPage();
+      pageStartStreamY = streamY;
     }
     const placeH = hasKids ? clusterH : needH;
     page.nodeIds.push(item.id);
     page.nodeDrawOffsets![item.id] = { x, y: cr.y + cursorY };
     cursorY += placeH;
+    streamY += item.height + FLOW_BLOCK_GAP_PX;
   }
   if (pages.length === 0 || page.nodeIds.length > 0) pages.push(page);
 

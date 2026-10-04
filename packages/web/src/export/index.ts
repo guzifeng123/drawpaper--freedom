@@ -14,3 +14,6 @@ export {
   downloadSheetsAsPdf,
   collectSheetElements,
 } from './print-pipeline';
+export { tiptapToMarkdown, type PMNode } from './render/tiptap-to-markdown';
+export { docToMarkdown, downloadTextFile } from './markdown-export';
+export { buildPagesSvg, downloadSvgPages, type SvgExportOptions } from './svg-export';
