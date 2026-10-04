@@ -59,6 +59,19 @@ const WHITELIST = new Set([
   'reverseEdge',
   'applyAISuggestions',
   'setLayoutMode',
+  // Wave4b P1 e2e：快照 / 回收站 / 模板 / 文档生命周期 / 手动分页符。
+  'listDocs',
+  'deleteDoc',
+  'createDocFromTemplate',
+  'snapshotDoc',
+  'restoreSnapshot',
+  'listSnapshots',
+  'listTrash',
+  'restoreTrash',
+  'purgeTrash',
+  'emptyTrash',
+  'addManualPageBreak',
+  'removePageBreak',
 ]);
 
 export function installDevHooks(): void {
