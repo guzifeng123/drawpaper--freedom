@@ -7,6 +7,10 @@ import {
   detectConflicts,
   analyzeGraph,
   suggestMainTreeDecision,
+  getAncestorChain,
+  getDescendantSet,
+  getRelatedChain,
+  getFocusViewSet,
 } from './graph.js';
 import type { BlockNode, Edge } from '../model/index.js';
 
@@ -153,5 +157,96 @@ describe('analyzeGraph + suggestMainTreeDecision', () => {
     expect(decision.dropEdgeIds).toEqual(['e2']);
     // cycle: break last edge of the cycle. cycle edges = [e3,e4] (order discovered); last = e4
     expect(decision.breakCycleEdgeIds).toEqual(['e4']);
+  });
+});
+
+/**
+ * 手造多分支夹具：
+ *        root
+ *       /    \
+ *      a      b
+ *     / \      \
+ *    c   d      e
+ *   /
+ *  f
+ */
+function multiBranch(): { nodes: BlockNode[]; edges: Edge[]; tree: ReturnType<typeof buildMainTree> } {
+  const ids = ['root', 'a', 'b', 'c', 'd', 'e', 'f'];
+  const nodes = ids.map(node);
+  const edges = [
+    edge('e1', 'root', 'a'),
+    edge('e2', 'root', 'b'),
+    edge('e3', 'a', 'c'),
+    edge('e4', 'a', 'd'),
+    edge('e5', 'b', 'e'),
+    edge('e6', 'c', 'f'),
+  ];
+  return { nodes, edges, tree: buildMainTree(nodes, edges) };
+}
+
+describe('getAncestorChain', () => {
+  it('returns self → parent → ... → root, inclusive', () => {
+    const { tree } = multiBranch();
+    expect(getAncestorChain(tree, 'f')).toEqual(['f', 'c', 'a', 'root']);
+    expect(getAncestorChain(tree, 'a')).toEqual(['a', 'root']);
+    expect(getAncestorChain(tree, 'root')).toEqual(['root']);
+  });
+  it('unknown node returns empty', () => {
+    const { tree } = multiBranch();
+    expect(getAncestorChain(tree, 'zzz')).toEqual([]);
+  });
+});
+
+describe('getDescendantSet', () => {
+  it('returns self + all descendants', () => {
+    const { tree } = multiBranch();
+    expect(getDescendantSet(tree, 'a').sort()).toEqual(['a', 'c', 'd', 'f']);
+    expect(getDescendantSet(tree, 'b').sort()).toEqual(['b', 'e']);
+    expect(getDescendantSet(tree, 'root').sort()).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'root']);
+    expect(getDescendantSet(tree, 'f')).toEqual(['f']);
+  });
+});
+
+describe('getRelatedChain', () => {
+  it('returns the undirected connected component containing the node', () => {
+    const { nodes, edges } = multiBranch();
+    // f 与 root 在同一连通分量（沿边忽略方向）。
+    expect(getRelatedChain(nodes, edges, 'f').sort()).toEqual([
+      'a', 'b', 'c', 'd', 'e', 'f', 'root',
+    ]);
+    expect(getRelatedChain(nodes, edges, 'root').sort()).toEqual([
+      'a', 'b', 'c', 'd', 'e', 'f', 'root',
+    ]);
+  });
+  it('isolated node returns [self] even when others are connected', () => {
+    const nodes = [node('x'), node('y'), node('alone')];
+    const edges = [edge('e1', 'x', 'y')];
+    // alone 不在任何边的端点 → 连通分量只有自身。
+    expect(getRelatedChain(nodes, edges, 'alone')).toEqual(['alone']);
+    // x/y 仍在同一分量。
+    expect(getRelatedChain(nodes, edges, 'x').sort()).toEqual(['x', 'y']);
+  });
+});
+
+describe('getFocusViewSet', () => {
+  it('focus = ancestor chain + subtree; dim = rest', () => {
+    const { tree } = multiBranch();
+    // 聚焦 c：祖先链 [c,a,root] ∪ 子树 [c,f] = {root,a,c,f}。
+    const view = getFocusViewSet(tree, 'c');
+    expect(view.focus).toEqual(['a', 'c', 'f', 'root']);
+    expect(view.dim).toEqual(['b', 'd', 'e']);
+  });
+  it('isolated leaf: focus contains self+ancestors; dim all others', () => {
+    const { tree } = multiBranch();
+    // 聚焦 e（b 的独子）：focus = {root,b,e}，dim = {a,c,d,f}。
+    const view = getFocusViewSet(tree, 'e');
+    expect(view.focus).toEqual(['b', 'e', 'root']);
+    expect(view.dim).toEqual(['a', 'c', 'd', 'f']);
+  });
+  it('focus on root: dim empty (whole tree focused)', () => {
+    const { tree } = multiBranch();
+    const view = getFocusViewSet(tree, 'root');
+    expect(view.dim).toEqual([]);
+    expect(view.focus).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'root']);
   });
 });

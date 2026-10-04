@@ -328,3 +328,76 @@ export function suggestMainTreeDecision(analysis: GraphAnalysis): MainTreeDecisi
   );
   return { keepParentEdgeIds, dropEdgeIds, breakCycleEdgeIds };
 }
+
+/* ------------------------------------------------------------------ *
+ * P1 聚焦 / 逻辑链分析（纯函数，不破坏既有 API）。
+ * 供悬停高亮整条逻辑链、聚焦分支视图使用。
+ * ------------------------------------------------------------------ */
+
+/**
+ * 祖先链：从 nodeId 沿 parent 指针向上追溯到根（含自身）。
+ * 返回顺序：[nodeId, parent, grandparent, ..., root]。
+ * 节点不在树中时返回空数组；带 visited 防环。
+ */
+export function getAncestorChain(tree: MainTree, nodeId: string): string[] {
+  const out: string[] = [];
+  const start = tree.nodes[nodeId];
+  if (!start) return out;
+  const seen = new Set<string>();
+  let cur: string = nodeId;
+  for (;;) {
+    if (seen.has(cur)) break;
+    seen.add(cur);
+    out.push(cur);
+    const tn: TreeNode | undefined = tree.nodes[cur];
+    const parent = tn?.parentId;
+    if (parent === null || parent === undefined) break;
+    cur = parent;
+  }
+  return out;
+}
+
+/**
+ * 后代集合：nodeId 的整棵子树（含自身，BFS 顺序）。
+ * 语义同 {@link enumerateSubtree}，命名面向聚焦场景。
+ */
+export function getDescendantSet(tree: MainTree, nodeId: string): string[] {
+  return enumerateSubtree(tree, nodeId);
+}
+
+/**
+ * 关联链（连通分量）：忽略边方向，返回 nodeId 所在的连通分量全部节点 id（排序）。
+ * 用于悬停高亮整条「逻辑链」（跨分支的关联节点一并亮起）。
+ * nodeId 孤立时返回 [nodeId]。
+ */
+export function getRelatedChain(
+  nodes: BlockNode[],
+  edges: Edge[],
+  nodeId: string,
+): string[] {
+  const comps = connectedComponents(nodes, edges);
+  for (const comp of comps) {
+    if (comp.includes(nodeId)) return [...comp].sort();
+  }
+  return [nodeId];
+}
+
+/**
+ * 聚焦视图集合：聚焦某节点时，应高亮的「分支」与应弱化的「其余节点」。
+ * - focus = 祖先链（含自身）∪ 该节点子树（含自身）——即从根到该叶的整条主干 + 该分支。
+ * - dim  = 树中其余节点。
+ * 结果均按字典序排序，便于确定性 diff / 渲染。
+ */
+export function getFocusViewSet(
+  tree: MainTree,
+  nodeId: string,
+): { focus: string[]; dim: string[] } {
+  const ancestorChain = getAncestorChain(tree, nodeId);
+  const subtree = enumerateSubtree(tree, nodeId);
+  const focusSet = new Set<string>([...ancestorChain, ...subtree]);
+  const focus = [...focusSet].sort();
+  const dim = Object.keys(tree.nodes)
+    .filter((id) => !focusSet.has(id))
+    .sort();
+  return { focus, dim };
+}
