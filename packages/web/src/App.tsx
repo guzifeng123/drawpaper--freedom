@@ -54,6 +54,15 @@ export default function App() {
   // 导出数据流
   const { result, sheetsVisible, actions } = useExportModel(panelsApi);
 
+  // DEV-only：e2e 常驻打印容器（window.__drawpaper_debugSheets）。生产构建 import.meta.env.DEV=false 被剔除。
+  const debugSheetsOn = import.meta.env.DEV && typeof window !== 'undefined' && !!window.__drawpaper_debugSheets;
+  const debugResult = useMemo(
+    () => (debugSheetsOn ? computePanelsPaginate(panelsApi) : null),
+    // doc 变化重算分页（刻意依赖）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [debugSheetsOn, panelsApi, doc],
+  );
+
   // 画布分页虚线叠加层：开启 showPageBreak 时实时算分页结果。
   const overlayResult = useMemo(
     () => (doc.page.showPageBreak ? computePanelsPaginate(panelsApi) : null),
@@ -87,7 +96,10 @@ export default function App() {
       {/* 导出弹窗 + 离屏打印容器 */}
       <ExportDialog api={panelsApi} actions={actions} />
       {sheetsVisible && result.pages.length > 0 && (
-        <PrintSheets result={result} doc={doc} settings={doc.page} edgeLabelsVisible />
+        <PrintSheets result={result} doc={doc} settings={doc.page} edgeLabelsVisible={doc.page.edgeLabels} />
+      )}
+      {debugSheetsOn && debugResult && debugResult.pages.length > 0 && (
+        <PrintSheets result={debugResult} doc={doc} settings={doc.page} edgeLabelsVisible={doc.page.edgeLabels} />
       )}
 
       {/* 一键整理 ghost 预览：应用 / 取消 */}

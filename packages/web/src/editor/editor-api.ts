@@ -80,6 +80,8 @@ export interface EditorSnapshot {
   prefs: EditorPrefs;
   /** 搜索/大纲飞块：{ nodeId, ts }；画布侧消费后做 fitCenter + 闪烁高亮。 */
   lastFocus: { nodeId: string; ts: number } | null;
+  /** 最近一次 undo/redo 事件（含命令名 + 递增 nonce）；宏撤销后画布据此回位相机。 */
+  historyEvent: { kind: 'undo' | 'redo'; name: string; nonce: number } | null;
 }
 
 /** 块样式补丁（外观操作：8 色标签色点 = bg；文字色 = color）。 */

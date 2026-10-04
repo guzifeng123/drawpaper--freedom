@@ -41,6 +41,8 @@ export interface CommandStack {
   executeMacro(name: string, cmds: Command[]): KBNoteDoc;
   /** 栈深度（调试用）。 */
   depth(): { undo: number; redo: number };
+  /** 最近一次 undo() 弹出的命令名（含宏名），供 UI 判断是否需要回位相机。 */
+  lastUndoName(): string | undefined;
 }
 
 /** createCommandStack 可选依赖（时钟/窗口可注入，便于单测用假时钟）。 */
@@ -86,6 +88,7 @@ export function createCommandStack(
   let current: KBNoteDoc = init;
   const undoStack: TimedCommand[] = [];
   const redoStack: TimedCommand[] = [];
+  let lastPoppedName: string | undefined;
 
   return {
     canUndo() {
@@ -121,6 +124,7 @@ export function createCommandStack(
       if (!cmd) return undefined;
       current = cmd.undo(current);
       redoStack.push(cmd);
+      lastPoppedName = cmd.name;
       return current;
     },
 
@@ -156,6 +160,10 @@ export function createCommandStack(
 
     depth() {
       return { undo: undoStack.length, redo: redoStack.length };
+    },
+
+    lastUndoName() {
+      return lastPoppedName;
     },
   };
 }

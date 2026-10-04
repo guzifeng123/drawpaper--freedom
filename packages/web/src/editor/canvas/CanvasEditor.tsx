@@ -135,6 +135,23 @@ function CanvasInner({ api }: { api: EditorApi }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snap.layoutPreview]);
 
+  // 宏撤销（一键整理 confirm-layout / 对齐 / 裁决删边等全局位移）后回位相机：
+  // 节点可能被 onlyRenderVisibleElements 卸载导致视野空，fitView 让结果重新入画。
+  const lastHistoryNonce = useRef(0);
+  useEffect(() => {
+    const h = snap.historyEvent;
+    if (!h || h.nonce === lastHistoryNonce.current) return;
+    lastHistoryNonce.current = h.nonce;
+    // 仅对全局位移类宏回位；单块增删/打字不跳相机。
+    const macroNames = ['confirm-layout', 'align-selection', 'distribute-selection', 'resolve-conflicts'];
+    if (h.kind === 'undo' && macroNames.includes(h.name)) {
+      const timer = setTimeout(() => rf.fitView({ padding: 0.2, duration: 300 }), 60);
+      return () => clearTimeout(timer);
+    }
+    return undefined;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snap.historyEvent]);
+
   // ---- 连接校验 ----
   const isValidConnection: IsValidConnection = (conn) => {
     if (conn.source && conn.target && conn.source === conn.target) return false;

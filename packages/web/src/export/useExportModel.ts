@@ -33,7 +33,7 @@ export function computePanelsPaginate(api: PanelsApi): PaginateResult {
     const settings: PaginateSettings = {
       ...doc.page,
       grayScale: doc.page.colorMode === 'gray',
-      showEdgeLabels: true,
+      showEdgeLabels: doc.page.edgeLabels,
     };
 
     if (doc.page.mode === 'flow') {
@@ -47,7 +47,9 @@ export function computePanelsPaginate(api: PanelsApi): PaginateResult {
         },
         'mindmap-down',
       );
-      return paginateFlow({ layout, measured, settings, nodes: doc.nodes, edges: doc.edges });
+      const collapsed: Record<string, boolean> = {};
+      for (const n of doc.nodes) if (n.collapsed) collapsed[n.id] = true;
+      return paginateFlow({ layout, measured, settings, nodes: doc.nodes, edges: doc.edges, collapsed });
     }
 
     const positions: LayoutResult['positions'] = {};
@@ -57,8 +59,11 @@ export function computePanelsPaginate(api: PanelsApi): PaginateResult {
       collisions: { overlappingPairs: [], detouredNodes: [] },
       notes: [],
     };
+    // 折叠子树：从节点的 collapsed 标志推导 map 传入分页（否则折叠后代会被导出）。
+    const collapsed: Record<string, boolean> = {};
+    for (const n of doc.nodes) if (n.collapsed) collapsed[n.id] = true;
     const fn = doc.page.mode === 'fit' ? paginateFit : paginateTiles;
-    return fn({ layout, measured, settings, nodes: doc.nodes, edges: doc.edges });
+    return fn({ layout, measured, settings, nodes: doc.nodes, edges: doc.edges, collapsed });
   } catch {
     return EMPTY_RESULT;
   }

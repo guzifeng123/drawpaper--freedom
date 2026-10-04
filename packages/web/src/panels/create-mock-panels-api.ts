@@ -85,6 +85,7 @@ export function defaultPageSettings(): PageSettings {
     header: true,
     footer: true,
     showPageNumbers: true,
+    edgeLabels: true,
     pageBreaks: [],
   };
 }

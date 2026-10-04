@@ -169,6 +169,48 @@ function nodeRect(input: PaginateInput, id: string): Rect {
   return { x: pos.x, y: pos.y, width: size.width, height: size.height };
 }
 
+function clamp(v: number, lo: number, hi: number): number {
+  return Math.min(Math.max(v, lo), hi);
+}
+
+/**
+ * 并查集：在 active 节点内按边求连通分量。返回「非最大分量」里的节点 id——
+ * 即与主体分离、应在导出预览中标黄警告的离群块（§4.10 ④）。
+ */
+function disconnectedOrphans(active: Set<string>, edges: Edge[] | undefined): string[] {
+  if (active.size === 0) return [];
+  const parent = new Map<string, string>();
+  for (const id of active) parent.set(id, id);
+  const find = (x: string): string => {
+    let root = x;
+    while (parent.get(root) !== root) root = parent.get(root) as string;
+    let cur = x;
+    while (parent.get(cur) !== cur) {
+      const next = parent.get(cur) as string;
+      parent.set(cur, root);
+      cur = next;
+    }
+    return root;
+  };
+  for (const e of edges ?? []) {
+    if (!active.has(e.source) || !active.has(e.target)) continue;
+    const rs = find(e.source);
+    const rt = find(e.target);
+    if (rs !== rt) parent.set(rs, rt);
+  }
+  const groups = new Map<string, string[]>();
+  for (const id of active) {
+    const r = find(id);
+    const list = groups.get(r) ?? [];
+    list.push(id);
+    groups.set(r, list);
+  }
+  let main: string[] = [];
+  for (const g of groups.values()) if (g.length > main.length) main = g;
+  const mainSet = new Set(main);
+  return [...active].filter((id) => !mainSet.has(id));
+}
+
 /** 计算 active 节点的世界包围盒。 */
 function contentBBox(input: PaginateInput, active: Set<string>): Rect {
   let minX = Infinity;
@@ -266,7 +308,13 @@ export function paginateFit(input: PaginateInput): PaginateResult {
   }
   sheet.edgeIds.sort();
 
-  return { pages: [sheet], orphans: [], totalPages: 1, notes };
+  const fitOrphans: OrphanWarning[] = disconnectedOrphans(active, input.edges).map((id) => ({
+    nodeId: id,
+    severity: 'warn' as const,
+    message: `节点「${id}」与主体无连接。`,
+  }));
+
+  return { pages: [sheet], orphans: fitOrphans, totalPages: 1, notes };
 }
 
 // ---------- tiles（fit 退化与 tiles 模式共用网格逻辑） ----------
@@ -313,36 +361,53 @@ function runTilesGrid(
     }
   }
 
-  // 节点归属：按包围盒中心找页；跨边界整体挪到下一页。
+  // 节点归属：选「能完整容纳该节点」的页（零切割硬规则）；
+  // 重叠带 10mm 不足以容纳宽块时，退而选中心页并把绘制夹回内容区（clamp）。
   const nodePageIdx = new Map<string, number>();
   for (const id of active) {
     const r = nodeRect(input, id);
     const cx = r.x + r.width / 2;
     const cy = r.y + r.height / 2;
-    let i = Math.floor((cx - origin.x) / stepX);
-    let j = Math.floor((cy - origin.y) / stepY);
-    i = Math.min(Math.max(i, 0), cols - 1);
-    j = Math.min(Math.max(j, 0), rows - 1);
 
-    // 跨边界整体挪到下一页（横向越界向右挪、纵向越界向下挪）。
-    const ox = origin.x + i * stepX;
-    const oy = origin.y + j * stepY;
-    if (r.x + r.width > ox + pageWorldW && i < cols - 1) i += 1;
-    if (r.y + r.height > oy + pageWorldH && j < rows - 1) j += 1;
+    // --- 横轴 ---
+    // 能完整容纳节点的页索引区间：iMin <= i <= iMax。
+    const iMin = Math.ceil((r.x + r.width - pageWorldW - origin.x) / stepX - 1e-9);
+    const iMax = Math.floor((r.x - origin.x) / stepX + 1e-9);
+    const iCenter = clamp(Math.floor((cx - origin.x) / stepX), 0, cols - 1);
+    let i: number;
+    if (iMin <= iMax) {
+      i = clamp(iCenter, iMin, iMax);
+    } else {
+      i = iCenter;
+    }
+    // --- 纵轴 ---
+    const jMin = Math.ceil((r.y + r.height - pageWorldH - origin.y) / stepY - 1e-9);
+    const jMax = Math.floor((r.y - origin.y) / stepY + 1e-9);
+    const jCenter = clamp(Math.floor((cy - origin.y) / stepY), 0, rows - 1);
+    let j: number;
+    if (jMin <= jMax) {
+      j = clamp(jCenter, jMin, jMax);
+    } else {
+      j = jCenter;
+    }
 
     const pageIdx = j * cols + i;
     const page = pages[pageIdx]!;
     page.nodeIds.push(id);
     const po = pageOriginWorld[pageIdx]!;
+    // 页本地绘制坐标；若节点在死区无法整页容纳，夹回内容区保证零切割。
+    const rawX = cr.x + (r.x - po.x) * scale;
+    const rawY = cr.y + (r.y - po.y) * scale;
+    const dw = r.width * scale;
+    const dh = r.height * scale;
     page.nodeDrawOffsets![id] = {
-      x: cr.x + (r.x - po.x) * scale,
-      y: cr.y + (r.y - po.y) * scale,
+      x: clamp(rawX, cr.x, cr.x + cr.width - dw),
+      y: clamp(rawY, cr.y, cr.y + cr.height - dh),
     };
     nodePageIdx.set(id, pageIdx);
 
-    // 挪完仍超出单页 → 孤块警告。
-    const r2 = nodeRect(input, id);
-    if (r2.width > pageWorldW || r2.height > pageWorldH) {
+    // 节点大于单页内容区 → 孤块警告（无法完整落在一页内）。
+    if (r.width > pageWorldW || r.height > pageWorldH) {
       orphans.push({
         nodeId: id,
         severity: 'warn',
@@ -351,6 +416,15 @@ function runTilesGrid(
     }
   }
   for (const p of pages) p.nodeIds.sort();
+
+  // 离群块：与主体（最大连通分量）分离的节点标黄警告。
+  for (const id of disconnectedOrphans(active, input.edges)) {
+    orphans.push({
+      nodeId: id,
+      severity: 'warn',
+      message: `节点「${id}」与主体无连接，被排到独立区域。`,
+    });
+  }
 
   // 边：同页整段绘制；跨页生成成对续接标记。
   for (const e of input.edges ?? []) {
@@ -522,6 +596,14 @@ export function paginateFlow(input: PaginateInput): PaginateResult {
   if (pages.length === 0 || page.nodeIds.length > 0) pages.push(page);
 
   for (const p of pages) p.nodeIds.sort();
+  // 离群块（与主体无连接）标黄警告。
+  for (const id of disconnectedOrphans(active, input.edges)) {
+    orphans.push({
+      nodeId: id,
+      severity: 'warn',
+      message: `节点「${id}」与主体无连接，独立成段。`,
+    });
+  }
   notes.push(`flow 重排：${flow.length} 个块 → ${pages.length} 页。`);
   return { pages, orphans, totalPages: pages.length, notes };
 }

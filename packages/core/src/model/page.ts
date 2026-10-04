@@ -30,6 +30,8 @@ export interface PageSettings {
   header: boolean;
   footer: boolean;
   showPageNumbers: boolean;
+  /** 导出时是否绘制父子边的文字标签。 */
+  edgeLabels: boolean;
   /** 用户手动插入的分页符。 */
   pageBreaks: PageBreak[];
   /**

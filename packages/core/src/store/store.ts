@@ -169,6 +169,9 @@ export interface EditorState {
 
   /** flyTo 目标（每次 nonce++ 触发动画）。 */
   lastFocus: FocusTarget | null;
+
+  /** 最近一次 undo/redo 事件（含命令名 + 递增 nonce），供画布判断是否回位相机。 */
+  historyEvent: { kind: 'undo' | 'redo'; name: string; nonce: number } | null;
 }
 
 /**
@@ -376,6 +379,7 @@ function blankDoc(now: number): KBNoteDoc {
       header: false,
       footer: false,
       showPageNumbers: false,
+      edgeLabels: true,
       pageBreaks: [],
     },
     assetRefs: [],
@@ -396,6 +400,7 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
   let stack: CommandStack = createCommandStack(init, { now, coalesceWindowMs: 800 });
   let saveTimer: number | undefined;
   let focusNonce = 0;
+  let historyNonce = 0;
 
   const store = createStore<EditorStore>()(
     immer((set, get) => {
@@ -420,6 +425,17 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
             d.savedAt = now();
             d.dirty = false;
           });
+          // 保存成功后刷新文档列表侧栏（新建/重命名/复制即时可见，无需手动刷新）。
+          if (deps.storage) {
+            try {
+              const metas = await deps.storage.listDocs();
+              set((d) => {
+                d.docs = metas;
+              });
+            } catch {
+              /* 列表刷新失败不阻塞保存主流程 */
+            }
+          }
         } catch {
           set((d) => {
             d.saveState = 'idle';
@@ -587,6 +603,7 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
         saveState: 'idle',
         savedAt: null,
         lastFocus: null,
+        historyEvent: null,
 
         // ================= 文档级 =================
         newDoc: () => switchDoc(blankDoc(now())),
@@ -1339,9 +1356,11 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
         undo: () => {
           const undone = stack.undo();
           if (undone) {
+            historyNonce += 1;
             set((d) => {
               d.doc = undone;
               d.dirty = true;
+              d.historyEvent = { kind: 'undo', name: stack.lastUndoName() ?? 'undo', nonce: historyNonce };
             });
           }
           syncUndoFlags();
@@ -1350,9 +1369,11 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
         redo: () => {
           const redone = stack.redo();
           if (redone) {
+            historyNonce += 1;
             set((d) => {
               d.doc = redone;
               d.dirty = true;
+              d.historyEvent = { kind: 'redo', name: 'redo', nonce: historyNonce };
             });
           }
           syncUndoFlags();

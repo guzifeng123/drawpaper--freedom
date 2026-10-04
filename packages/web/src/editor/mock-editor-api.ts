@@ -46,6 +46,7 @@ export function createEmptyDoc(title = '未命名画布'): KBNoteDoc {
       header: false,
       footer: false,
       showPageNumbers: false,
+      edgeLabels: true,
       pageBreaks: [],
     },
     assetRefs: [],
@@ -122,6 +123,7 @@ export function createMockEditorApi(initialDoc: KBNoteDoc = createEmptyDoc()): E
     saveState: 'saved',
     prefs: { gridSnap: false },
     lastFocus: null,
+    historyEvent: null,
 
     _undo: [],
     _redo: [],
@@ -167,6 +169,7 @@ export function createMockEditorApi(initialDoc: KBNoteDoc = createEmptyDoc()): E
         saveState: s.saveState,
         prefs: s.prefs,
         lastFocus: s.lastFocus,
+        historyEvent: s.historyEvent,
       };
       return cached;
     },

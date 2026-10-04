@@ -32,6 +32,7 @@ function blankInitialDoc(): KBNoteDoc {
       header: false,
       footer: false,
       showPageNumbers: false,
+      edgeLabels: true,
       pageBreaks: [],
     },
     assetRefs: [],
