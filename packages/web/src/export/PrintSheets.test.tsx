@@ -70,7 +70,9 @@ function makeResult(): PaginateResult {
 const baseSettings: PageSettings = {
   size: 'A4', orientation: 'portrait', marginMm: 15, mode: 'tiles',
   showPageBreak: false, colorMode: 'color', header: true, footer: true,
-  showPageNumbers: true, pageBreaks: [],
+  showPageNumbers: true,
+  edgeLabels: true,
+  pageBreaks: [],
 };
 
 describe('PrintSheets', () => {

@@ -64,7 +64,7 @@ export function ExportDialog({
   const [footer, setFooterState] = React.useState(src.footer);
   const [showPageNumbers, setPageNumbersState] = React.useState(src.showPageNumbers);
   const [colorMode, setColorModeState] = React.useState(src.colorMode);
-  const [edgeLabels, setEdgeLabels] = React.useState(true);
+  const [edgeLabels, setEdgeLabelsState] = React.useState(src.edgeLabels);
   const [scope, setScope] = React.useState<ExportScope>('all');
 
   const fileName = buildExportFileName({
@@ -175,7 +175,13 @@ export function ExportDialog({
             />
           </Row>
           <Row label="边（连线）标签">
-            <Switch checked={edgeLabels} onCheckedChange={setEdgeLabels} />
+            <Switch
+              checked={edgeLabels}
+              onCheckedChange={(v) => {
+                setEdgeLabelsState(v);
+                api.setPageSettings({ edgeLabels: v });
+              }}
+            />
           </Row>
           <Row label="彩色 / 黑白">
             <Switch

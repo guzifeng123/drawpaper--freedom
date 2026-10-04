@@ -23,12 +23,6 @@ export interface PrintSheetsProps {
   edgeLabelsVisible: boolean;
 }
 
-function nodeAnchor(node: BlockNode, handle: 'right' | 'left') {
-  return handle === 'right'
-    ? { x: node.x + node.width, y: node.y + node.height / 2 }
-    : { x: node.x, y: node.y + node.height / 2 };
-}
-
 export function PrintSheets({ result, doc, settings, edgeLabelsVisible }: PrintSheetsProps) {
   const sheet = sheetSizePx(settings.orientation);
   const margin = mmToPx(settings.marginMm);
@@ -41,6 +35,18 @@ export function PrintSheets({ result, doc, settings, edgeLabelsVisible }: PrintS
     <div className={gray ? 'drawpaper-print-container tp-gray' : 'drawpaper-print-container'}>
       {result.pages.map((page) => {
         const scale = page.scale || 1;
+        // 节点在本页的「绘制矩形」（page-local px，已含 core 的 clamp/居中/缩放）。
+        // core 的 nodeDrawOffsets 是唯一真相；缺省时回退到 worldRect 折算。
+        const drawnRect = (n: BlockNode): { x: number; y: number; w: number; h: number } => {
+          const off = page.nodeDrawOffsets?.[n.id];
+          if (off) return { x: off.x, y: off.y, w: n.width * scale, h: n.height * scale };
+          return {
+            x: margin + (n.x - page.worldRect.x) * scale,
+            y: margin + (n.y - page.worldRect.y) * scale,
+            w: n.width * scale,
+            h: n.height * scale,
+          };
+        };
         return (
           <div
             key={page.index}
@@ -81,18 +87,17 @@ export function PrintSheets({ result, doc, settings, edgeLabelsVisible }: PrintS
                 {page.nodeIds.map((id) => {
                   const n = nodeById.get(id);
                   if (!n) return null;
-                  const left = margin + (n.x - page.worldRect.x) * scale;
-                  const top = margin + (n.y - page.worldRect.y) * scale;
+                  const rect = drawnRect(n);
                   return (
                     <div
                       key={id}
                       data-node-id={id}
                       className="absolute rounded border bg-white p-2"
                       style={{
-                        left,
-                        top,
-                        width: n.width * scale,
-                        minHeight: n.height * scale,
+                        left: rect.x,
+                        top: rect.y,
+                        width: rect.w,
+                        minHeight: rect.h,
                       }}
                     >
                       <TiptapStatic doc={n.content.data} gray={gray} />
@@ -131,12 +136,12 @@ export function PrintSheets({ result, doc, settings, edgeLabelsVisible }: PrintS
                     const s = e && nodeById.get(e.source);
                     const t = e && nodeById.get(e.target);
                     if (!e || !s || !t) return null;
-                    const a = nodeAnchor(s, 'right');
-                    const b = nodeAnchor(t, 'left');
-                    const x1 = margin + (a.x - page.worldRect.x) * scale;
-                    const y1 = margin + (a.y - page.worldRect.y) * scale;
-                    const x2 = margin + (b.x - page.worldRect.x) * scale;
-                    const y2 = margin + (b.y - page.worldRect.y) * scale;
+                    const sr = drawnRect(s);
+                    const tr = drawnRect(t);
+                    const x1 = sr.x + sr.w;
+                    const y1 = sr.y + sr.h / 2;
+                    const x2 = tr.x;
+                    const y2 = tr.y + tr.h / 2;
                     const cx1 = x1 + Math.max(40, (x2 - x1) / 2);
                     const cx2 = x2 - Math.max(40, (x2 - x1) / 2);
                     const color = gray ? '#333' : e.style.color;
@@ -162,16 +167,16 @@ export function PrintSheets({ result, doc, settings, edgeLabelsVisible }: PrintS
                   {page.continuations.map((c) => (
                     <g key={c.token + c.pageIndex}>
                       <circle
-                        cx={margin + c.x * scale}
-                        cy={margin + c.y * scale}
+                        cx={c.x}
+                        cy={c.y}
                         r={9}
                         fill="#fff"
                         stroke={gray ? '#333' : '#0ea5e9'}
                         strokeWidth={1.5}
                       />
                       <text
-                        x={margin + c.x * scale}
-                        y={margin + c.y * scale + 3}
+                        x={c.x}
+                        y={c.y + 3}
                         fontSize={8}
                         textAnchor="middle"
                         fill={gray ? '#333' : '#0ea5e9'}

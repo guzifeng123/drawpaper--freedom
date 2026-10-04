@@ -27,7 +27,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: 'pnpm preview --port 4173 --strictPort',
+    // DEV server：e2e 依赖 window.__drawpaper__ 测试钩子（仅 import.meta.env.DEV 暴露，
+    // 生产构建不挂载）。生产产物的零外网/无钩子由 build 后 grep 单独核验。
+    command: 'pnpm dev --port 4173 --strictPort',
     url: 'http://localhost:4173',
     reuseExistingServer: !process.env['CI'],
     timeout: 120_000,

@@ -70,6 +70,7 @@ export function createEditorApi(store: EditorStoreApi, bridge: ConflictBridge): 
       saveState: s.saveState,
       prefs: { gridSnap: s.prefs.snapToGrid },
       lastFocus: s.lastFocus ? { nodeId: s.lastFocus.nodeId, ts: s.lastFocus.nonce } : null,
+      historyEvent: s.historyEvent,
     };
   };
 

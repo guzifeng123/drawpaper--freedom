@@ -121,6 +121,7 @@ export const PageSettingsSchema = z.object({
   header: z.boolean().default(false),
   footer: z.boolean().default(false),
   showPageNumbers: z.boolean().default(false),
+  edgeLabels: z.boolean().default(true),
   pageBreaks: z.array(z.object({ at: z.number() })).default([]),
   pageOrigin: z.object({ x: z.number(), y: z.number() }).optional(),
 });

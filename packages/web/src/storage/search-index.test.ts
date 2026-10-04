@@ -38,6 +38,7 @@ function docWith(blocks: Array<{ id: string; data: unknown }>): KBNoteDoc {
       header: false,
       footer: false,
       showPageNumbers: false,
+      edgeLabels: true,
       pageBreaks: [],
     },
     assetRefs: [],
