@@ -50,6 +50,15 @@ const WHITELIST = new Set([
   'setSearchQuery',
   'setPrefs',
   'setMode',
+  // Wave4 P1：供 e2e 断言标签筛选 / 聚焦 / 改父子 / AI 合入。
+  'createTag',
+  'setTagFilter',
+  'clearTagFilter',
+  'setFocusNode',
+  'reparentNode',
+  'reverseEdge',
+  'applyAISuggestions',
+  'setLayoutMode',
 ]);
 
 export function installDevHooks(): void {

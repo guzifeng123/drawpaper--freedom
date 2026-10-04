@@ -3,12 +3,16 @@ import { editorStore, conflictBridge } from '@/store/editor-store';
 import { useEditorStore } from '@/store';
 import { createEditorApi } from '@/wiring/create-editor-api';
 import { createPanelsApi } from '@/wiring/create-panels-api';
+import { createAiApi } from '@/wiring/create-ai-api';
 import { useWiringUi } from '@/wiring/ui-store';
 import { CanvasEditor } from '@/editor/canvas/CanvasEditor';
 import { TopToolbar } from '@/panels/TopToolbar';
 import { DocsListPanel } from '@/panels/DocsListPanel';
 import { SearchPanel } from '@/panels/SearchPanel';
+import { OutlinePanel } from '@/panels/OutlinePanel';
+import { TagFilterBar } from '@/panels/TagFilterBar';
 import { Toaster } from '@/panels/lib/toast';
+import { AiPanel } from '@/ai/AiPanel';
 import {
   ExportDialog,
   PageBreakOverlay,
@@ -18,17 +22,18 @@ import {
 } from '@/export';
 
 /**
- * App 总装（Wave2）：把真实 EditorStore 经 wiring 适配层接到画布 EditorApi 与面板 PanelsApi。
+ * App 总装（Wave4 P1）：在 Wave2 基础上接齐大纲 / 标签筛选 / AI 面板 / 导出新选项。
  *
- * - CanvasEditor 拿真实 EditorApi（state 切片 + 回调 + ConflictBridge）；
- * - TopToolbar / DocsListPanel / SearchPanel 拿 PanelsApi；
- * - useExportModel 接真实 layout/paginate 数据流，三按钮端到端打通；
- * - App 订阅 store 切片以驱动面板重渲染（PanelsApi 是读时 getter）。
+ * - CanvasEditor 拿真实 EditorApi（含 focusNodeId/tagFilter/manualFixed/reverseEdge）；
+ * - TopToolbar / DocsListPanel / SearchPanel / OutlinePanel / TagFilterBar 拿 PanelsApi；
+ * - AiPanel 接真实 createAiApi（合入 → previewLayout）；
+ * - 导出三按钮 + SVG / Markdown 端到端打通。
  */
 export default function App() {
   // editorApi 必须稳定（useSyncExternalStore 要求 subscribe 引用不变）；
   // panelsApi 每次渲染重建——其 getters 读最新 store，新引用驱动 memo 面板重渲染。
   const editorApi = useMemo(() => createEditorApi(editorStore, conflictBridge), []);
+  const aiApi = useMemo(() => createAiApi(editorStore), []);
   const panelsApi = createPanelsApi(editorStore);
 
   // 订阅驱动面板重渲染的切片（getter 在渲染期读最新值）。
@@ -42,6 +47,10 @@ export default function App() {
   useEditorStore((s) => s.searchQuery);
   useEditorStore((s) => s.searchResults);
   useEditorStore((s) => s.layoutUi.scopeSelected);
+  useEditorStore((s) => s.focusNodeId);
+  useEditorStore((s) => s.tagFilter);
+  useEditorStore((s) => s.activeFile);
+  useEditorStore((s) => s.manuallyMoved);
   const viewport = useEditorStore((s) => s.viewport);
   // 一键整理 ghost 预览期间显示「应用 / 取消」浮动条。
   const layoutPreview = useEditorStore((s) => s.layoutPreview);
@@ -50,6 +59,10 @@ export default function App() {
   useWiringUi((s) => s.exportOpen);
   useWiringUi((s) => s.searchOpen);
   useWiringUi((s) => s.activeSearchIndex);
+  const aiPanelOpen = useWiringUi((s) => s.aiPanelOpen);
+  const outlineOpen = useWiringUi((s) => s.outlineOpen);
+  useWiringUi((s) => s.snapshotsNonce);
+  useWiringUi((s) => s.trashNonce);
 
   // 导出数据流
   const { result, sheetsVisible, actions } = useExportModel(panelsApi);
@@ -92,6 +105,25 @@ export default function App() {
       <TopToolbar api={panelsApi} />
       <DocsListPanel api={panelsApi} />
       <SearchPanel api={panelsApi} />
+      {/* 大纲（左侧可折叠，默认收起避免遮挡建块区域）+ 标签筛选条 */}
+      {outlineOpen ? <OutlinePanel api={panelsApi} /> : null}
+      <TagFilterBar api={panelsApi} />
+      {/* AI 辅助面板（右侧可开关） */}
+      {aiPanelOpen ? (
+        <div className="absolute bottom-4 right-4 z-20 w-72 rounded-lg border bg-card/95 p-3 shadow-lg">
+          <div className="mb-2 flex items-center justify-end">
+            <button
+              type="button"
+              aria-label="关闭 AI 面板"
+              className="rounded p-1 text-muted-foreground hover:bg-accent"
+              onClick={() => useWiringUi.getState().setAiPanelOpen(false)}
+            >
+              ×
+            </button>
+          </div>
+          <AiPanel doc={doc} api={aiApi} />
+        </div>
+      ) : null}
 
       {/* 导出弹窗 + 离屏打印容器 */}
       <ExportDialog api={panelsApi} actions={actions} />
