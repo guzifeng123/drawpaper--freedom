@@ -1,13 +1,27 @@
 import { z } from 'zod';
+import type { ZodError } from 'zod';
 import { DOC_FORMAT, CURRENT_DOC_VERSION } from './constants.js';
+import { DEFAULT_EDGE_COLOR } from './edge-colors.js';
+import type { BlockNode } from './node.js';
+import type { Edge } from './edge.js';
 
 /**
- * Zod 校验骨架。
+ * Zod 校验。
  * 目标：parseKBNoteDoc 能安全解析未知来源 JSON，剥离未知字段、对可容错字段给默认值；
- * 结构性约束（环/多父/悬空边）由 validateGraph 在图分析层做。
+ * 结构性约束（环/多父/悬空边）由 validateGraph 在本文件尾部做。
+ *
+ * 容错策略（与任务约定一致）：
+ * - 缺失可选字段填默认值：pinned/locked/collapsed=false、tags=[]、label=''、directed=true、
+ *   edge.style.color 缺省取 DEFAULT_EDGE_COLOR、viewport/page/layout 缺省给默认。
+ * - 未知字段 zod 自动剥离（非 strict 模式）。
+ * - 数值字段非法（NaN/Infinity）报错；尺寸 width/height 必须为正数。
  */
 
-// ---- 块 ----
+// ---- 基础数值守卫：拒绝 NaN / Infinity ----
+const finiteNumber = z
+  .number()
+  .refine((v) => Number.isFinite(v), 'must be a finite number (NaN/Infinity not allowed)');
+
 const HandlePositionSchema = z.enum(['top', 'right', 'bottom', 'left']);
 
 const BlockContentSchema = z.object({
@@ -42,10 +56,10 @@ export const BlockNodeSchema = z.object({
     'attachment',
     'reminder',
   ]),
-  x: z.number(),
-  y: z.number(),
-  width: z.number().positive(),
-  height: z.number().positive(),
+  x: finiteNumber,
+  y: finiteNumber,
+  width: finiteNumber.refine((v) => v > 0, 'width must be a positive number'),
+  height: finiteNumber.refine((v) => v > 0, 'height must be a positive number'),
   content: BlockContentSchema,
   parentId: z.string().nullish().default(null),
   pinned: z.boolean().default(false),
@@ -63,6 +77,10 @@ export const BlockNodeSchema = z.object({
 });
 
 // ---- 边（无 relation/line/direction 字段）----
+const EdgeStyleSchema = z.object({
+  color: z.string().default(DEFAULT_EDGE_COLOR.hex),
+});
+
 export const EdgeSchema = z.object({
   id: z.string().min(1),
   source: z.string().min(1),
@@ -71,7 +89,7 @@ export const EdgeSchema = z.object({
   targetHandle: HandlePositionSchema.default('left'),
   label: z.string().default(''),
   directed: z.literal(true).default(true),
-  style: z.object({ color: z.string() }).default({ color: '#94A3B8' }),
+  style: EdgeStyleSchema.default({ color: DEFAULT_EDGE_COLOR.hex }),
 });
 
 // ---- 其余顶层对象 ----
@@ -83,14 +101,14 @@ export const TagSchema = z.object({
 
 export const LayoutPrefsSchema = z.object({
   mode: z.enum(['mindmap-right', 'mindmap-down', 'org-tree', 'radial']).default('mindmap-right'),
-  rankSpacing: z.number().default(90),
-  nodeSpacing: z.number().default(28),
+  rankSpacing: finiteNumber.default(90),
+  nodeSpacing: finiteNumber.default(28),
 });
 
 export const ViewportSchema = z.object({
-  x: z.number().default(0),
-  y: z.number().default(0),
-  zoom: z.number().default(1),
+  x: finiteNumber.default(0),
+  y: finiteNumber.default(0),
+  zoom: finiteNumber.default(1),
 });
 
 export const PageSettingsSchema = z.object({
@@ -113,7 +131,7 @@ export const KBNoteDocSchema = z.object({
   id: z.string().min(1),
   title: z.string().default('未命名画布'),
   board: z
-    .object({ createdAt: z.number(), updatedAt: z.number() })
+    .object({ createdAt: finiteNumber, updatedAt: finiteNumber })
     .default({ createdAt: 0, updatedAt: 0 }),
   nodes: z.array(BlockNodeSchema).default([]),
   edges: z.array(EdgeSchema).default([]),
@@ -124,50 +142,260 @@ export const KBNoteDocSchema = z.object({
   assetRefs: z.array(z.string()).default([]),
 });
 
-/**
- * 图校验问题类型（结构性，parse 之外的语义检查）。
- * P0 冲突处理：多父选唯一主父（其余父子边经可撤销 Command 删除）；成环选边断开。
- */
-export type ValidationIssueKind =
-  | 'cycle' // 父子边构成环
-  | 'multi-parent' // 一个块有 >1 条入边（多父）
-  | 'dangling-edge' // 边指向不存在的节点
-  | 'self-loop' // source === target
-  | 'duplicate-edge'; // 同一对 source→target 重复
+// ---- 类型化解析错误 ----
 
-export interface ValidationIssue {
-  kind: ValidationIssueKind;
-  /** 涉及的节点/边 id。 */
-  nodeIds?: string[];
-  edgeIds?: string[];
+/** 单条校验错误：带 dotted path 信息，便于 UI 定位。 */
+export interface KBNoteIssue {
+  path: string;
   message: string;
 }
 
-export interface GraphValidationResult {
-  ok: boolean;
-  issues: ValidationIssue[];
+/**
+ * parseKBNoteDoc 失败时抛出的类型化错误。
+ * 包装 zod 校验结果，暴露逐字段路径，而非裸 ZodError。
+ */
+export class KBNoteParseError extends Error {
+  readonly issues: readonly KBNoteIssue[];
+
+  constructor(zodError: ZodError) {
+    const issues: KBNoteIssue[] = zodError.issues.map((i) => ({
+      path: i.path.join('.'),
+      message: i.message,
+    }));
+    super(
+      `KBNote 文档校验失败（${issues.length} 处）：\n` +
+        issues.map((i) => `  at ${i.path || '<root>'}: ${i.message}`).join('\n'),
+    );
+    this.name = 'KBNoteParseError';
+    this.issues = issues;
+  }
+}
+
+// ---- 图结构校验问题（可辨识联合）----
+
+/**
+ * 图校验问题。code 为可辨识联合判别字段，每种 issue 携带各自负载。
+ * 与 graph 模块的 analyzeGraph 互补：这里返回「一条条问题」供 store/UI 精确处理。
+ */
+export type ValidationIssue =
+  | { code: 'self-loop'; edgeId: string; nodeId: string }
+  | {
+      code: 'dangling-edge';
+      edgeId: string;
+      /** 缺失端点是 source 还是 target。 */
+      endpoint: 'source' | 'target';
+      /** 缺失的节点 id。 */
+      missingNodeId: string;
+    }
+  | {
+      code: 'duplicate-edge';
+      edgeId: string;
+      /** 同一 source→target 第一次出现的边 id。 */
+      firstEdgeId: string;
+      source: string;
+      target: string;
+    }
+  | {
+      code: 'multi-parent';
+      nodeId: string;
+      /** 指向该节点的全部入边 id（按 edges 数组顺序）。 */
+      parentEdgeIds: string[];
+      /** 入边对应父节点 id（与 parentEdgeIds 对齐）。 */
+      parentIds: string[];
+    }
+  | { code: 'cycle'; nodeIds: string[]; edgeIds: string[] }
+  | {
+      code: 'parentid-mismatch';
+      nodeId: string;
+      /** 节点上声明的 parentId。 */
+      declaredParentId: string | null;
+      /** 由 edges 推导的父（首条有效入边的 source）。 */
+      derivedParentId: string | null;
+    };
+
+/** 有向环检测结果内部结构。 */
+interface DetectedCycle {
+  nodeIds: string[];
+  edgeIds: string[];
+}
+
+/**
+ * DFS 着色（白/灰/黑）找有向环。自环也算环。
+ * 只考虑端点均存在的边；按 nodes/edges 数组顺序遍历，结果确定性。
+ */
+function findDirectedCycles(nodes: BlockNode[], edges: Edge[]): DetectedCycle[] {
+  const nodeIds = new Set(nodes.map((n) => n.id));
+  const adj = new Map<string, { to: string; edgeId: string }[]>();
+  for (const edge of edges) {
+    if (!nodeIds.has(edge.source) || !nodeIds.has(edge.target)) continue;
+    const list = adj.get(edge.source) ?? [];
+    list.push({ to: edge.target, edgeId: edge.id });
+    adj.set(edge.source, list);
+  }
+
+  const WHITE = 0;
+  const GRAY = 1;
+  const BLACK = 2;
+  const color = new Map<string, number>();
+  for (const n of nodes) color.set(n.id, WHITE);
+
+  const cycles: DetectedCycle[] = [];
+  const seen = new Set<string>();
+  // 当前 DFS 栈：节点 + 进入该节点的边 id
+  const stack: { node: string; edgeId: string | null }[] = [];
+  const onStack = new Map<string, number>();
+
+  const dfs = (u: string, incomingEdgeId: string | null): void => {
+    color.set(u, GRAY);
+    stack.push({ node: u, edgeId: incomingEdgeId });
+    onStack.set(u, stack.length - 1);
+    for (const { to, edgeId } of adj.get(u) ?? []) {
+      const c = color.get(to) ?? WHITE;
+      if (c === GRAY) {
+        const idx = onStack.get(to);
+        if (idx === undefined) continue;
+        const slice = stack.slice(idx);
+        const cycleNodes = slice.map((s) => s.node);
+        // slice[0] 是环起点 to，其 edgeId 不属于环；后续节点的 edgeId 即环上有向边。
+        const cycleEdges = slice.slice(1).map((s) => s.edgeId as string);
+        cycleEdges.push(edgeId); // 闭合边 u -> to
+        const key = cycleEdges.slice().sort().join('|');
+        if (!seen.has(key)) {
+          seen.add(key);
+          cycles.push({ nodeIds: [...cycleNodes, to], edgeIds: cycleEdges });
+        }
+      } else if (c === WHITE) {
+        dfs(to, edgeId);
+      }
+    }
+    stack.pop();
+    onStack.delete(u);
+    color.set(u, BLACK);
+  };
+
+  for (const n of nodes) {
+    if (color.get(n.id) === WHITE) dfs(n.id, null);
+  }
+  return cycles;
 }
 
 /**
  * 安全解析未知 JSON 为 KBNoteDoc。
- * 失败抛 ZodError（由调用方决定如何提示）。未知字段被 zod 自动剥离。
+ * 失败抛 KBNoteParseError（带逐字段路径）。未知字段被 zod 自动剥离。
  */
 export function parseKBNoteDoc(input: unknown): import('./doc.js').KBNoteDoc {
-  return KBNoteDocSchema.parse(input) as import('./doc.js').KBNoteDoc;
+  const result = KBNoteDocSchema.safeParse(input);
+  if (!result.success) {
+    throw new KBNoteParseError(result.error);
+  }
+  return result.data as import('./doc.js').KBNoteDoc;
 }
 
-/** 宽松解析，不抛错，返回是否成功与产物。 */
-export function safeParseKBNoteDoc(
-  input: unknown,
-): z.SafeParseReturnType<unknown, import('./doc.js').KBNoteDoc> {
-  return KBNoteDocSchema.safeParse(input) as z.SafeParseReturnType<unknown, import('./doc.js').KBNoteDoc>;
+/** safeParse 的判别联合结果。 */
+export type SafeParseKBNoteResult =
+  | { success: true; doc: import('./doc.js').KBNoteDoc }
+  | { success: false; error: KBNoteParseError };
+
+/** 宽松解析，不抛错。 */
+export function safeParseKBNoteDoc(input: unknown): SafeParseKBNoteResult {
+  const result = KBNoteDocSchema.safeParse(input);
+  if (!result.success) {
+    return { success: false, error: new KBNoteParseError(result.error) };
+  }
+  return { success: true, doc: result.data as import('./doc.js').KBNoteDoc };
 }
 
 /**
- * 校验图结构：环 / 多父 / 悬空边 / 自环 / 重复边。
- * 【Wave1-A 实现 TODO】当前为占位：返回空 issue 列表骨架，实现留给后续 agent。
+ * 校验图结构：自环 / 悬空边 / 重复边 / 多父 / 有向环 / parentId 不一致。
+ * 纯结构检查，不修改入参；每条 issue 携带可辨识负载，供 UI 精确弹窗。
  */
-export function validateGraph(_doc: import('./doc.js').KBNoteDoc): GraphValidationResult {
-  // TODO(wave1-a): 建邻接表 → DFS 找环 / 统计入度 >1 / 边端点存在性 / source===target / 去重。
-  return { ok: true, issues: [] };
+export function validateGraph(nodes: BlockNode[], edges: Edge[]): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const nodeIds = new Set(nodes.map((n) => n.id));
+
+  // 入边索引（端点均存在、且非自环）：target -> [{ edgeId, parentId }]
+  const incoming = new Map<string, { edgeId: string; parentId: string }[]>();
+
+  for (const edge of edges) {
+    if (edge.source === edge.target) {
+      issues.push({ code: 'self-loop', edgeId: edge.id, nodeId: edge.source });
+    }
+    if (!nodeIds.has(edge.source)) {
+      issues.push({
+        code: 'dangling-edge',
+        edgeId: edge.id,
+        endpoint: 'source',
+        missingNodeId: edge.source,
+      });
+    }
+    if (!nodeIds.has(edge.target)) {
+      issues.push({
+        code: 'dangling-edge',
+        edgeId: edge.id,
+        endpoint: 'target',
+        missingNodeId: edge.target,
+      });
+    }
+    if (
+      nodeIds.has(edge.source) &&
+      nodeIds.has(edge.target) &&
+      edge.source !== edge.target
+    ) {
+      const list = incoming.get(edge.target) ?? [];
+      list.push({ edgeId: edge.id, parentId: edge.source });
+      incoming.set(edge.target, list);
+    }
+  }
+
+  // 重复边：同一 source→target 第二次起记为重复
+  const seenPairs = new Map<string, string>();
+  for (const edge of edges) {
+    const key = `${edge.source}->${edge.target}`;
+    const first = seenPairs.get(key);
+    if (first !== undefined) {
+      issues.push({
+        code: 'duplicate-edge',
+        edgeId: edge.id,
+        firstEdgeId: first,
+        source: edge.source,
+        target: edge.target,
+      });
+    } else {
+      seenPairs.set(key, edge.id);
+    }
+  }
+
+  // 多父：入度 > 1
+  for (const [nodeId, list] of incoming) {
+    if (list.length > 1) {
+      issues.push({
+        code: 'multi-parent',
+        nodeId,
+        parentEdgeIds: list.map((x) => x.edgeId),
+        parentIds: list.map((x) => x.parentId),
+      });
+    }
+  }
+
+  // 有向环
+  for (const c of findDirectedCycles(nodes, edges)) {
+    issues.push({ code: 'cycle', nodeIds: c.nodeIds, edgeIds: c.edgeIds });
+  }
+
+  // parentId 一致性：声明的 parentId 与首条有效入边推导的父对比
+  for (const node of nodes) {
+    const list = incoming.get(node.id);
+    const derivedParent = list && list.length > 0 ? (list[0] as { parentId: string }).parentId : null;
+    const declared = node.parentId;
+    if (derivedParent !== declared) {
+      issues.push({
+        code: 'parentid-mismatch',
+        nodeId: node.id,
+        declaredParentId: declared,
+        derivedParentId: derivedParent,
+      });
+    }
+  }
+
+  return issues;
 }
