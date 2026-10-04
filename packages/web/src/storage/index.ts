@@ -1,2 +1,5 @@
-// 占位 barrel：Wave 各 wave 实现填充（见 docs/ARCHITECTURE.md 所有权表）。
-export {};
+// StorageAdapter 的浏览器实现统一导出。
+export * from './db';
+export * from './opfs';
+export * from './search-index';
+export * from './fsa';

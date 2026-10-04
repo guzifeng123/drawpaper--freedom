@@ -1,0 +1,83 @@
+import { createEditorStore } from '@drawpaper/core';
+import type { KBNoteDoc } from '@drawpaper/core';
+import { DexieStorageAdapter } from '../storage/db';
+import { WebHostAdapter } from '../host/web-host';
+import { buildIndex, searchDocs } from '../storage/search-index';
+
+/**
+ * React 单例 editor store：注入浏览器 storage / host，启动时打开最近文档或新建空白。
+ * core 内部已自带 500ms 防抖自动保存；这里额外负责 MiniSearch 索引的 doc 变更同步。
+ */
+
+function blankInitialDoc(): KBNoteDoc {
+  return {
+    format: 'knowledge-block-notes',
+    version: 1,
+    id: 'boot',
+    title: '未命名画布',
+    board: { createdAt: Date.now(), updatedAt: Date.now() },
+    nodes: [],
+    edges: [],
+    tags: [],
+    layout: { mode: 'mindmap-right', rankSpacing: 90, nodeSpacing: 28 },
+    viewport: { x: 0, y: 0, zoom: 1 },
+    page: {
+      size: 'A4',
+      orientation: 'portrait',
+      marginMm: 15,
+      mode: 'fit',
+      showPageBreak: true,
+      colorMode: 'color',
+      header: false,
+      footer: false,
+      showPageNumbers: false,
+      pageBreaks: [],
+    },
+    assetRefs: [],
+  };
+}
+
+export const storageAdapter = new DexieStorageAdapter();
+export const hostAdapter = new WebHostAdapter();
+
+export const editorStore = createEditorStore(blankInitialDoc(), {
+  storage: storageAdapter,
+  host: hostAdapter,
+});
+
+/** 启动后：列出文档 → 打开最近一份；没有则新建。 */
+async function bootstrap(): Promise<void> {
+  await editorStore.getState().listDocs();
+  const docs = editorStore.getState().docs;
+  const recent = [...docs].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+  if (recent) {
+    await editorStore.getState().openDoc(recent.id);
+  } else {
+    editorStore.getState().newDoc();
+  }
+  startSearchSync();
+}
+
+/** doc 变更防抖重建 MiniSearch；searchQuery 变化时即时查询。 */
+function startSearchSync(): void {
+  let index = buildIndex(editorStore.getState().doc);
+  editorStore.getState().setSearchIndex(index);
+  let rebuildTimer: ReturnType<typeof setTimeout> | undefined;
+
+  editorStore.subscribe((state, prev) => {
+    if (state.searchQuery !== prev.searchQuery) {
+      editorStore.getState().setSearchResults(searchDocs(index, state.searchQuery));
+    }
+    if (state.doc !== prev.doc) {
+      if (rebuildTimer !== undefined) clearTimeout(rebuildTimer);
+      rebuildTimer = setTimeout(() => {
+        index = buildIndex(state.doc);
+        editorStore.getState().setSearchIndex(index);
+        const q = editorStore.getState().searchQuery;
+        if (q) editorStore.getState().setSearchResults(searchDocs(index, q));
+      }, 300);
+    }
+  });
+}
+
+void bootstrap();
