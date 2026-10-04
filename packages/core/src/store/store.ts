@@ -15,12 +15,54 @@ import type {
 import { DEFAULT_EDGE_COLOR, DOC_FORMAT, CURRENT_DOC_VERSION, EMPTY_TIPTAP_DOC, DEFAULT_NODE_SIZES } from '../model/index.js';
 import { createCommandStack } from './command.js';
 import type { Command, CommandStack } from './command.js';
-import type { DocMeta, StorageAdapter } from './adapters.js';
+import type {
+  AISuggestion,
+  BlobLike,
+  DocMeta,
+  FsaCapability,
+  SnapshotMeta,
+  StorageAdapter,
+  TemplateFactory,
+  TrashDocMeta,
+} from './adapters.js';
 import { detectConflicts } from '../graph/index.js';
 import type { CycleIssue, MultiParentIssue } from '../graph/index.js';
 import { layoutTree } from '../layout/index.js';
 import type { LayoutInput, LayoutPosition, MeasuredSize } from '../layout/index.js';
 import { serializeKBNote, parseKBNote } from '../serialize/index.js';
+
+/** 每份文档自动快照保留的最近条数（超出淘汰最旧）。 */
+export const SNAPSHOT_KEEP = 20;
+
+/**
+ * 从一组快照里保留最近 N 条（takenAt 倒序取前 N）。纯函数：web Dexie 与 node 内存桩共用。
+ */
+export function pruneSnapshotsToLatest<T extends { takenAt: number }>(items: T[], keep = SNAPSHOT_KEEP): T[] {
+  return [...items].sort((a, b) => b.takenAt - a.takenAt).slice(0, keep);
+}
+
+/** UI 态标签/类型/颜色筛选（不落 doc）。 */
+export interface TagFilter {
+  tagIds: string[];
+  types: BlockType[];
+  colors: string[];
+  match: 'any' | 'all';
+}
+
+/** 手动分页符（store 与导出 agent 的契约形状）。 */
+export interface ManualPageBreak {
+  id: string;
+  x: number;
+  y: number;
+}
+
+/**
+ * LayoutInput 扩展：布局 agent 同期新增 manualFixed 字段前，本分支用局部接口条件传入；
+ * 合并后字段就位即可删除此扩展（行为不变）。
+ */
+interface LayoutInputWithManual extends LayoutInput {
+  manualFixed?: ReadonlySet<string>;
+}
 
 /**
  * EditorStore：全局编辑状态 + 全部 action。
@@ -113,6 +155,10 @@ export interface StoreDeps {
   layoutEngine?: (input: LayoutInput, mode: LayoutMode) => LayoutResultLike;
   /** UI 冲突弹窗（web 注入）；resolve 给裁决，null = 取消回滚。 */
   resolveConflictUi?: (pending: PendingConflicts) => Promise<ConflictResolution | null>;
+  /** File System Access 活动文件能力（web 注入）；缺省则纯 IndexedDB 自动保存。 */
+  fsa?: FsaCapability;
+  /** 模板 id → 工厂（web 注入，6 份示例模板）；createDocFromTemplate 按 id 取用。 */
+  templates?: Record<string, TemplateFactory>;
 }
 
 /** Store 状态形状。 */
@@ -172,6 +218,20 @@ export interface EditorState {
 
   /** 最近一次 undo/redo 事件（含命令名 + 递增 nonce），供画布判断是否回位相机。 */
   historyEvent: { kind: 'undo' | 'redo'; name: string; nonce: number } | null;
+
+  /**
+   * 活动本地文件（File System Access）。只持有文件名用于标题栏「已保存到 xxx.kbnote」；
+   * 句柄本体在 web 侧。null = 纯 IndexedDB 自动保存。
+   */
+  activeFile: { name: string } | null;
+  /** 手动移动过的块 id（UI 态）：布局时作为 manualFixed 钉住，confirmLayout 后清空。 */
+  manuallyMoved: Set<string>;
+  /** 当前聚焦分支块 id（工具栏/画布高亮联动）。 */
+  focusNodeId: string | null;
+  /** 标签/类型/颜色筛选（UI 态，不落 doc）。 */
+  tagFilter: TagFilter;
+  /** 定时 JSON 备份开关（默认关；P1 由 web 按间隔提醒+下载）。 */
+  backupEnabled: boolean;
 }
 
 /**
@@ -319,6 +379,57 @@ export interface EditorActions {
   // ---- 保存状态 ----
   setSaveState(s: SaveState): void;
   setPrefs(patch: Partial<{ showGrid: boolean; snapToGrid: boolean }>): void;
+
+  // ---- 标签 CRUD（doc.tags 为真相；全部可撤销）----
+  /** 新建标签，返回 id。 */
+  createTag(name: string, color: string): string;
+  renameTag(id: string, name: string): void;
+  setTagColor(id: string, color: string): void;
+  /** 删除标签：宏命令，从 doc.tags 与所有节点 tags 中移除（可撤销）。 */
+  deleteTag(id: string): void;
+  /** 筛选态补丁（UI 态，不落 doc）。 */
+  setTagFilter(patch: Partial<TagFilter>): void;
+  clearTagFilter(): void;
+
+  // ---- 结构调整（大纲拖拽 / 边反转）----
+  /** 改父子归属：删旧入边、建新边 newParent→node、同步 parentId 冗余。newParentId=null 退化为根。 */
+  reparentNode(nodeId: string, newParentId: string | null, index?: number): void;
+  /** 反转边方向（source/target 与句柄位互换）。 */
+  reverseEdge(edgeId: string): void;
+
+  // ---- 手动分页符（写入 doc.page.pageBreaks，供导出）----
+  addManualPageBreak(id: string, x: number, y: number): void;
+  removePageBreak(id: string): void;
+  setPageBreaks(breaks: ManualPageBreak[]): void;
+
+  // ---- AI 建议应用（一条宏命令，可撤销）----
+  applyAISuggestions(suggestions: ReadonlyArray<AISuggestion>, accepted: ReadonlySet<number>): void;
+
+  // ---- 聚焦 / 手动位置 ----
+  setFocusNode(id: string | null): void;
+
+  // ---- 文档生命周期：快照 / 回收站 / 模板 / 备份 ----
+  /** 拍一条当前文档快照（label 可空）。 */
+  snapshotDoc(label?: string): Promise<void>;
+  listSnapshots(docId: string): Promise<SnapshotMeta[]>;
+  /** 恢复快照：作为一条可撤销/可再恢复命令替换当前 doc。 */
+  restoreSnapshot(id: string): Promise<void>;
+  listTrash(): Promise<TrashDocMeta[]>;
+  restoreTrash(id: string): Promise<void>;
+  purgeTrash(id: string): Promise<void>;
+  emptyTrash(): Promise<void>;
+  /** 用模板 id 新建文档（deps.templates 注册）。 */
+  createDocFromTemplate(templateId: string): void;
+  setBackupEnabled(on: boolean): void;
+
+  // ---- File System Access 活动文件 ----
+  openLocalFile(): Promise<void>;
+  saveLocalFileAs(): Promise<void>;
+  clearActiveFile(): void;
+
+  // ---- 附件（OPFS）----
+  /** 写入图片 Blob 到 OPFS 并登记 doc.assetRefs；返回引用 src（OPFS 不可用返回 src=''，调用方降级 dataURL）。 */
+  putImageAsset(blob: BlobLike): Promise<{ src: string; assetRef?: string }>;
 }
 
 /** 组合后的 store：state + actions。 */
@@ -402,6 +513,41 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
   let focusNonce = 0;
   let historyNonce = 0;
 
+  // ---- 自动快照（打开时 + 每 5 分钟，有改动才拍；仅 storage 支持时启用）----
+  const SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000;
+  let snapshotTimer: ReturnType<typeof setTimeout> | undefined;
+  let snapshotDirty = false;
+
+  /** 纯文本 → 合法空 Tiptap doc（单段落）。core 不校验其内部结构。 */
+  function paragraphDoc(text: string): unknown {
+    return {
+      type: 'doc',
+      content: text
+        ? [{ type: 'paragraph', content: [{ type: 'text', text }] }]
+        : [{ type: 'paragraph' }],
+    };
+  }
+
+  /** 判断 candidate 是否 nodeId 的后代（沿父子边向下）。供 reparent 成环防护。 */
+  function isDescendantOf(doc: KBNoteDoc, nodeId: string, candidate: string): boolean {
+    const children = new Map<string, string[]>();
+    for (const e of doc.edges) {
+      const arr = children.get(e.source) ?? [];
+      arr.push(e.target);
+      children.set(e.source, arr);
+    }
+    const stack2 = [nodeId];
+    const seen = new Set<string>();
+    while (stack2.length > 0) {
+      const cur = stack2.pop()!;
+      if (cur === candidate) return true;
+      if (seen.has(cur)) continue;
+      seen.add(cur);
+      for (const c of children.get(cur) ?? []) stack2.push(c);
+    }
+    return false;
+  }
+
   const store = createStore<EditorStore>()(
     immer((set, get) => {
       // ---------- 内部辅助（闭包） ----------
@@ -420,6 +566,14 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
         });
         try {
           await deps.storage.saveDoc(get().doc);
+          // 双写：有活动本地句柄时，同一份 JSON 落盘到 .kbnote 文件（web 内部防抖）。
+          if (get().activeFile && deps.fsa) {
+            try {
+              await deps.fsa.writeActiveFile(serializeKBNote(get().doc));
+            } catch {
+              /* 文件写入失败不阻塞 IndexedDB 主保存（下次自动保存重试） */
+            }
+          }
           set((d) => {
             d.saveState = 'saved';
             d.savedAt = now();
@@ -456,6 +610,7 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
 
       const runCommand = (cmd: Command) => {
         const nextDoc = stack.push(cmd);
+        snapshotDirty = true;
         set((d) => {
           d.doc = nextDoc;
           d.dirty = true;
@@ -467,6 +622,7 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
       const runMacro = (name: string, cmds: Command[]) => {
         if (cmds.length === 0) return;
         const nextDoc = stack.executeMacro(name, cmds);
+        snapshotDirty = true;
         set((d) => {
           d.doc = nextDoc;
           d.dirty = true;
@@ -483,6 +639,7 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
       /** 切换文档（新建/打开/导入）：重置撤销栈与临时 UI 态。 */
       const switchDoc = (doc: KBNoteDoc) => {
         stack = createCommandStack(doc, { now, coalesceWindowMs: 800 });
+        snapshotDirty = false;
         set((d) => {
           d.doc = doc;
           d.currentDocId = doc.id;
@@ -497,9 +654,15 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
           d.searchHighlight = new Set();
           d.canUndo = false;
           d.canRedo = false;
+          d.manuallyMoved = new Set();
+          d.focusNodeId = null;
+          d.activeFile = null;
           d.dirty = true;
         });
         scheduleAutosave();
+        // 打开文档即拍一条基线快照，并启动定时自动快照轮询。
+        void takeSnapshot();
+        armAutoSnapshot();
       };
 
       const applyResolution = (resolution: ConflictResolution) => {
@@ -577,6 +740,44 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
         return null;
       };
 
+      /** 拍一条快照（label 可空）；storage 不支持则静默跳过。 */
+      const takeSnapshot = async (label?: string): Promise<void> => {
+        const st = deps.storage;
+        if (!st?.saveSnapshot) return;
+        try {
+          await st.saveSnapshot(get().doc.id, label ?? null, serializeKBNote(get().doc));
+          snapshotDirty = false;
+        } catch {
+          /* 快照失败不阻塞主流程 */
+        }
+      };
+
+      /** 启动每 5 分钟自动快照轮询（仅 storage 支持 saveSnapshot 时）。 */
+      const armAutoSnapshot = () => {
+        if (!deps.storage?.saveSnapshot) return;
+        if (snapshotTimer !== undefined) clearTimeout(snapshotTimer);
+        snapshotTimer = setTimeout(() => {
+          if (snapshotDirty) void takeSnapshot();
+          armAutoSnapshot();
+        }, SNAPSHOT_INTERVAL_MS);
+      };
+
+      /**
+       * 把 store 契约 ManualPageBreak[] 写入 doc.page.pageBreaks（纯变换，供 Command）。
+       * model/zod 持久化形状为 {at:number}：at 取主轴坐标（纵向取 y、横向/平铺取 x）；
+       * id/x/y 在内存会话内供 removePageBreak 使用，经序列化再解析后由 zod 规整为 {at}。
+       */
+      const withBreaks = (doc: KBNoteDoc, breaks: ManualPageBreak[]): KBNoteDoc => {
+        const landscape = doc.page.orientation === 'landscape';
+        const stored = breaks.map((b) => ({
+          at: landscape ? b.x : b.y,
+          id: b.id,
+          x: b.x,
+          y: b.y,
+        }));
+        return { ...doc, page: { ...doc.page, pageBreaks: stored as unknown as typeof doc.page.pageBreaks } };
+      };
+
       return {
         // ================= state =================
         doc: init,
@@ -604,6 +805,11 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
         savedAt: null,
         lastFocus: null,
         historyEvent: null,
+        activeFile: null,
+        manuallyMoved: new Set<string>(),
+        focusNodeId: null,
+        tagFilter: { tagIds: [], types: [], colors: [], match: 'any' },
+        backupEnabled: false,
 
         // ================= 文档级 =================
         newDoc: () => switchDoc(blankDoc(now())),
@@ -764,6 +970,12 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
             coalesceKey: 'move',
             execute: (d) => mapNode(d, id, (n) => ({ ...n, x, y })),
             undo: (d) => mapNode(d, id, (n) => ({ ...n, x: ox, y: oy })),
+          });
+          // 手动移动过的块记入 manualFixed：后续一键布局为其绕行。
+          // （Immer 未启用 MapSet 插件：从 get() 读原始集合，整体替换而非变更 draft。）
+          const moved = get().manuallyMoved;
+          set((d) => {
+            d.manuallyMoved = new Set(moved).add(id);
           });
         },
         resizeNode: (id, width, height) => {
@@ -1113,7 +1325,7 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
         },
         previewLayout: () => {
           const s = get();
-          const input: LayoutInput = {
+          const input: LayoutInputWithManual = {
             nodes: s.doc.nodes,
             edges: s.doc.edges,
             rankSpacing: s.doc.layout.rankSpacing,
@@ -1123,6 +1335,8 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
             collapsed: Object.fromEntries(
               s.doc.nodes.filter((n) => n.collapsed).map((n) => [n.id, true]),
             ),
+            // 手动移动过的块作为 manualFixed 钉住（布局 agent 同期接入该字段）。
+            manualFixed: s.manuallyMoved,
           };
           const result = runLayout(input, s.doc.layout.mode);
           set((d) => {
@@ -1145,6 +1359,8 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
           runMacro('confirm-layout', cmds);
           set((d) => {
             d.layoutPreview = null;
+            // 布局落位后，手动钉住集合随新布局重置。
+            d.manuallyMoved = new Set();
           });
         },
         cancelLayout: () => {
@@ -1410,6 +1626,435 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
           set((d) => {
             d.prefs = { ...d.prefs, ...patch };
           });
+        },
+
+        // ================= 标签 CRUD =================
+        createTag: (name, color) => {
+          const id = 't_' + nanoid();
+          runCommand({
+            name: 'create-tag',
+            execute: (d) => ({ ...d, tags: [...d.tags, { id, name, color }] }),
+            undo: (d) => ({ ...d, tags: d.tags.filter((t) => t.id !== id) }),
+          });
+          return id;
+        },
+        renameTag: (id, name) => {
+          const tag = get().doc.tags.find((t) => t.id === id);
+          if (!tag) return;
+          runCommand({
+            name: 'rename-tag',
+            execute: (d) => ({ ...d, tags: d.tags.map((t) => (t.id === id ? { ...t, name } : t)) }),
+            undo: (d) => ({ ...d, tags: d.tags.map((t) => (t.id === id ? { ...t, name: tag.name } : t)) }),
+          });
+        },
+        setTagColor: (id, color) => {
+          const tag = get().doc.tags.find((t) => t.id === id);
+          if (!tag) return;
+          runCommand({
+            name: 'set-tag-color',
+            execute: (d) => ({ ...d, tags: d.tags.map((t) => (t.id === id ? { ...t, color } : t)) }),
+            undo: (d) => ({ ...d, tags: d.tags.map((t) => (t.id === id ? { ...t, color: tag.color } : t)) }),
+          });
+        },
+        deleteTag: (id) => {
+          const doc = get().doc;
+          const tag = doc.tags.find((t) => t.id === id);
+          if (!tag) return;
+          const hadTag = new Set(doc.nodes.filter((n) => n.tags.includes(id)).map((n) => n.id));
+          runMacro('delete-tag', [
+            {
+              name: 'drop-tag',
+              execute: (d) => ({ ...d, tags: d.tags.filter((t) => t.id !== id) }),
+              undo: (d) => ({ ...d, tags: [...d.tags, tag] }),
+            },
+            {
+              name: 'detach-tag-from-nodes',
+              execute: (d) => ({
+                ...d,
+                nodes: d.nodes.map((n) =>
+                  n.tags.includes(id) ? { ...n, tags: n.tags.filter((t) => t !== id) } : n,
+                ),
+              }),
+              undo: (d) => ({
+                ...d,
+                nodes: d.nodes.map((n) =>
+                  hadTag.has(n.id) && !n.tags.includes(id) ? { ...n, tags: [...n.tags, id] } : n,
+                ),
+              }),
+            },
+          ]);
+        },
+        setTagFilter: (patch) => {
+          set((d) => {
+            d.tagFilter = { ...d.tagFilter, ...patch };
+          });
+        },
+        clearTagFilter: () => {
+          set((d) => {
+            d.tagFilter = { tagIds: [], types: [], colors: [], match: 'any' };
+          });
+        },
+
+        // ================= 结构调整 =================
+        reparentNode: (nodeId, newParentId, index) => {
+          const { doc } = get();
+          const node = doc.nodes.find((n) => n.id === nodeId);
+          if (!node) return;
+          if (newParentId === nodeId) return;
+          if (newParentId && !doc.nodes.some((n) => n.id === newParentId)) return;
+          // 成环防护：不能把节点挂到自己的后代下
+          if (newParentId && isDescendantOf(doc, nodeId, newParentId)) return;
+
+          const oldIncoming = doc.edges.filter((e) => e.target === nodeId);
+          const oldParentId = node.parentId;
+          const cmds: Command[] = [
+            {
+              name: 'detach-old-parent',
+              execute: (d) => ({ ...d, edges: d.edges.filter((e) => e.target !== nodeId) }),
+              undo: (d) => ({ ...d, edges: [...d.edges, ...oldIncoming] }),
+            },
+          ];
+
+          if (newParentId) {
+            const newEdge: Edge = {
+              id: nanoid(),
+              source: newParentId,
+              target: nodeId,
+              sourceHandle: 'right',
+              targetHandle: 'left',
+              label: '',
+              directed: true,
+              style: { color: DEFAULT_EDGE_COLOR.hex },
+            };
+            cmds.push({
+              name: 'attach-new-parent',
+              execute: (d) => {
+                if (typeof index !== 'number') return { ...d, edges: [...d.edges, newEdge] };
+                // 在新父的兄弟间按 index 落位（按 edges 数组中 source===newParentId 的顺序）。
+                const others = d.edges.filter((e) => e.source !== newParentId);
+                const sibs = d.edges.filter((e) => e.source === newParentId);
+                const ordered = [...sibs];
+                ordered.splice(Math.max(0, Math.min(index, ordered.length)), 0, newEdge);
+                return { ...d, edges: [...others, ...ordered] };
+              },
+              undo: (d) => ({ ...d, edges: d.edges.filter((e) => e.id !== newEdge.id) }),
+            });
+          }
+
+          cmds.push({
+            name: 'sync-parent-id',
+            execute: (d) => ({
+              ...d,
+              nodes: d.nodes.map((n) => (n.id === nodeId ? { ...n, parentId: newParentId } : n)),
+            }),
+            undo: (d) => ({
+              ...d,
+              nodes: d.nodes.map((n) => (n.id === nodeId ? { ...n, parentId: oldParentId } : n)),
+            }),
+          });
+
+          runMacro('reparent-node', cmds);
+        },
+        reverseEdge: (edgeId) => {
+          const edge = get().doc.edges.find((e) => e.id === edgeId);
+          if (!edge) return;
+          runCommand({
+            name: 'reverse-edge',
+            execute: (d) => ({
+              ...d,
+              edges: d.edges.map((e) =>
+                e.id === edgeId
+                  ? { ...e, source: e.target, target: e.source, sourceHandle: e.targetHandle, targetHandle: e.sourceHandle }
+                  : e,
+              ),
+            }),
+            undo: (d) => ({
+              ...d,
+              edges: d.edges.map((e) =>
+                e.id === edgeId
+                  ? { ...e, source: edge.source, target: edge.target, sourceHandle: edge.sourceHandle, targetHandle: edge.targetHandle }
+                  : e,
+              ),
+            }),
+          });
+        },
+
+        // ================= 手动分页符 =================
+        addManualPageBreak: (id, x, y) => {
+          const prev = get().doc.page.pageBreaks as unknown as ManualPageBreak[];
+          if (prev.some((b) => b.id === id)) return;
+          const next = [...prev, { id, x, y }];
+          runCommand({
+            name: 'add-page-break',
+            execute: (d) => withBreaks(d, next),
+            undo: (d) => withBreaks(d, prev),
+          });
+        },
+        removePageBreak: (id) => {
+          const prev = get().doc.page.pageBreaks as unknown as ManualPageBreak[];
+          const next = prev.filter((b) => b.id !== id);
+          runCommand({
+            name: 'remove-page-break',
+            execute: (d) => withBreaks(d, next),
+            undo: (d) => withBreaks(d, prev),
+          });
+        },
+        setPageBreaks: (breaks) => {
+          const prev = get().doc.page.pageBreaks as unknown as ManualPageBreak[];
+          runCommand({
+            name: 'set-page-breaks',
+            execute: (d) => withBreaks(d, breaks),
+            undo: (d) => withBreaks(d, prev),
+          });
+        },
+
+        // ================= AI 建议（一条宏命令）=================
+        applyAISuggestions: (suggestions, accepted) => {
+          const doc = get().doc;
+          const existingIds = new Set(doc.nodes.map((n) => n.id));
+          const existingEdgePairs = new Set(doc.edges.map((e) => `${e.source}->${e.target}`));
+          const cmds: Command[] = [];
+
+          accepted.forEach((idx) => {
+            const s = suggestions[idx];
+            if (!s) return;
+            switch (s.type) {
+              case 'add-edge': {
+                for (const pe of s.proposedEdges ?? []) {
+                  if (!existingIds.has(pe.source) || !existingIds.has(pe.target)) continue;
+                  if (pe.source === pe.target) continue;
+                  if (existingEdgePairs.has(`${pe.source}->${pe.target}`)) continue; // 幂等：重复边不建
+                  const edge: Edge = {
+                    id: nanoid(),
+                    source: pe.source,
+                    target: pe.target,
+                    sourceHandle: 'right',
+                    targetHandle: 'left',
+                    label: pe.label ?? '',
+                    directed: true,
+                    style: { color: DEFAULT_EDGE_COLOR.hex },
+                  };
+                  cmds.push({
+                    name: 'ai-add-edge',
+                    execute: (d) => ({ ...d, edges: [...d.edges, edge] }),
+                    undo: (d) => ({ ...d, edges: d.edges.filter((e) => e.id !== edge.id) }),
+                  });
+                }
+                break;
+              }
+              case 'set-root': {
+                // 根由布局引擎按入边推导；本动作不改结构（记录为标记，占位保证宏边界完整）。
+                break;
+              }
+              case 'group': {
+                const members = (s.nodeIds ?? []).filter((id) => existingIds.has(id));
+                if (members.length === 0) break;
+                const memberNodes = members.map((id) => doc.nodes.find((n) => n.id === id)!).filter(Boolean);
+                const cx = memberNodes.reduce((sum, n) => sum + n.x, 0) / Math.max(1, memberNodes.length);
+                const cy = memberNodes.reduce((sum, n) => sum + n.y, 0) / Math.max(1, memberNodes.length);
+                const groupId = nanoid();
+                const groupNode: BlockNode = {
+                  id: groupId,
+                  type: 'group',
+                  x: cx - 180,
+                  y: cy - 120,
+                  width: 360,
+                  height: 240,
+                  content: { format: 'tiptap-json', data: paragraphDoc(s.title ?? s.text ?? '分组') },
+                  parentId: null,
+                  pinned: false,
+                  locked: false,
+                  collapsed: false,
+                  tags: [],
+                  style: {},
+                };
+                cmds.push({
+                  name: 'ai-add-group',
+                  execute: (d) => ({ ...d, nodes: [...d.nodes, groupNode] }),
+                  undo: (d) => ({ ...d, nodes: d.nodes.filter((n) => n.id !== groupId) }),
+                });
+                for (const m of members) {
+                  const oldParent = doc.nodes.find((n) => n.id === m)?.parentId ?? null;
+                  const ge: Edge = {
+                    id: nanoid(),
+                    source: groupId,
+                    target: m,
+                    sourceHandle: 'right',
+                    targetHandle: 'left',
+                    label: '',
+                    directed: true,
+                    style: { color: DEFAULT_EDGE_COLOR.hex },
+                  };
+                  cmds.push(
+                    {
+                      name: 'ai-group-member-parent',
+                      execute: (d) => ({
+                        ...d,
+                        nodes: d.nodes.map((n) => (n.id === m ? { ...n, parentId: groupId } : n)),
+                      }),
+                      undo: (d) => ({
+                        ...d,
+                        nodes: d.nodes.map((n) => (n.id === m ? { ...n, parentId: oldParent } : n)),
+                      }),
+                    },
+                    {
+                      name: 'ai-group-edge',
+                      execute: (d) => ({ ...d, edges: [...d.edges, ge] }),
+                      undo: (d) => ({ ...d, edges: d.edges.filter((e) => e.id !== ge.id) }),
+                    },
+                  );
+                }
+                break;
+              }
+              case 'split-block': {
+                const afterId = s.afterNodeId ?? s.nodeIds?.[0];
+                if (!afterId || !existingIds.has(afterId)) break;
+                const anchor = doc.nodes.find((n) => n.id === afterId);
+                if (!anchor) break;
+                const sibId = nanoid();
+                const sib: BlockNode = {
+                  id: sibId,
+                  type: 'text',
+                  x: anchor.x,
+                  y: anchor.y + anchor.height + 40,
+                  width: DEFAULT_NODE_SIZES.text.width,
+                  height: DEFAULT_NODE_SIZES.text.height,
+                  content: { format: 'tiptap-json', data: paragraphDoc(s.text ?? '') },
+                  parentId: anchor.parentId,
+                  pinned: false,
+                  locked: false,
+                  collapsed: false,
+                  tags: [],
+                  style: {},
+                };
+                cmds.push({
+                  name: 'ai-split-block',
+                  execute: (d) => ({ ...d, nodes: [...d.nodes, sib] }),
+                  undo: (d) => ({ ...d, nodes: d.nodes.filter((n) => n.id !== sibId) }),
+                });
+                break;
+              }
+              case 'summarize': {
+                const targetId = s.nodeIds?.[0];
+                if (!targetId || !existingIds.has(targetId)) break;
+                const before = doc.nodes.find((n) => n.id === targetId)?.content;
+                if (!before) break;
+                cmds.push({
+                  name: 'ai-summarize',
+                  execute: (d) => ({
+                    ...d,
+                    nodes: d.nodes.map((n) =>
+                      n.id === targetId ? { ...n, content: { format: 'tiptap-json', data: paragraphDoc(s.text ?? '') } } : n,
+                    ),
+                  }),
+                  undo: (d) => ({
+                    ...d,
+                    nodes: d.nodes.map((n) => (n.id === targetId ? { ...n, content: before } : n)),
+                  }),
+                });
+                break;
+              }
+            }
+          });
+
+          runMacro('apply-ai-suggestions', cmds);
+        },
+
+        // ================= 聚焦 =================
+        setFocusNode: (id) => {
+          set((d) => {
+            d.focusNodeId = id;
+          });
+        },
+
+        // ================= 文档生命周期 =================
+        snapshotDoc: (label) => takeSnapshot(label),
+        listSnapshots: async (docId) => {
+          if (!deps.storage?.listSnapshots) return [];
+          return deps.storage.listSnapshots(docId);
+        },
+        restoreSnapshot: async (id) => {
+          const st = deps.storage;
+          if (!st?.getSnapshot) return;
+          const rec = await st.getSnapshot(id);
+          if (!rec) return;
+          const { doc: restored } = parseKBNote(rec.text);
+          const before = deepClone(get().doc);
+          runCommand({
+            name: 'restore-snapshot',
+            execute: () => restored,
+            undo: () => before,
+          });
+        },
+        listTrash: async () => {
+          if (!deps.storage?.listTrash) return [];
+          return deps.storage.listTrash();
+        },
+        restoreTrash: async (id) => {
+          if (!deps.storage?.restoreFromTrash) return;
+          await deps.storage.restoreFromTrash(id);
+          await get().listDocs();
+        },
+        purgeTrash: async (id) => {
+          if (!deps.storage?.purgeTrash) return;
+          await deps.storage.purgeTrash(id);
+          await get().listDocs();
+        },
+        emptyTrash: async () => {
+          if (!deps.storage?.emptyTrash) return;
+          await deps.storage.emptyTrash();
+          await get().listDocs();
+        },
+        createDocFromTemplate: (templateId) => {
+          const factory = deps.templates?.[templateId];
+          if (!factory) return;
+          switchDoc(factory());
+        },
+        setBackupEnabled: (on) => {
+          set((d) => {
+            d.backupEnabled = on;
+          });
+        },
+
+        // ================= File System Access =================
+        openLocalFile: async () => {
+          if (!deps.fsa) return;
+          const r = await deps.fsa.pickLocalFile();
+          if (!r) return;
+          get().importKBNoteText(r.text);
+          set((d) => {
+            d.activeFile = { name: r.name };
+          });
+        },
+        saveLocalFileAs: async () => {
+          if (!deps.fsa) return;
+          const text = get().exportKBNoteText();
+          const name = await deps.fsa.saveFileAs(`${get().doc.title || '未命名画布'}.kbnote`, text);
+          if (name) set((d) => { d.activeFile = { name }; });
+        },
+        clearActiveFile: () => {
+          set((d) => {
+            d.activeFile = null;
+          });
+        },
+
+        // ================= 附件（OPFS）=================
+        putImageAsset: async (blob) => {
+          if (!deps.storage?.putAsset) return { src: '' };
+          try {
+            const { assetRef } = await deps.storage.putAsset(blob);
+            runCommand({
+              name: 'register-asset',
+              execute: (d) => ({
+                ...d,
+                assetRefs: d.assetRefs.includes(assetRef) ? d.assetRefs : [...d.assetRefs, assetRef],
+              }),
+              undo: (d) => ({ ...d, assetRefs: d.assetRefs.filter((a) => a !== assetRef) }),
+            });
+            return { src: assetRef, assetRef };
+          } catch {
+            return { src: '' };
+          }
         },
       };
     }),

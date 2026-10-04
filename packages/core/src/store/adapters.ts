@@ -26,14 +26,38 @@ export interface DocMeta {
   createdAt: number;
 }
 
+/**
+ * 快照记录元信息（历史版本列表用）。
+ * snapshot 为序列化后的 .kbnote 文本（恢复时经 parseKBNote 校验）。
+ */
+export interface SnapshotMeta {
+  id: string;
+  docId: string;
+  takenAt: number;
+  label: string | null;
+}
+
+/** 快照完整记录（含文本本体）。 */
+export interface SnapshotRecord extends SnapshotMeta {
+  text: string;
+}
+
+/** 回收站文档元信息（比 DocMeta 多一个被删时间）。 */
+export interface TrashDocMeta extends DocMeta {
+  trashedAt: number;
+}
+
 export interface StorageAdapter {
   /** 保存/覆盖整份文档（自动保存防抖 500ms 由调用方控制）。 */
   saveDoc(doc: KBNoteDoc): Promise<void>;
   /** 按 id 加载文档；不存在返回 null。 */
   loadDoc(id: string): Promise<KBNoteDoc | null>;
-  /** 列出全部文档元信息（按 updatedAt 倒序）。 */
+  /** 列出全部文档元信息（按 updatedAt 倒序，不含回收站）。 */
   listDocs(): Promise<DocMeta[]>;
-  /** 删除文档及其索引（附件 Blob 由调用方单独清理）。 */
+  /**
+   * 删除文档。P1 起语义为「移入回收站」：实现方应把整份 doc 拷入 trash 表并打上 trashedAt，
+   * 而非物理删除；物理删除由 purgeTrash 显式触发。
+   */
   deleteDoc(id: string): Promise<void>;
 
   /** 读取附件 Blob（OPFS）。 */
@@ -42,6 +66,25 @@ export interface StorageAdapter {
   putAsset(blob: BlobLike): Promise<{ assetRef: string }>;
   /** 删除附件 Blob。 */
   deleteAsset(assetRef: string): Promise<void>;
+
+  // ---- 可选：自动快照 / 回收站（P1；缺省时对应 store action 安全降级为 no-op）----
+  /** 写入一条快照（实现方负责按 docId 保留最近 N 条、淘汰最旧）。 */
+  saveSnapshot?(docId: string, label: string | null, text: string): Promise<SnapshotMeta>;
+  /** 列出某文档的全部快照（takenAt 倒序）。 */
+  listSnapshots?(docId: string): Promise<SnapshotMeta[]>;
+  /** 读取单条快照全文；不存在返回 null。 */
+  getSnapshot?(id: string): Promise<SnapshotRecord | null>;
+  /** 物理删除一条快照。 */
+  deleteSnapshot?(id: string): Promise<void>;
+
+  /** 列出回收站（trashedAt 倒序）。 */
+  listTrash?(): Promise<TrashDocMeta[]>;
+  /** 从回收站恢复到 docs（取消删除）。 */
+  restoreFromTrash?(id: string): Promise<void>;
+  /** 物理删除回收站中的一份文档（连同其 assetRefs 附件）。 */
+  purgeTrash?(id: string): Promise<void>;
+  /** 清空回收站（物理删除全部）。 */
+  emptyTrash?(): Promise<void>;
 }
 
 // ============ HostAdapter：平台外壳能力（文件选择/打印/分享）============
@@ -90,13 +133,22 @@ export interface AIProvider {
   chat(req: AIChatRequest): Promise<AIChatResponse>;
 }
 
-/** AI 给出的「建议」：新增父子边 / 建议根 / 分组 / 拆块。Schema 校验后才进入 diff。 */
+/** AI 给出的「建议」：新增父子边 / 建议根 / 分组 / 拆块 / 摘要。Schema 校验后才进入 diff。 */
 export interface AISuggestion {
   type: 'add-edge' | 'set-root' | 'group' | 'split-block' | 'summarize';
   /** 建议涉及的节点 id（已知的）。 */
   nodeIds?: string[];
-  /** 建议新增的边（source→target）。 */
+  /** 建议新增的边（source→target）。仅 type=add-edge 使用。 */
   proposedEdges?: Array<{ source: string; target: string; label?: string }>;
+  /**
+   * type=split-block / summarize：建议写入块的文本段落（纯文本，store 包成 Tiptap paragraph）。
+   * type=group：分组块的标题文本。
+   */
+  text?: string;
+  /** type=group：分组容器块标题（缺省用 text 或「分组」）。 */
+  title?: string;
+  /** type=split-block：在该节点之后新建兄弟块；缺省取 nodeIds[0]。 */
+  afterNodeId?: string;
   /** 自然语言说明（UI 展示用）。 */
   reason: string;
 }
@@ -118,6 +170,32 @@ export function applyAIDiff(
 ): KBNoteDoc {
   throw new Error('not implemented: P1 (applyAIDiff)');
 }
+
+// ============ File System Access 活动文件能力（web 注入；core 零 DOM）============
+
+/**
+ * 活动本地文件句柄能力。句柄本体（FileSystemFileHandle）是浏览器对象，
+ * 留在 web 侧并可经 IndexedDB 持久化；core 只持有「文件名」用于标题栏状态。
+ * 不支持 File System Access API 的浏览器整组为 undefined，store 自动降级为纯 IndexedDB 自动保存。
+ */
+export interface FsaCapability {
+  /** 当前浏览器是否支持 File System Access（能力检测，供 UI 降级提示）。 */
+  isSupported(): boolean;
+  /** 弹系统打开框选 .kbnote；返回文件名+文本。取消/不支持为 null。 */
+  pickLocalFile(): Promise<{ name: string; text: string } | null>;
+  /**
+   * 把文本写入「当前活动句柄」（web 内部 500ms 防抖）。
+   * 无活动句柄时返回 false（调用方应维持 Dexie 自动保存）。
+   */
+  writeActiveFile(text: string): Promise<boolean>;
+  /** 弹另存为框落盘；返回最终文件名（含 .kbnote），取消为 null。 */
+  saveFileAs(suggestedName: string, text: string): Promise<string | null>;
+}
+
+// ============ 模板工厂（web 注入；core 只按 id 取用）============
+
+/** 一份模板 = 产出结构完整的全新 KBNoteDoc（id/board 全新）。 */
+export type TemplateFactory = () => KBNoteDoc;
 
 // ============ CollabAdapter（P3 预留，空接口）============
 /**
