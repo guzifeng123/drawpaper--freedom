@@ -25,7 +25,7 @@
 ### 导出同步
 - `svg-export.ts` 与 `PrintSheets.tsx` 均改用 `buildEdgePath`；世界坐标弯折点按 source 节点世界→页本地偏移换算后渲染。
 - 单测断言：svg 含页本地弯折坐标（世界点 (200,200) 经 delta (60,60) → path 含 "260 260"）。
-- 跨页续接：`edgeRectIntersections` 已提供折线 vs 页矩形求交能力；当前 core paginate 仍按端点 clamp 放置续接 marker（成对 token、互指页号不变量不破），按真实折线交点放置留后续（见遗留）。
+- 跨页续接（已补完）：core `paginate/edge-crossing.ts` 逐段把 source 锚点→points→target 锚点折线归属到页；同页段 edgeId 压入整段绘制，跨页段成对 marker，token=`cont:<edgeId>:<seg>`（按段编号），peerPageIndex 互指相邻页；`finalizePages` 保留含 marker 的中间页（无 points 边零回归）。
 
 ## 2. 桌面端文件拖入画布（`editor/canvas/drop-classify.ts` + CanvasEditor）
 - pane `dragover/drop`：阻止默认导航；拖入整画布 ring 高亮。
@@ -46,6 +46,6 @@
 - 沿用既有 `--editor-grid`；弯折手柄用 shadcn/tailwind 蓝色，未新增硬编码色。
 
 ## 6. 遗留
-- 跨页弯折边续接 marker 仍按端点 clamp（几何求交函数已备，接入 core paginate 留后续）。
-- 图片拖入走 dataURL 内联（addImageBlock），OPFS 资产压缩管线对图片的接入留后续；附件类已走 OPFS。
-- 弯折点拖拽仅鼠标/触摸拖动，框选多锚点、Ctrl 多选删点未做。
+- 中间跨页页沿用既有「成对圆圈」续接样式，未重绘跨页连线线段（与无弯折跨页边一致）。
+- 图片拖入走 dataURL 内联，OPFS 资产压缩管线对图片的接入留后续。
+- 弯折点框选多锚点、Ctrl 多选删点未做。
