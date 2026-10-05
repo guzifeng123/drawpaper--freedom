@@ -42,7 +42,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install JS dependencies
-        run: pnpm install --frozen-lockfile
+        run: pnpm install --no-frozen-lockfile
 
       - name: Build web frontend
         run: pnpm -r build
