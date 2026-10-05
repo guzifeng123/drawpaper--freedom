@@ -1,0 +1,116 @@
+name: release-windows
+
+# Builds Windows NSIS installers (x64 + ARM64) and publishes them to a
+# GitHub Release for the pushed tag. Triggered only on v* tags.
+#
+# Strategy: two matrix jobs BUILD the installers and upload them as workflow
+# artifacts (no release creation inside the matrix, to avoid two parallel jobs
+# racing to create the same release). A third `publish` job collects both
+# artifacts and creates the GitHub release.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            rust_target: x86_64-pc-windows-msvc
+            extra_args: '--bundles nsis'
+          - arch: arm64
+            rust_target: aarch64-pc-windows-msvc
+            extra_args: '--bundles nsis --target aarch64-pc-windows-msvc'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+          run_install: false
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Add ARM64 Rust target
+        if: matrix.arch == 'arm64'
+        run: rustup target add aarch64-pc-windows-msvc
+
+      - name: Build web frontend
+        run: pnpm -r build
+
+      - name: Tauri build (NSIS)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: apps/desktop-tauri
+          # Intentionally no tagName / releaseName: we do NOT create the release
+          # here. Two parallel matrix jobs must not race to create the same tag
+          # release; the `publish` job below owns that step.
+          args: ${{ matrix.extra_args }}
+
+      - name: Upload NSIS installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nsis-${{ matrix.arch }}
+          path: |
+            apps/desktop-tauri/src-tauri/target/**/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all installer artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List installers
+        run: |
+          echo "::group::Installers collected"
+          find artifacts -type f -name '*.exe' -print
+          echo "::endgroup::"
+
+      - name: Create prerelease GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: drawpaper ${{ github.ref_name }}
+          # rc / beta / alpha tags are prereleases; final vX.Y.Z is stable.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: |
+            artifacts/nsis-x64/*.exe
+            artifacts/nsis-arm64/*.exe
+          generate_release_notes: false
+          body: |
+            ## drawpaper ${{ github.ref_name }}
+
+            Windows desktop installers (NSIS, Win10/11).
+
+            - `drawpaper_*_x64-setup.exe` — 64-bit Intel/AMD
+            - `drawpaper_*_aarch64-setup.exe` — ARM64 (Copilot+, Surface Pro X, etc.)
+
+            Local-first: all data stays on-device. No account, no cloud sync.

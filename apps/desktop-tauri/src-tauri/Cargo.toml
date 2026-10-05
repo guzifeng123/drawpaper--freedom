@@ -24,6 +24,9 @@ tauri-plugin-opener = "2.0"
 # a second .kbnote file while the app is already running; forwards the argv path
 # to the running instance via the `second-instance` event.
 tauri-plugin-single-instance = "2.0"
+# Native notifications for save success/failure/migration hints. On Windows
+# this posts to the Action Center; the web side falls back to toast in browsers.
+tauri-plugin-notification = "2.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Recents list / auto-save folder metadata lives in a small JSON file next to
@@ -31,6 +34,12 @@ serde_json = "1"
 dirs = "5"
 log = "0.4"
 env_logger = "0.11"
+
+# NOTE on tauri-plugin-updater: intentionally NOT included.
+# Auto-update requires (1) a TAURI_SIGNING_PRIVATE_KEY at build time and
+# (2) a hosted `latest.json` update endpoint. We have neither in this repo.
+# Enabling the plugin without a valid pubkey would break `tauri build`.
+# See docs/p2-tauri-ci.md §Updater for the onboarding checklist.
 
 [features]
 # This feature is used for production builds where `devPath` points to the filesystem

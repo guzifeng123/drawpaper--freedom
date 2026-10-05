@@ -62,6 +62,16 @@ pnpm e2e            # Playwright（在 packages/web 下，自动起 dev server�
 
 桌面外壳见 `apps/desktop-tauri/README.md`（Linux 下 cargo check 需 GTK/webkit2gtk 开发库，Windows 出包无需）。
 
+## 状态 / 获取安装包
+
+- **Web PWA**：浏览器直接打开部署地址即可，可「添加到主屏幕」离线使用。
+- **Windows 桌面**：GitHub Release 的预发布页提供 NSIS 安装包（Win10/11 x64 与 ARM64）。
+  打 tag `v*` 触发 `.github/workflows/release-windows.yml` 自动构建；tag 含 `-`（如 `v0.1.0-rc.1`）标记为 prerelease。
+- **Android 平板**：每次 push 到 feat/develop 会由 `android-debug.yml` 产出一个 unsigned debug APK（workflow artifact，14 天内下载）。侧载到平板即可测试；未签名、不上架。
+- **CI**：`.github/workflows/web-ci.yml` 在每次 push/PR 跑 build/typecheck/lint/单测/e2e/PWA precache 守门。
+
+**本期明确不做**：iOS（需 Apple Developer 账号 + 签名证书 + macOS runner）、Yjs/CRDT 实时协作（仅预留 `CollabAdapter` 接口）、手绘墨迹块（需手写笔硬件预研）、自动更新（无签名私钥与更新服务器，见 `docs/p2-tauri-ci.md` §3）。
+
 ## 目录
 
 ```

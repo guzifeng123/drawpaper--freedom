@@ -1,0 +1,82 @@
+name: android-debug
+
+# Builds an unsigned Android debug APK from the Capacitor shell. Not signed,
+# not uploaded to Play Store — just an installable artifact for manual testing
+# on a tablet. Runs on every push to feat/**/fix/**/develop (same trigger as
+# web-ci) so we can catch breakage early.
+
+on:
+  push:
+    branches:
+      - develop
+      - 'feat/**'
+      - 'fix/**'
+  pull_request:
+    branches:
+      - develop
+
+concurrency:
+  group: android-debug-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+          run_install: false
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build web frontend
+        run: pnpm -r build
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android licenses
+        run: yes | sdkmanager --licenses || true
+
+      - name: Setup Capacitor CLI
+        working-directory: apps/mobile-capacitor
+        run: pnpm install --ignore-workspace
+
+      - name: Add Android platform (CI ephemeral)
+        working-directory: apps/mobile-capacitor
+        run: npx cap add android
+
+      - name: Sync web bundle into Android project
+        working-directory: apps/mobile-capacitor
+        run: npx cap sync android
+
+      - name: Gradle assembleDebug
+        working-directory: apps/mobile-capacitor/android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload app-debug.apk
+        uses: actions/upload-artifact@v4
+        with:
+          name: drawpaper-android-debug
+          path: apps/mobile-capacitor/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14

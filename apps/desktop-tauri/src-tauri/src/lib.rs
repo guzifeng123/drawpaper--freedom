@@ -18,10 +18,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use tauri::{
-    Emitter, Manager, Menu, MenuEvent, Submenu, AboutMetadata, WebviewUrl, WebviewWindowBuilder,
-};
+use tauri::{Emitter, Manager, Menu, MenuEvent, Submenu, AboutMetadata};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_notification::NotificationExt;
 
 // ---------------------------------------------------------------------------
 // State
@@ -30,6 +29,10 @@ use tauri_plugin_dialog::DialogExt;
 const RECENTS_CAP: usize = 10;
 const RECENTS_FILE: &str = "drawpaper-recents.json";
 const AUTOSAVE_FILE: &str = "drawpaper-autosave.json";
+/// Backup directory under app_data_dir: `backups/{title}_备份_{ts}.kbnote`.
+const BACKUP_DIR: &str = "backups";
+/// Keep at most N backups per app launch (pruned oldest-first on each write).
+const BACKUP_KEEP: usize = 20;
 
 /// Per-session mutable state. Accessed from commands via `State<AppState>`.
 #[derive(Default)]
@@ -327,6 +330,92 @@ fn auto_save_doc(
 }
 
 // ---------------------------------------------------------------------------
+// Native notifications + auto-backup (P2 收尾).
+//
+// The web side already has an in-app toast; on the desktop shell we ALSO post
+// a native Windows Action Center notification so the user sees "保存成功" even
+// when the window is backgrounded. Browsers fall back to the existing toast.
+// ---------------------------------------------------------------------------
+
+/// Post a native system notification. No-op / best-effort on failure (e.g.
+/// user revoked notification permission) — never rejects the caller.
+#[tauri::command]
+fn notify(app: tauri::AppHandle, title: String, body: String) {
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .unwrap_or_else(|e| log::warn!("notification failed: {e}"));
+}
+
+/// Sanitize a doc title into a filesystem-safe filename stem.
+fn safe_stem(title: &str) -> String {
+    let cleaned: String = title
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            c => c,
+        })
+        .collect();
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        "untitled".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Write a timestamped backup copy under app_data_dir/backups/ and prune to
+/// the newest BACKUP_KEEP files. Called by the web side after a successful save
+/// (debounced by the caller, same 500ms rhythm as OPFS autosave).
+///
+/// This is the "real folder backup" safety net on top of Dexie: even if the
+/// browser storage is corrupted/cleared, the user has N on-disk .kbnote
+/// snapshots they can double-click to reopen.
+#[tauri::command]
+fn backup_doc(
+    app: tauri::AppHandle,
+    title: String,
+    text: String,
+) -> Result<String, String> {
+    let backup_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir: {e}"))?
+        .join(BACKUP_DIR);
+    fs::create_dir_all(&backup_dir).map_err(|e| format!("mkdir backups: {e}"))?;
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let name = format!("{}_备份_{ts}.kbnote", safe_stem(&title));
+    let target = backup_dir.join(&name);
+    fs::write(&target, text).map_err(|e| format!("backup write: {e}"))?;
+
+    // Prune: list *.kbnote in backup_dir, sort by mtime, drop oldest beyond KEEP.
+    if let Ok(mut entries) = fs::read_dir(&backup_dir) {
+        let mut files: Vec<(PathBuf, std::time::SystemTime)> = entries
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("kbnote"))
+            .filter_map(|e| {
+                let p = e.path();
+                let mtime = fs::metadata(&p).ok()?.modified().ok()?;
+                Some((p, mtime))
+            })
+            .collect();
+        files.sort_by_key(|(_, mtime)| *mtime);
+        let excess = files.len().saturating_sub(BACKUP_KEEP);
+        for (old, _) in files.into_iter().take(excess) {
+            let _ = fs::remove_file(old);
+        }
+    }
+
+    Ok(target.to_string_lossy().to_string())
+}
+
+// ---------------------------------------------------------------------------
 // Menu
 // ---------------------------------------------------------------------------
 
@@ -452,6 +541,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // A second instance was launched (e.g. user double-clicked another
             // .kbnote). Forward the argv path to the already-running window.
@@ -501,6 +591,8 @@ pub fn run() {
             get_startup_file,
             choose_auto_save_dir,
             auto_save_doc,
+            notify,
+            backup_doc,
         ])
         .run(tauri::generate_context!())
         .expect("error while running drawpaper desktop shell");
