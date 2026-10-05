@@ -53,15 +53,38 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Accept Android licenses
-        run: yes | sdkmanager --licenses || true
+      # android-actions/setup-android@v3 targets the Node 20 runtime which is
+      # being force-upgraded to Node 24 on hosted runners (deprecation Sep 2025)
+      # and fails at the action step. Install cmdline-tools directly instead —
+      # deterministic and version-pinned.
+      - name: Install Android cmdline-tools
+        shell: bash
+        run: |
+          set +e
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          export ANDROID_HOME="$ANDROID_SDK_ROOT"
+          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+          if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            curl -fsSL -o /tmp/cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip 2>&1 | tee /tmp/sdk-setup.log
+            unzip -q /tmp/cmdtools.zip -d /tmp/cmdtools
+            mv /tmp/cmdtools/cmdline-tools "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          fi
+          SDKMGR="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMGR" --licenses 2>&1 | tee -a /tmp/sdk-setup.log
+          "$SDKMGR" "platform-tools" "platforms;android-34" "build-tools;34.0.0" 2>&1 | tee -a /tmp/sdk-setup.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" != "0" ]; then
+            tail -n 40 /tmp/sdk-setup.log | while IFS= read -r line; do
+              echo "::error title=android-sdk-setup::${line:0:900}"
+            done
+            exit "$code"
+          fi
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
 
       - name: Setup Capacitor CLI
         working-directory: apps/mobile-capacitor
-        run: pnpm install --ignore-workspace
+        run: pnpm install --ignore-workspace --registry=https://registry.npmjs.org/
 
       - name: Add Android platform (CI ephemeral)
         working-directory: apps/mobile-capacitor

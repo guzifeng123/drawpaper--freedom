@@ -1,16 +1,16 @@
 name: release-windows
 
 # Builds Windows NSIS installers (x64 + ARM64) and publishes them to a
-# GitHub Release for the pushed tag. Triggered only on v* tags.
+# GitHub Release for the pushed tag.
 #
 # Strategy: two matrix jobs run the Tauri CLI directly to BUILD the installers
 # and upload them as workflow artifacts (the CLI build does not touch GitHub
 # releases, so parallel jobs cannot race to create the same release). A third
 # `publish` job collects both artifacts and creates the GitHub release.
 #
-# The build jobs also run on feat/** pushes and manual dispatch so the Windows
-# toolchain is exercised BEFORE a release tag is cut. The publish job only runs
-# on tag pushes.
+# The build jobs also run on feat/p2-tauri-ci pushes and manual dispatch so the
+# Windows toolchain is exercised BEFORE a release tag is cut. The publish job
+# only runs on tag pushes.
 
 on:
   push:
@@ -70,7 +70,26 @@ jobs:
 
       - name: Tauri build (NSIS, ${{ matrix.arch }})
         working-directory: apps/desktop-tauri
-        run: pnpm exec tauri build ${{ matrix.extra_args }}
+        shell: bash
+        run: |
+          set +e
+          # Invoke the CLI binary directly: the desktop shell lives outside the
+          # pnpm workspace, so `pnpm exec` resolves against the root and fails
+          # to find the local tauri binary.
+          ./node_modules/.bin/tauri build --ci ${{ matrix.extra_args }} 2>&1 | tee /tmp/tauri-build.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" != "0" ]; then
+            echo "::group::tauri build failure tail"
+            tail -n 80 /tmp/tauri-build.log
+            echo "::endgroup::"
+            # Surface the tail as annotations (readable on the run page even
+            # without API access to raw logs).
+            tail -n 40 /tmp/tauri-build.log | while IFS= read -r line; do
+              msg="${line:0:900}"
+              echo "::error title=tauri-build-${{ matrix.arch }}::${msg}"
+            done
+            exit "$code"
+          fi
 
       - name: Upload NSIS installer artifact
         uses: actions/upload-artifact@v4
