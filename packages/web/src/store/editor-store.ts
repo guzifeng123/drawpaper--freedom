@@ -90,7 +90,11 @@ function startSearchSync(): void {
     if (state.doc !== prev.doc) {
       if (rebuildTimer !== undefined) clearTimeout(rebuildTimer);
       rebuildTimer = setTimeout(() => {
+        const pt = performance.now();
         index = buildIndex(state.doc);
+        const dt = performance.now() - pt;
+        const w = window as unknown as { __perfStages?: Record<string, number> };
+        if (w.__perfStages) w.__perfStages.buildIndex = dt;
         editorStore.getState().setSearchIndex(index);
         const q = editorStore.getState().searchQuery;
         if (q) editorStore.getState().setSearchResults(searchDocs(index, q));

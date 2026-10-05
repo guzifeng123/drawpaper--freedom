@@ -57,6 +57,10 @@ const LayoutGhostNode = memo(function LayoutGhostNode() {
 
 const allNodeTypes = { ...nodeTypes, 'layout-ghost': LayoutGhostNode };
 
+/** 节点数超过此阈值时不挂载 MiniMap：MiniMap 为每个节点渲染一个 SVG 元素，
+ *  2000 节点 = 2000+ SVG DOM，首屏挂载即可阻塞主线程 ~60s。大文档下以最小代价关闭概览。 */
+const MINIMAP_NODE_LIMIT = 300;
+
 function CanvasInner({ api }: { api: EditorApi }) {
   const snap = useEditorSnapshot();
   const rf = useReactFlow();
@@ -367,14 +371,16 @@ function CanvasInner({ api }: { api: EditorApi }) {
           </Panel>
         )}
 
-        <MiniMap
-          pannable
-          zoomable
-          position="bottom-right"
-          bgColor="hsl(var(--canvas-bg))"
-          maskColor="hsl(var(--background) / 0.7)"
-          nodeColor={(n) => (n.type === 'layout-ghost' ? '#93c5fd' : 'hsl(var(--node-border))')}
-        />
+        {snap.doc.nodes.length <= MINIMAP_NODE_LIMIT && (
+          <MiniMap
+            pannable
+            zoomable
+            position="bottom-right"
+            bgColor="hsl(var(--canvas-bg))"
+            maskColor="hsl(var(--background) / 0.7)"
+            nodeColor={(n) => (n.type === 'layout-ghost' ? '#93c5fd' : 'hsl(var(--node-border))')}
+          />
+        )}
 
         {/* 对齐参考线 */}
         {guideLines.map((l, i) =>

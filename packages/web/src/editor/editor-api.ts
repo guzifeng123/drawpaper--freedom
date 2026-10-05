@@ -96,6 +96,11 @@ export interface EditorSnapshot {
    * store 侧接线由 Wave4 完成；editor 仅消费。
    */
   manualFixed?: ReadonlySet<string>;
+  /**
+   * 每个节点的直接子节点数（source=父）。一次扫边预计算，
+   * 供折叠角标等高频组件 O(1) 读取，避免在 selector 里对全量边 reduce。
+   */
+  childCount?: Record<string, number>;
 }
 
 /** 块样式补丁（外观操作：8 色标签色点 = bg；文字色 = color）。 */
