@@ -201,13 +201,166 @@ export function linksAffectedByDeleteNode(
   nodeId: string,
   links: readonly DocRefLink[],
 ): AffectedLinks {
+  return linksAffectedByDeleteNodes(docId, new Set([nodeId]), links);
+}
+
+/**
+ * 删除一批块前（多选删除）：聚合同一文档内多个待删块的影响。
+ * 出链 = 源在被删集合内；入链 = 目标在被删集合内。一条链接不会同时命中两侧。
+ */
+export function linksAffectedByDeleteNodes(
+  docId: string,
+  nodeIds: ReadonlySet<string>,
+  links: readonly DocRefLink[],
+): AffectedLinks {
   const outgoing: DocRefLink[] = [];
   const incoming: DocRefLink[] = [];
   for (const l of links) {
-    const out = l.sourceDocId === docId && l.sourceNodeId === nodeId;
-    const inc = l.targetDocId === docId && l.targetNodeId === nodeId;
+    const out = l.sourceDocId === docId && nodeIds.has(l.sourceNodeId);
+    const inc = l.targetDocId === docId && nodeIds.has(l.targetNodeId);
     if (out) outgoing.push(l);
     else if (inc) incoming.push(l);
   }
   return { outgoing, incoming };
+}
+
+/** Tiptap 文本节点（leaf：有 text、无 content）的宽松形状。 */
+interface TextNodeJson {
+  type?: string;
+  text?: string;
+  marks?: DocRefMarkJson[];
+  content?: TextNodeJson[];
+}
+
+/**
+ * 递归遍历 Tiptap JSON 树，对每个「带 marks 的文本叶子」调用 visitTextNode。
+ * 文本叶子无 content 子节点（Tiptap 约定）；容器节点递归其 content。
+ * visitTextNode 返回新节点表示有改动、返回原引用表示无改动。
+ * 无改动的子树/节点共享原引用（结构共享，零拷贝热路径）。
+ */
+function walkTextNodes(
+  node: unknown,
+  visitTextNode: (n: TextNodeJson) => TextNodeJson,
+): { out: unknown; changed: boolean } {
+  if (!node || typeof node !== 'object') return { out: node, changed: false };
+  const n = node as TextNodeJson;
+  if (typeof n.text === 'string') {
+    const v = visitTextNode(n);
+    return { out: v, changed: v !== n };
+  }
+  let changed = false;
+  let next: TextNodeJson[] | undefined;
+  if (Array.isArray(n.content)) {
+    next = new Array(n.content.length);
+    for (let i = 0; i < n.content.length; i++) {
+      const r = walkTextNodes(n.content[i], visitTextNode);
+      next[i] = r.out as TextNodeJson;
+      if (r.changed) changed = true;
+    }
+  }
+  return { out: changed ? { ...n, content: next } : n, changed };
+}
+
+/** 级联移除 / 重命名变换的结果。 */
+export interface NodeTransformResult {
+  /** 变换后的新文档（无改动字段共享原引用）。 */
+  doc: KBNoteDoc;
+  /** 实际被改写的 docRef mark 条数。 */
+  count: number;
+}
+
+/**
+ * 级联移除：从文档全部块正文中摘除「link id 命中待删集合」的 docRef mark。
+ *
+ * 用途：删除块时用户选「一并移除这些链接」——把指向/发自该块的 mark 从源文档里剥掉。
+ * - link id 由 (sourceDocId, sourceNodeId, targetDocId, targetNodeId) 四元组派生，
+ *   与 extractDocLinks 派生口径一致，因此影响分析给出的 id 集合可直接命中。
+ * - 只摘 mark、保留文本（`[[...]]` 退化为纯文本，不静默吞字）；
+ * - 本函数不维护 doc.links：调用方在变换后用 extractDocLinks 重建（与 flushSave 同口径）。
+ * - 纯 JSON 树遍历，零 DOM、零 Tiptap 依赖。
+ */
+export function stripDocRefMarks(
+  doc: KBNoteDoc,
+  removeLinkIds: ReadonlySet<string>,
+): NodeTransformResult {
+  let count = 0;
+  const nodes = doc.nodes.map((node) => {
+    const data = node.content?.data;
+    if (!data || typeof data !== 'object') return node;
+    const { out, changed } = walkTextNodes(data, (n) => {
+      if (!Array.isArray(n.marks)) return n;
+      let selfChanged = false;
+      const kept: DocRefMarkJson[] = [];
+      for (const m of n.marks) {
+        if (m?.type === DOCREF_MARK_NAME && m.attrs) {
+          const td = m.attrs.targetDocId;
+          const tn = m.attrs.targetNodeId;
+          if (typeof td === 'string' && typeof tn === 'string' && td && tn) {
+            const id = deriveLinkId(doc.id, node.id, td, tn);
+            if (removeLinkIds.has(id)) {
+              count++;
+              selfChanged = true;
+              continue;
+            }
+          }
+        }
+        kept.push(m);
+      }
+      if (!selfChanged) return n;
+      const clone: TextNodeJson = { ...n };
+      if (kept.length > 0) clone.marks = kept;
+      else delete clone.marks;
+      return clone;
+    });
+    if (!changed) return node;
+    return { ...node, content: { ...node.content, data: out } };
+  });
+  return { doc: { ...doc, nodes }, count };
+}
+
+/**
+ * 重命名重索引：目标块改名后，把文档内所有指向 (targetDocId, targetNodeId) 的
+ * docRef mark 批量改写：
+ * - attrs.targetTitle 始终刷新为新标题（反链索引/悬挂展示的快照来源）；
+ * - 若可见文本仍是标准 `[[...]]` 包裹（未被用户自定义改过），同步改写为 `[[新标题]]`，
+ *   保证 chip 展示文本与新标题一致；用户改过的自定义文本保持不动。
+ *
+ * 配合 extractDocLinks：变换后重建 doc.links 即得到刷新过 targetTitle 的反链索引。
+ */
+export function retitleDocRefMarks(
+  doc: KBNoteDoc,
+  targetDocId: string,
+  targetNodeId: string,
+  newTitle: string,
+): NodeTransformResult {
+  const wrapped = `[[${newTitle}]]`;
+  let count = 0;
+  const nodes = doc.nodes.map((node) => {
+    const data = node.content?.data;
+    if (!data || typeof data !== 'object') return node;
+    const { out, changed } = walkTextNodes(data, (n) => {
+      if (!Array.isArray(n.marks)) return n;
+      let selfChanged = false;
+      let oldTitle = '';
+      const marks = n.marks.map((m) => {
+        if (m?.type !== DOCREF_MARK_NAME || !m.attrs) return m;
+        if (m.attrs.targetDocId !== targetDocId || m.attrs.targetNodeId !== targetNodeId) return m;
+        count++;
+        selfChanged = true;
+        oldTitle = typeof m.attrs.targetTitle === 'string' ? m.attrs.targetTitle : '';
+        return { ...m, attrs: { ...m.attrs, targetTitle: newTitle } };
+      });
+      if (!selfChanged) return n;
+      let text = n.text;
+      // 可见文本：把 mark 包裹里的旧标题子串换成新标题（兼容「看 [[旧]]」这类
+      // mark 覆盖整段的情形）；旧标题未知或文本已被自定义改过则不动文本。
+      if (typeof text === 'string' && oldTitle) {
+        text = text.split(`[[${oldTitle}]]`).join(wrapped);
+      }
+      return { ...n, text, marks };
+    });
+    if (!changed) return node;
+    return { ...node, content: { ...node.content, data: out } };
+  });
+  return { doc: { ...doc, nodes }, count };
 }

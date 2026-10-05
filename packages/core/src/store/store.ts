@@ -30,7 +30,7 @@ import type { CycleIssue, MultiParentIssue } from '../graph/index.js';
 import { layoutTree } from '../layout/index.js';
 import type { LayoutInput, LayoutPosition, MeasuredSize } from '../layout/index.js';
 import { serializeKBNote, parseKBNote } from '../serialize/index.js';
-import { extractDocLinks } from '../links/index.js';
+import { extractDocLinks, stripDocRefMarks, retitleDocRefMarks } from '../links/index.js';
 
 /** 每份文档自动快照保留的最近条数（超出淘汰最旧）。 */
 export const SNAPSHOT_KEEP = 20;
@@ -267,6 +267,17 @@ export interface EditorActions {
   deleteNode(id: string): void;
   /** 删除多个块。 */
   deleteNodes(ids: string[]): void;
+  /**
+   * Wave7 P2.1：删除块并「一并移除链接」——先摘同文档内指向被删块的 docRef mark，
+   * 再删块；两步打包为一次可撤销 macro（删块 + mark 清理同进同退）。
+   * 跨文档（其他 Dexie 文档里的源 mark）由 web 存储层级联并快照，不进本 undo 栈。
+   */
+  deleteNodesWithLinkCleanup(ids: string[], stripLinkIds: ReadonlySet<string>): void;
+  /**
+   * Wave7 P2.1 重命名追踪：把当前文档内指向 targetNodeId 的 docRef mark
+   * （可见文本 + attrs.targetTitle）刷新为新标题。可撤销命令；跨文档源 mark 由 web 存储层回写。
+   */
+  retitleSelfMarks(targetNodeId: string, newTitle: string): void;
   /** 更新块内富文本 content（防抖合并）。 */
   updateContent(id: string, data: unknown): void;
   /** 移动块。 */
@@ -961,6 +972,46 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
               nodes: [...d.nodes, ...removedNodes],
               edges: [...d.edges, ...removedEdges],
             }),
+          });
+        },
+        deleteNodesWithLinkCleanup: (ids, stripLinkIds) => {
+          if (ids.length === 0) return;
+          const idSet = new Set(ids);
+          const before = get().doc;
+          const removedNodes = before.nodes.filter((n) => idSet.has(n.id));
+          const removedEdges = before.edges.filter((e) => idSet.has(e.source) || idSet.has(e.target));
+          // 第一步：摘同文档内指向被删块的 docRef mark（core 纯函数，结构共享无改动时自收敛）。
+          const stripped = stripDocRefMarks(before, stripLinkIds);
+          runMacro('delete-nodes-with-link-cleanup', [
+            {
+              name: 'strip-incoming-docref-marks',
+              execute: () => stripped.doc,
+              // 逆操作：还原到 macro 前的整份文档（mark 复原）。
+              undo: () => before,
+            },
+            {
+              name: 'delete-nodes',
+              execute: (d) => ({
+                ...d,
+                nodes: d.nodes.filter((n) => !idSet.has(n.id)),
+                edges: d.edges.filter((e) => !idSet.has(e.source) && !idSet.has(e.target)),
+              }),
+              undo: (d) => ({
+                ...d,
+                nodes: [...d.nodes, ...removedNodes],
+                edges: [...d.edges, ...removedEdges],
+              }),
+            },
+          ]);
+        },
+        retitleSelfMarks: (targetNodeId, newTitle) => {
+          const before = get().doc;
+          const { doc: next, count } = retitleDocRefMarks(before, before.id, targetNodeId, newTitle);
+          if (count === 0) return;
+          runCommand({
+            name: 'retitle-self-marks',
+            execute: () => next,
+            undo: () => before,
           });
         },
         updateContent: (id, data) => {

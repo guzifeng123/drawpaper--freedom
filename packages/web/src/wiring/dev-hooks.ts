@@ -4,6 +4,7 @@ import { editorStore } from '@/store/editor-store';
 import { getAsset, isOpfsAvailable } from '@/storage/opfs';
 import { loadBacklinks } from '@/storage/backlinks';
 import { mountOverviewDev, unmountOverviewDev } from '@/overview/dev-mount';
+import { requestDeleteNodes } from './block-delete-guard';
 
 /**
  * DEV-only 测试钩子（window.__drawpaper__）。
@@ -51,6 +52,9 @@ export interface DrawpaperDevHook {
   exportCurrent(): string;
   /** 查询指向 (docId, nodeId?) 的反链条目（来源文档/块标题）。 */
   backlinksTo(docId: string, nodeId?: string | null): Promise<unknown[]>;
+  // ---- Wave7 P2.1 删块反链影响：e2e 走守卫入口（与键盘/hover 工具条同一函数）----
+  /** 经反链影响守卫请求删除一批块（无影响直删；有影响弹确认框）。 */
+  deleteBlocksGuarded(ids: string[]): Promise<void>;
   // ---- Wave6b 全局知识图谱总览（DEV-only，供 e2e 临时挂载；Wave7 由 App 正式挂载）----
   /** 临时挂载只读全局总览画布（全屏 fixed 容器）。 */
   mountOverviewDev(): void;
@@ -81,6 +85,7 @@ const WHITELIST = new Set([
   'addNodes',
   'addEdge',
   'deleteNodes',
+  'updateContent',
   'undo',
   'redo',
   'previewLayout',
@@ -203,6 +208,9 @@ export function installDevHooks(): void {
     },
     async backlinksTo(docId: string, nodeId: string | null = null) {
       return loadBacklinks(editorStore.getState().doc, docId, nodeId);
+    },
+    deleteBlocksGuarded(ids: string[]) {
+      return requestDeleteNodes(editorStore, ids);
     },
     mountOverviewDev() {
       mountOverviewDev();

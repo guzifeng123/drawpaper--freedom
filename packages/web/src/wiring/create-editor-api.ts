@@ -14,6 +14,7 @@ import type {
 } from '@/editor/editor-api';
 import type { ConflictBridge } from './conflict-bridge';
 import { getWiringUi } from './ui-store';
+import { requestDeleteNodes } from './block-delete-guard';
 
 /**
  * createEditorApi —— 把 C 的真实 EditorStore 适配为 D 的结构型 EditorApi。
@@ -104,7 +105,8 @@ export function createEditorApi(store: EditorStoreApi, bridge: ConflictBridge): 
     addNode: (type: BlockType, x, y) => store.getState().addNode(type, x, y),
     addNodes: (nodes) => store.getState().addNodes(nodes),
     addImageBlock: (dataUrl, x, y) => store.getState().addImageBlock(dataUrl, x, y),
-    deleteNodes: (ids) => store.getState().deleteNodes(ids),
+    // Wave7 P2.1：删块先走反链影响守卫——无影响直删，有影响弹确认框。
+    deleteNodes: (ids) => void requestDeleteNodes(store, ids),
     updateContent: (id, data) => store.getState().updateContent(id, data),
     setBlockType: (id, type) => store.getState().setBlockType(id, type),
     moveNode: (id, x, y) => store.getState().moveNode(id, x, y),

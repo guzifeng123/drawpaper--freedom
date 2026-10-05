@@ -1,4 +1,4 @@
-import { useMemo, useEffect } from 'react';
+import { useMemo, useEffect, useRef } from 'react';
 import { editorStore, conflictBridge, hostAdapter } from '@/store/editor-store';
 import { useEditorStore } from '@/store';
 import { createEditorApi } from '@/wiring/create-editor-api';
@@ -14,6 +14,7 @@ import { SearchPanel } from '@/panels/SearchPanel';
 import { OutlinePanel } from '@/panels/OutlinePanel';
 import { TagFilterBar } from '@/panels/TagFilterBar';
 import { BacklinksPanel } from '@/panels/BacklinksPanel';
+import { BlockDeleteConfirmDialog } from '@/panels/BlockDeleteConfirmDialog';
 import { Toaster } from '@/panels/lib/toast';
 import { AiPanel } from '@/ai/AiPanel';
 import { setDocRefClickHandler, installDocRefClickDelegate, setDanglingTargets, applyDanglingClasses, docRefTargetKey } from '@/editor/tiptap/doc-ref-mark';
@@ -21,6 +22,7 @@ import { OverviewCanvas } from '@/overview/OverviewCanvas';
 import { DexieOverviewProvider } from '@/overview/DexieOverviewProvider';
 import { db } from '@/storage/db';
 import { findDanglingLinks } from '@drawpaper/core';
+import { syncBacklinkTitles } from '@/storage/link-writes';
 import {
   ExportDialog,
   PageBreakOverlay,
@@ -121,6 +123,24 @@ export default function App() {
     observer.observe(document.body, { childList: true, subtree: true });
     return () => observer.disconnect();
   }, []);
+
+  // Wave7 P2.1 重命名追踪：每次保存成功后对账——目标块改名则跨文档批量回写
+  // 所有引用它的 chip 文本 / attrs.targetTitle / links 索引（存储层级联 + 快照）。
+  const saveState = useEditorStore((s) => s.saveState);
+  const lastSavedDocRef = useRef<unknown>(null);
+  useEffect(() => {
+    if (saveState !== 'saved') return;
+    const cur = editorStore.getState().doc;
+    // 仅在文档引用真正变化（新一次落盘）后跑一次，避免重复对账。
+    if (lastSavedDocRef.current === cur) return;
+    lastSavedDocRef.current = cur;
+    void syncBacklinkTitles(cur).then((renames) => {
+      // 当前文档自身的自引用 mark：走内存命令回写（可撤销、当帧刷新 chip）。
+      for (const [nodeId, newTitle] of renames) {
+        editorStore.getState().retitleSelfMarks(nodeId, newTitle);
+      }
+    });
+  }, [saveState]);
 
   // 导出数据流
   const { result, sheetsVisible, actions, scope, setScope, busy } = useExportModel(panelsApi);
@@ -279,6 +299,8 @@ export default function App() {
 
       {/* 全局 toast（editor 与 panels 共用） */}
       <Toaster />
+      {/* Wave7 P2.1：删块反链影响确认框（有 incoming/outgoing 链接时才弹出） */}
+      <BlockDeleteConfirmDialog />
     </div>
   );
 }
