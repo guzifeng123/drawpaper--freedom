@@ -73,7 +73,12 @@ export function createBlockEditor(opts: CreateBlockEditorOptions): Editor {
       TaskItem.configure({ nested: true }),
       MarkdownInputRules,
       // P1：表格（可编辑，Tab 跳格走 Tiptap 自带 handleTabNext/Prev）
-      Table.configure({ resizable: false, HTMLAttributes: { class: 'drawpaper-table' } }),
+      // allowTableNodeSelection：允许拖选多单元格（CellSelection）以支持合并/拆分。
+      Table.configure({
+        resizable: false,
+        allowTableNodeSelection: true,
+        HTMLAttributes: { class: 'drawpaper-table' },
+      }),
       TableRow,
       TableHeader,
       TableCell,
@@ -104,7 +109,11 @@ export function getStaticExtensions(): readonly unknown[] {
     TaskList,
     TaskItem.configure({ nested: true }),
     // P1 静态渲染同样需要 table / codeBlock 扩展，才能输出 <table> 与 hljs class。
-    Table.configure({ resizable: false, HTMLAttributes: { class: 'drawpaper-table' } }),
+    Table.configure({
+      resizable: false,
+      allowTableNodeSelection: true,
+      HTMLAttributes: { class: 'drawpaper-table' },
+    }),
     TableRow,
     TableHeader,
     TableCell,

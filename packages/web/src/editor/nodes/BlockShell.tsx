@@ -7,6 +7,7 @@ import { createBlockEditor } from '../tiptap/createBlockEditor';
 import { SlashMenu, type SlashCommand } from '../tiptap/slash-menu';
 import { BlockHoverToolbar } from './block-hover-toolbar';
 import { TableToolbar } from './table-toolbar';
+import { SourceHandles as ConnectHandles } from './ConnectHandle';
 import type { AppNode } from './types';
 
 /**
@@ -167,11 +168,10 @@ export const BlockShell = memo(function BlockShell({
         }}
       />
 
-      {/* 四向 Handle：右/下出（source），左/上入（target） */}
-      <Handle type="source" position={Position.Right} className="!h-2 !w-2 !bg-slate-400" />
-      <Handle type="source" position={Position.Bottom} className="!h-2 !w-2 !bg-slate-400" />
+      {/* 四向 Handle：右/下出（source，ConnectHandle 支持长按拖连），左/上入（target） */}
       <Handle type="target" position={Position.Left} className="!h-2 !w-2 !bg-slate-400" />
       <Handle type="target" position={Position.Top} className="!h-2 !w-2 !bg-slate-400" />
+      <ConnectHandles nodeId={block.id} />
 
       {/* hover / 选中工具条 */}
       <NodeToolbar position={Position.Top} align="start" isVisible={selected} className="absolute -top-9 left-0">
