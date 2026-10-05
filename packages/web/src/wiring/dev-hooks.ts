@@ -1,10 +1,11 @@
-import type { KBNoteDoc, DocRefLink } from '@drawpaper/core';
+import type { KBNoteDoc, DocRefLink, PaginateResult } from '@drawpaper/core';
 import { parseKBNote, KBNoteFileError, serializeKBNote } from '@drawpaper/core';
 import { editorStore } from '@/store/editor-store';
 import { getAsset, isOpfsAvailable } from '@/storage/opfs';
 import { loadBacklinks } from '@/storage/backlinks';
 import { mountOverviewDev, unmountOverviewDev } from '@/overview/dev-mount';
 import { requestDeleteNodes } from './block-delete-guard';
+import { buildPagesSvgAsync } from '@/export/svg-export';
 
 /**
  * DEV-only 测试钩子（window.__drawpaper__）。
@@ -60,6 +61,12 @@ export interface DrawpaperDevHook {
   mountOverviewDev(): void;
   /** 卸载临时总览容器。 */
   unmountOverviewDev(): void;
+  // ---- Wave7 image-opfs：e2e 断言 SVG 导出内嵌图片 ----
+  /**
+   * 用真实 SVG 导出管线（buildPagesSvgAsync）把当前文档构建成 SVG 字符串数组，
+   * OPFS 图片已被读成 data: URI 内嵌。供 e2e 断言「导出 SVG 含该图片」。
+   */
+  buildSvgPagesDev(): Promise<string[]>;
 }
 
 declare global {
@@ -217,6 +224,31 @@ export function installDevHooks(): void {
     },
     unmountOverviewDev() {
       unmountOverviewDev();
+    },
+    // Wave7 image-opfs
+    async buildSvgPagesDev() {
+      const doc = editorStore.getState().doc;
+      // 造单页 PaginateResult：全部节点按世界坐标落一页，跑真实 SVG 构建 + OPFS 图片解析。
+      const offsets: Record<string, { x: number; y: number }> = {};
+      for (const n of doc.nodes) offsets[n.id] = { x: n.x, y: n.y };
+      const result: PaginateResult = {
+        pages: [
+          {
+            index: 0,
+            pageNumber: 0,
+            worldRect: { x: 0, y: 0, width: 4000, height: 4000 },
+            nodeIds: doc.nodes.map((n) => n.id),
+            edgeIds: [],
+            continuations: [],
+            scale: 1,
+            nodeDrawOffsets: offsets,
+          },
+        ],
+        orphans: [],
+        totalPages: 1,
+        notes: [],
+      };
+      return buildPagesSvgAsync(result, doc, { orientation: 'landscape' });
     },
   };
 }

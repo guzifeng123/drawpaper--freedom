@@ -15,6 +15,7 @@ import type {
 import type { ConflictBridge } from './conflict-bridge';
 import { getWiringUi } from './ui-store';
 import { requestDeleteNodes } from './block-delete-guard';
+import { ingestImageFile } from '@/storage/image-pipeline';
 
 /**
  * createEditorApi —— 把 C 的真实 EditorStore 适配为 D 的结构型 EditorApi。
@@ -105,6 +106,20 @@ export function createEditorApi(store: EditorStoreApi, bridge: ConflictBridge): 
     addNode: (type: BlockType, x, y) => store.getState().addNode(type, x, y),
     addNodes: (nodes) => store.getState().addNodes(nodes),
     addImageBlock: (dataUrl, x, y) => store.getState().addImageBlock(dataUrl, x, y),
+    ingestImage: async (file, x, y) =>
+      ingestImageFile(
+        {
+          // store.putImageAsset 已在 OPFS 不可用时返回空 src（assetRef=''）。
+          putImageAsset: async (blob) => {
+            const r = await store.getState().putImageAsset(blob);
+            return { assetRef: r.assetRef ?? r.src ?? '' };
+          },
+          addImageBlock: (src, bx, by) => store.getState().addImageBlock(src, bx, by),
+        },
+        file,
+        x,
+        y,
+      ),
     // Wave7 P2.1：删块先走反链影响守卫——无影响直删，有影响弹确认框。
     deleteNodes: (ids) => void requestDeleteNodes(store, ids),
     updateContent: (id, data) => store.getState().updateContent(id, data),

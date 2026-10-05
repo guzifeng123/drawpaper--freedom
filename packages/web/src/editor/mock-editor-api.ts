@@ -201,6 +201,20 @@ export function createMockEditorApi(initialDoc: KBNoteDoc = createEmptyDoc()): E
       return block.id;
     },
 
+    async ingestImage(_file: Blob, x: number, y: number) {
+      // mock：模拟 OPFS 可用，登记一个 assetRef（不做真压缩/落盘）。
+      const assetRef = 'asset_' + nanoid(8);
+      const block = makeBlock('image', x, y, { image: { src: assetRef, alt: '' } });
+      const doc = get().doc;
+      get()._commit({
+        ...doc,
+        nodes: [...doc.nodes, block],
+        assetRefs: [...new Set([...(doc.assetRefs ?? []), assetRef])],
+      });
+      useStore.setState({ selection: new Set([block.id]) });
+      return { blockId: block.id, src: assetRef, via: 'opfs' as const };
+    },
+
     deleteNodes(ids) {
       const set = new Set(ids);
       const doc = get().doc;

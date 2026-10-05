@@ -66,3 +66,35 @@ describe('buildPagesSvg', () => {
     expect(svg).toContain('260 260');
   });
 });
+
+describe('buildPagesSvg 图片内嵌（Wave7 P2.1）', () => {
+  function imageDoc(): KBNoteDoc {
+    const d = doc();
+    (d.nodes[0] as { image?: { src: string; alt: string } }).image = {
+      src: 'asset_abc',
+      alt: '图',
+    };
+    return d;
+  }
+
+  it('imageHrefs 提供 data: URI 时，SVG 内联 <image href="data:...">', () => {
+    const [svg] = buildPagesSvg(result(), imageDoc(), {
+      orientation: 'portrait',
+      imageHrefs: { n1: 'data:image/webp;base64,QUJD' },
+    });
+    expect(svg).toContain('<image');
+    expect(svg).toContain('href="data:image/webp;base64,QUJD"');
+  });
+
+  it('image.src 本身是 data: 且未预解析时也能内联（旧文档兼容）', () => {
+    const d = imageDoc();
+    (d.nodes[0] as { image: { src: string } }).image.src = 'data:image/png;base64,RAw';
+    const [svg] = buildPagesSvg(result(), d, { orientation: 'portrait' });
+    expect(svg).toContain('href="data:image/png;base64,RAw"');
+  });
+
+  it('assetRef 未预解析时不写坏引用（不出现裸 asset_abc href）', () => {
+    const [svg] = buildPagesSvg(result(), imageDoc(), { orientation: 'portrait' });
+    expect(svg).not.toContain('href="asset_abc"');
+  });
+});

@@ -10,6 +10,22 @@ import { mmToPx } from '@drawpaper/core';
 import { TiptapStatic } from './render/tiptap-static';
 import { sheetSizePx, pageNumberLabel } from './layout-utils';
 import { buildEdgePath } from '../editor/edges/edge-geometry';
+import { useResolvedImageSrc } from '../editor/nodes/use-resolved-image';
+
+/** 打印/PDF 里的图片节点：把 assetRef 解析成 objectURL 后渲染 <img>，
+ *  使矢量打印（window.print）与位图（html-to-image）都能抓到 OPFS 图片。 */
+function PrintNodeImage({ src, alt }: { src: string; alt?: string }) {
+  const resolved = useResolvedImageSrc(src);
+  if (!resolved) return null;
+  return (
+    <img
+      src={resolved}
+      alt={alt ?? ''}
+      style={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }}
+      draggable={false}
+    />
+  );
+}
 
 /** 续接标记圆圈半径（px）。 */
 const MARKER_R = 9;
@@ -142,6 +158,11 @@ export function PrintSheets({ result, doc, settings, edgeLabelsVisible }: PrintS
                       }}
                     >
                       <TiptapStatic doc={n.content.data} gray={gray} />
+                      {n.image?.src ? (
+                        <div style={{ width: '100%', height: rect.h }}>
+                          <PrintNodeImage src={n.image.src} alt={n.image.alt ?? ''} />
+                        </div>
+                      ) : null}
                       {orphanIds.has(id) ? (
                         <span
                           data-orphan-badge

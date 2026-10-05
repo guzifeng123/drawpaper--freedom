@@ -3,19 +3,25 @@ import type { PageSheet, PaginateResult } from '@drawpaper/core';
 import { extractNodePlainText } from '@drawpaper/core';
 import { pagePixelSize } from '@drawpaper/core';
 import { buildEdgePath, type EdgeEnd } from '../editor/edges/edge-geometry';
+import { assetRefToDataUri, isAssetRefSrc } from '../storage/opfs';
 
 /**
  * SVG 矢量导出：把每页序列化为独立 .svg（不引第三方依赖）。
- *  - 节点：<rect> + 纯文本（取块内纯文本前几行）；
+ *  - 节点：<rect> + 纯文本（取块内纯文本前几行）；图片块内联 <image href="data:...">；
  *  - 边：三次贝塞尔 + 箭头 marker；
  *  - 续接标记：<circle> + token 编号；
  *  - 页眉/页脚文本。
  * 多页 = 多个 .svg 文件分别下载（不打 zip）。
+ *
+ * Wave7 P2.1：OPFS 图片以自包含 data: URI 内嵌进 SVG（导出前由 buildPagesSvgAsync
+ * 把 assetRef 读成 data URI），离线 .svg 双击即可看到图。
  */
 
 export interface SvgExportOptions {
   orientation: 'portrait' | 'landscape';
   gray?: boolean;
+  /** nodeId → 自包含 data: URI（图片节点）。缺省时若 image.src 已是 data: 也能内联。 */
+  imageHrefs?: Record<string, string>;
 }
 
 function escXml(s: string): string {
@@ -48,16 +54,29 @@ function nodeColor(node: BlockNode, gray?: boolean): { fill: string; stroke: str
 }
 
 
-function renderNode(node: BlockNode, offset: { x: number; y: number }, gray?: boolean): string {
-  const { fill, stroke } = nodeColor(node, gray);
+function renderNode(node: BlockNode, offset: { x: number; y: number }, opts: SvgExportOptions): string {
+  const { fill, stroke } = nodeColor(node, opts.gray);
   const w = node.width;
   const h = node.height;
   const lines = textLines(node);
   const tspans = lines
     .map((l, i) => `<tspan x="${offset.x + 8}" y="${offset.y + 20 + i * 16}">${escXml(l)}</tspan>`)
     .join('');
+
+  // 图片块：内联 <image>。href 优先取预解析好的 data: URI（assetRef 已读出），
+  // 否则若 src 本身就是 data:/blob: 直接用；assetRef 且未预解析则跳过（不写坏引用）。
+  let imageSvg = '';
+  const rawSrc = node.image?.src;
+  if (rawSrc) {
+    const href = opts.imageHrefs?.[node.id] ?? (isAssetRefSrc(rawSrc) ? '' : rawSrc);
+    if (href) {
+      imageSvg = `<image x="${offset.x + 2}" y="${offset.y + 2}" width="${Math.max(0, w - 4)}" height="${Math.max(0, h - 4)}" preserveAspectRatio="xMidYMid meet" href="${escXml(href)}"/>`;
+    }
+  }
+
   return `<g class="node" data-node-id="${escXml(node.id)}">` +
     `<rect x="${offset.x}" y="${offset.y}" width="${w}" height="${h}" rx="8" fill="${fill}" stroke="${stroke}" stroke-width="1"/>` +
+    (imageSvg ? imageSvg : '') +
     (tspans ? `<text font-size="12" fill="#334155">${tspans}</text>` : '') +
     `</g>`;
 }
@@ -102,7 +121,7 @@ function renderSheet(
   const nodeSvg = sheet.nodeIds
     .map((id) => nodes.get(id))
     .filter((n): n is BlockNode => Boolean(n))
-    .map((n) => renderNode(n, offsets[n.id]!, opts.gray))
+    .map((n) => renderNode(n, offsets[n.id]!, opts))
     .join('\n  ');
 
   const edgeSvg = sheet.edgeIds
@@ -172,4 +191,35 @@ export function downloadSvgPages(svgPages: string[], baseFileName: string): void
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
   });
+}
+
+/**
+ * 遍历文档图片节点，把 assetRef 读成自包含 data: URI（供 SVG 内嵌）。
+ * data: 内联图片原样收集；assetRef 读不到则跳过（不写坏引用）。
+ */
+export async function resolveImageHrefs(doc: KBNoteDoc): Promise<Record<string, string>> {
+  const hrefs: Record<string, string> = {};
+  await Promise.all(
+    doc.nodes.map(async (n) => {
+      const src = n.image?.src;
+      if (!src) return;
+      if (!isAssetRefSrc(src)) {
+        hrefs[n.id] = src;
+        return;
+      }
+      const dataUri = await assetRefToDataUri(src);
+      if (dataUri) hrefs[n.id] = dataUri;
+    }),
+  );
+  return hrefs;
+}
+
+/** 异步版：先把 OPFS 图片解析成 data: URI，再逐页构建 SVG。 */
+export async function buildPagesSvgAsync(
+  result: PaginateResult,
+  doc: KBNoteDoc,
+  opts: SvgExportOptions,
+): Promise<string[]> {
+  const imageHrefs = await resolveImageHrefs(doc);
+  return buildPagesSvg(result, doc, { ...opts, imageHrefs });
 }

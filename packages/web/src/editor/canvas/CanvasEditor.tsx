@@ -98,13 +98,8 @@ function CanvasInner({ api }: { api: EditorApi }) {
           const id = api.addNode('text', pos.x + dx, pos.y + dy);
           api.updateContent(id, doc);
         } else if (kind === 'image') {
-          const dataUrl = await new Promise<string>((res, rej) => {
-            const r = new FileReader();
-            r.onload = () => res(String(r.result));
-            r.onerror = rej;
-            r.readAsDataURL(f);
-          });
-          api.addImageBlock(dataUrl, pos.x + dx, pos.y + dy);
+          // 统一管线：压缩 → OPFS（src 存 assetRef）→ 不可用降级 dataURL。
+          await api.ingestImage(f, pos.x + dx, pos.y + dy);
         } else if (kind === 'attachment') {
           if (!api.putImageAsset) {
             toast('当前浏览器不支持附件本地存储');
