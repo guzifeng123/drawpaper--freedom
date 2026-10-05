@@ -15,6 +15,34 @@ export interface DocRefMarkAttrs {
 }
 
 export const DOCREF_MARK_CLASS = 'drawpaper-docref';
+export const DANGLING_CLASS = 'is-dangling';
+
+/** 悬挂目标 key：`${targetDocId}::${targetNodeId}`。 */
+export function docRefTargetKey(targetDocId: string, targetNodeId: string): string {
+  return `${targetDocId}::${targetNodeId}`;
+}
+
+/** 模块级悬挂目标集合：由 App 在文档加载/切换/链接重建后写入。 */
+let danglingTargets = new Set<string>();
+
+/** 更新悬挂集合并立即给现有 chip 补 class。 */
+export function setDanglingTargets(keys: ReadonlySet<string>): void {
+  danglingTargets = new Set(keys);
+  applyDanglingClasses(document);
+}
+
+/**
+ * 遍历 root 内所有 docRef chip，据悬挂集合补/移 `.is-dangling`。
+ * 静态 chip 由 generateHTML 生成、编辑态 chip 由 ProseMirror 渲染，统一走 DOM 修饰。
+ */
+export function applyDanglingClasses(root: ParentNode = document): void {
+  const chips = root.querySelectorAll<HTMLElement>(`.${DOCREF_MARK_CLASS}`);
+  chips.forEach((el) => {
+    const docId = el.getAttribute('targetDocId') ?? '';
+    const nodeId = el.getAttribute('targetNodeId') ?? '';
+    el.classList.toggle(DANGLING_CLASS, danglingTargets.has(docRefTargetKey(docId, nodeId)));
+  });
+}
 
 export const DocRefMark = Mark.create({
   name: 'docRef',

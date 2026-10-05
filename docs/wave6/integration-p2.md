@@ -50,9 +50,23 @@
 - main-canvas.png（主画布两节点）
 - graph-overview.png（全局总览：搜索/折叠/展开/关闭 + 文档簇节点）
 
-## 6. 已知遗留
-- docRef chip 悬挂态 `.is-dangling` 视觉类未在渲染期动态计算（findDanglingLinks 已在 core，
-  留后续按打开文档时批量补 class）。
-- 删除文档/块的 confirm 弹层接 `linksAffectedByDelete*` 影响清单：删除流已有确认框，
-  反链影响列表的 UI 展示留后续（不静默删除的基本行为已在）。
+## 6. 补做闭环（复核反馈）
+### 悬挂 chip 红虚边
+- `doc-ref-mark.ts` 增模块级 `danglingTargets: Set<key>` + `setDanglingTargets` / `applyDanglingClasses(root)`；
+- App 在 `doc.links 重建指纹 / currentDocId / docs 列表指纹` 变化时，用 core `findDanglingLinks(currentDoc.links, db.docs 全量)` 计算悬挂 key 集合并写入；
+- MutationObserver 监听 body，虚拟化滚动进视口的新 chip 也会被补 class。
+
+### 删除确认列反链影响
+- PanelsApi 新增 `docDeleteImpact(docId)`：`db.docs` 全量 + `linksAffectedByDeleteDoc` 取 incoming，样例格式 `《来源文档》块「正文摘要」`；
+- DocsListPanel 删除按钮点开时异步拉 impact，ConfirmDialog 增 children 渲染影响清单（>0 红框列出，0 提示无引用，加载中提示）；取消不删。
+
+### 新增 e2e（cross-doc-links.spec.ts，+2）
+- 删除目标文档后 chip 出现 `.is-dangling` 且链接记录保留；
+- 删除被引用文档确认框含影响数量文案 → 取消不删 → 确认后删除。
+
+## 7. 门禁（补做后）
+- build / typecheck / lint 0 error；core 165 / web 199 单测；e2e **43 passed**（41 +2）。
+
+## 8. 已知遗留
+- 删除**块**（而非文档）的确认弹层接 `linksAffectedByDeleteNode`：块删除走快捷键无确认框，留后续。
 - 图片拖入走 dataURL 内联，OPFS 压缩管线未接图片（canvas-advanced 自述遗留）。

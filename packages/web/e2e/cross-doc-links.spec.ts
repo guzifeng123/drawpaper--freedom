@@ -87,3 +87,60 @@ test('docRef mark 保存后重建 links；导出/导入持久化；反链可见�
   expect(retained).toHaveLength(1);
   expect((retained[0] as { targetDocId: string }).targetDocId).toBe('doc_B');
 });
+
+test('删除目标文档后，docA 静态 chip 出现 is-dangling 且链接记录保留', async ({ page }) => {
+  await seedDoc(page, { id: 'doc_B', title: '目标B', blockId: 'n_B1', text: '目标块' });
+  await seedDoc(page, {
+    id: 'doc_A', title: '来源A', blockId: 'n_A1', text: '看 [[目标]]',
+    ref: { targetDocId: 'doc_B', targetNodeId: 'n_B1', targetTitle: '目标块' },
+  });
+
+  // 打开 docA：chip 可见且未悬挂。
+  await page.evaluate(() => window.__drawpaper__!.invoke('openDoc', 'doc_A'));
+  await page.waitForTimeout(600);
+  let chip = page.locator('.drawpaper-docref').first();
+  await expect(chip).toBeVisible();
+  await expect(chip).not.toHaveClass(/is-dangling/);
+
+  // 删除 docB（存储路径），再回 docA。
+  await page.evaluate(() => window.__drawpaper__!.invoke('deleteDoc', 'doc_B'));
+  await page.waitForTimeout(500);
+  await page.evaluate(() => window.__drawpaper__!.invoke('openDoc', 'doc_A'));
+  await page.waitForTimeout(800);
+  chip = page.locator('.drawpaper-docref').first();
+  await expect(chip).toHaveClass(/is-dangling/);
+
+  // 链接记录仍在。
+  const links = await page.evaluate(() => window.__drawpaper__!.currentLinks());
+  expect(links).toHaveLength(1);
+});
+
+test('删除被引用文档：确认框列出反链影响；取消不删，确认后删除', async ({ page }) => {
+  await seedDoc(page, { id: 'doc_B', title: '被引用B', blockId: 'n_B1', text: '目标块' });
+  await seedDoc(page, {
+    id: 'doc_A', title: '引用A', blockId: 'n_A1', text: '看 [[x]]',
+    ref: { targetDocId: 'doc_B', targetNodeId: 'n_B1', targetTitle: '目标块' },
+  });
+  await page.evaluate(() => window.__drawpaper__!.invoke('openDoc', 'doc_A'));
+  await page.waitForTimeout(400);
+
+  const row = page.locator('aside div.group', { hasText: '被引用B' }).first();
+  await row.hover();
+  await row.locator('button[title="删除"]').click();
+
+  // 确认框列出影响数量与来源。
+  await expect(page.getByText('将有 1 处引用变为悬挂')).toBeVisible();
+  await expect(page.getByText('《引用A》')).toBeVisible();
+
+  // 取消 → 文档仍在。
+  await page.getByRole('button', { name: '取消' }).click();
+  await expect(row).toBeVisible();
+
+  // 再次删除 → 确认 → 删除。
+  await row.hover();
+  await row.locator('button[title="删除"]').click();
+  await expect(page.getByText('将有 1 处引用变为悬挂')).toBeVisible();
+  await page.locator('[role=dialog]').getByRole('button', { name: '删除' }).click();
+  await page.waitForTimeout(500);
+  await expect(page.locator('aside div.group', { hasText: '被引用B' })).toHaveCount(0);
+});

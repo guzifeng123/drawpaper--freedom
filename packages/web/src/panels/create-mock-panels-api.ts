@@ -473,6 +473,7 @@ export function createMockPanelsApi(): PanelsApi {
     openDocRef(_targetDocId, _targetNodeId) {},
     backlinksNodeId: null,
     setBacklinksNodeId(_id) {},
+    docDeleteImpact: async () => ({ count: 0, samples: [] }),
   };
 
   return api;

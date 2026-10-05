@@ -24,6 +24,8 @@ export interface ConfirmDialogProps {
   /** 确认按钮是否为危险（红色）样式。 */
   danger?: boolean;
   onConfirm: () => void;
+  /** 额外内容（如引用影响清单），渲染在 description 之后。 */
+  children?: React.ReactNode;
 }
 
 export function ConfirmDialog({
@@ -35,6 +37,7 @@ export function ConfirmDialog({
   cancelText = '取消',
   danger = true,
   onConfirm,
+  children,
 }: ConfirmDialogProps) {
   const handleConfirm = () => {
     onConfirm();
@@ -47,6 +50,7 @@ export function ConfirmDialog({
           <DialogTitle>{title}</DialogTitle>
           {description ? <DialogDescription>{description}</DialogDescription> : null}
         </DialogHeader>
+        {children}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             {cancelText}

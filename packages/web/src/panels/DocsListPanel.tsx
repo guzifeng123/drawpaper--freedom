@@ -32,10 +32,17 @@ function DocRow({
   const [value, setValue] = React.useState(doc.title);
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const [impact, setImpact] = React.useState<{ count: number; samples: string[] } | null>(null);
 
   React.useEffect(() => {
     if (editing) requestAnimationFrame(() => inputRef.current?.select());
   }, [editing]);
+
+  const openConfirm = () => {
+    setConfirmOpen(true);
+    setImpact(null);
+    void api.docDeleteImpact(doc.id).then(setImpact);
+  };
 
   const commit = () => {
     const t = value.trim();
@@ -97,7 +104,7 @@ function DocRow({
           type="button"
           title="删除"
           className="rounded p-1 text-muted-foreground hover:text-destructive"
-          onClick={() => setConfirmOpen(true)}
+          onClick={openConfirm}
         >
           <Trash2 className="h-3.5 w-3.5" />
         </button>
@@ -107,10 +114,31 @@ function DocRow({
         open={confirmOpen}
         onOpenChange={setConfirmOpen}
         title="删除文档？"
-        description={`将永久删除「${doc.title}」，此操作不可撤销。`}
         confirmText="删除"
         onConfirm={() => api.removeDoc(doc.id)}
-      />
+      >
+        <p className="text-sm text-muted-foreground">
+          将永久删除「{doc.title}」，此操作不可撤销。
+        </p>
+        {impact ? (
+          impact.count > 0 ? (
+            <div className="mt-2 rounded-md border border-destructive/40 bg-destructive/5 p-2 text-xs text-destructive">
+              <p className="font-medium">
+                将有 {impact.count} 处引用变为悬挂：
+              </p>
+              <ul className="mt-1 list-disc pl-4">
+                {impact.samples.map((s) => (
+                  <li key={s}>{s}</li>
+                ))}
+              </ul>
+            </div>
+          ) : (
+            <p className="mt-1 text-xs text-muted-foreground">没有其他文档引用它。</p>
+          )
+        ) : (
+          <p className="mt-1 text-xs text-muted-foreground">正在检查引用…</p>
+        )}
+      </ConfirmDialog>
     </div>
   );
 }

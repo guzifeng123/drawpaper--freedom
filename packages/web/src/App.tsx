@@ -16,9 +16,11 @@ import { TagFilterBar } from '@/panels/TagFilterBar';
 import { BacklinksPanel } from '@/panels/BacklinksPanel';
 import { Toaster } from '@/panels/lib/toast';
 import { AiPanel } from '@/ai/AiPanel';
-import { setDocRefClickHandler, installDocRefClickDelegate } from '@/editor/tiptap/doc-ref-mark';
+import { setDocRefClickHandler, installDocRefClickDelegate, setDanglingTargets, applyDanglingClasses, docRefTargetKey } from '@/editor/tiptap/doc-ref-mark';
 import { OverviewCanvas } from '@/overview/OverviewCanvas';
 import { DexieOverviewProvider } from '@/overview/DexieOverviewProvider';
+import { db } from '@/storage/db';
+import { findDanglingLinks } from '@drawpaper/core';
 import {
   ExportDialog,
   PageBreakOverlay,
@@ -49,7 +51,7 @@ export default function App() {
   useEditorStore((s) => s.canUndo);
   useEditorStore((s) => s.canRedo);
   useEditorStore((s) => s.docs);
-  useEditorStore((s) => s.currentDocId);
+  const currentDocId = useEditorStore((s) => s.currentDocId);
   useEditorStore((s) => s.searchQuery);
   useEditorStore((s) => s.searchResults);
   useEditorStore((s) => s.layoutUi.scopeSelected);
@@ -94,6 +96,30 @@ export default function App() {
       setDocRefClickHandler(null);
       dispose();
     };
+  }, []);
+
+  // 悬挂 chip：据当前文档 links + Dexie 全量文档做一次悬挂判定，给 chip 补 .is-dangling。
+  // doc.links 每次保存重建后引用变化 → 重算；MutationObserver 处理虚拟化滚动进视口的新 chip。
+  // docsFp：文档列表增删（删文档进回收站）也要重判。
+  const danglingLinkKey = doc ? JSON.stringify((doc.links ?? []).map((l) => l.id)) : '';
+  const docsFp = useEditorStore((s) => s.docs.map((d) => d.id).join(','));
+  useEffect(() => {
+    let cancelled = false;
+    void db.docs.toArray().then((all) => {
+      if (cancelled) return;
+      const cur = editorStore.getState().doc;
+      const dangling = findDanglingLinks(cur.links ?? [], all);
+      setDanglingTargets(new Set(dangling.map((d) => docRefTargetKey(d.link.targetDocId, d.link.targetNodeId))));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [danglingLinkKey, currentDocId, docsFp]);
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => applyDanglingClasses(document));
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => observer.disconnect();
   }, []);
 
   // 导出数据流

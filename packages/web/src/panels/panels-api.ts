@@ -224,6 +224,11 @@ export interface PanelsApi {
    * 文档内则直接 flyToNode。由 App/CanvasEditor 总装接真实 store（Wave7）。
    */
   openDocRef(targetDocId: string, targetNodeId: string): void;
+  /**
+   * 删除一份文档前的反链影响：返回指向它的引用条数与可读样例（用于确认弹层列出）。
+   * 无引用时 count=0。Wave7。
+   */
+  docDeleteImpact(docId: string): Promise<{ count: number; samples: string[] }>;
   /** BacklinksPanel 当前查看的块维度（null = 文档级反链）。 */
   backlinksNodeId: string | null;
   setBacklinksNodeId(id: string | null): void;
