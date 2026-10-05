@@ -115,4 +115,9 @@ function startSearchSync(): void {
   });
 }
 
-void bootstrap();
+// 启动为 fire-and-forget：浏览器隐私模式 / 无 IndexedDB 的测试环境（jsdom）下
+// listDocs 可能 reject，必须接住，否则形成 unhandled rejection（CI 单测退出 1）；
+// 存储不可用时应用以内存态运行，不阻塞渲染。
+bootstrap().catch((err: unknown) => {
+  console.warn('[drawpaper] 启动引导失败（存储可能不可用），以内存态运行：', err);
+});
