@@ -49,7 +49,7 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install JS dependencies
-        run: pnpm install --no-frozen-lockfile
+        run: pnpm install --no-frozen-lockfile --registry=https://registry.npmjs.org/
 
       - name: Add ARM64 Rust target
         if: matrix.arch == 'arm64'
