@@ -15,6 +15,8 @@ if (existsSync(LOCAL_BROWSERS_PATH)) {
  * Playwright e2e 配置：chromium，webServer 自动起 preview（build 后）或 dev。
  * 本机浏览器缓存目录 /home/user/ms-playwright。
  */
+const E2E_PORT = Number(process.env['E2E_PORT'] ?? 4173);
+
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
@@ -23,7 +25,7 @@ export default defineConfig({
   workers: 1,
   reporter: [['list']],
   use: {
-    baseURL: 'http://localhost:4173',
+    baseURL: `http://localhost:${E2E_PORT}`,
     trace: 'on-first-retry',
   },
   projects: [
@@ -35,8 +37,9 @@ export default defineConfig({
   webServer: {
     // DEV server：e2e 依赖 window.__drawpaper__ 测试钩子（仅 import.meta.env.DEV 暴露，
     // 生产构建不挂载）。生产产物的零外网/无钩子由 build 后 grep 单独核验。
-    command: 'pnpm dev --port 4173 --strictPort',
-    url: 'http://localhost:4173',
+    // 端口可用 E2E_PORT 覆盖，便于多个 worktree 并行跑 e2e 互不抢端口。
+    command: `pnpm dev --port ${E2E_PORT} --strictPort`,
+    url: `http://localhost:${E2E_PORT}`,
     reuseExistingServer: !process.env['CI'],
     timeout: 120_000,
   },
