@@ -171,3 +171,44 @@ tauri-action 用法、publish job 收敛 release 创建），但**未经云端�
 | 手绘墨迹块 | 需手写笔压感/倾斜硬件预研，P2 后期才评估 |
 | 自动更新 | 无签名私钥与更新服务器，见 §3 |
 | 通知/全局快捷键/自动更新的用户设置 UI | 留给 P2 收尾后用户反馈驱动 |
+
+## 8. 云端攻关全过程（feat/p2-tauri-ci，最终全绿）
+
+安装关之后的失败点均通过"workflow 内 `::error::`/`::warning::` 注解（每级每步
+10 条上限）+ run 页 `annotations_partial` 匿名片段端点"侧信道取日志定位（REST
+日志 zip 对匿名用户 403、共享出口 IP 未认证 REST 60/h 秒光）。
+
+| commit | 失败点 | 修复 |
+|---|---|---|
+| 0356eef | pnpm11 全新安装 ERR_PNPM_IGNORED_BUILDS 退出 1；YAML 步骤名冒号 | `pnpm-workspace.yaml` 加 `allowBuilds: {esbuild: true}` + 保留 `onlyBuiltDependencies: [esbuild]`；步骤名加引号；release matrix 改直接调 CLI 构建避免抢建 release；本地 `tauri icon` 生成全套图标并提交 |
+| cd93b6e | — | release-windows 加分支 push + workflow_dispatch 触发（publish 仅 tag）；web-ci 转绿 |
+| 6c03db6 | setup-android@v3 被强制 Node24 运行崩溃 | 手工下载固定 cmdline-tools(11076708) + licenses + platform-34；android 转绿产出 APK |
+| 050bd61 | tauri.conf schema：fileAssociations 位置/字段、linux.appDependencies 非法、CSP 字体源 | fileAssociations 移到 bundle 顶层（ext/name/description/role=Editor）；删非法字段；CSP 去 Google 字体 |
+| 1dd6589 | frontendDist 路径解析 | 相对 src-tauri 改为 `../../../packages/web/dist`；beforeBuildCommand 用 `pnpm --dir ../../packages/web build` |
+| 2b12467 | 缺 icon.ico（apps 的 .gitignore 排除了图标） | 删忽略规则、提交全套图标 |
+| 6eb679c | Rust 19 错：MenuItem::with_id/separator 返回 Result 未 unwrap、FilePath 需 `.into_path()`、缺 tokio sync、single-instance 顺序 | 全部 unwrap/转换；Cargo.toml 加 tokio(sync)；single-instance 移到首个插件 |
+| 2f63c93 | Rust 4 错：不存在 AboutMenuItem、separator Result、MenuEvent 无 as_ref | 改 `PredefinedMenuItem::about(...)`（AboutMetadata 为 owned String/Vec）；separator unwrap；`event.id.0.as_str()`（muda 0.20 MenuId(pub String)） |
+| 59eba69 | Rust 1 错 E0107：build_menu 返回 `Menu` 缺泛型 | 返回 `Menu<tauri::Wry>`，编译通过进入 NSIS 打包 |
+
+**最终云端结论（tip 59eba69，Run 9/8/8）**：web-ci / release-windows /
+android-debug 三条全绿；release-windows 两个 matrix 作业（x86_64 与
+aarch64-pc-windows-msvc）均真实产出 NSIS artifact。
+
+## 9. 合并 develop 后的云端复核（tip ba98029）
+
+合并 `--no-ff`（merge 826594c）后，release-windows 构建矩阵的分支触发加上
+`develop`（publish 仍仅 tag），develop tip ba98029 三条工作流全部真实跑绿：
+
+| workflow | run | 结论 | 产物 |
+|---|---|---|---|
+| web-ci | https://github.com/guzifeng123/drawpaper--freedom/actions/runs/37324154744 | success | install/build/typecheck/lint/单测/Playwright e2e/precache 全过 |
+| release-windows | https://github.com/guzifeng123/drawpaper--freedom/actions/runs/37324154679 | success（build x64+arm64；publish 按设计 skipped，非 tag） | `nsis-x64` 3.02 MB（内含 drawpaper_0.2.0_x64-setup.exe）、`nsis-arm64` 2.88 MB（内含 drawpaper_0.2.0_arm64-setup.exe） |
+| android-debug | https://github.com/guzifeng123/drawpaper--freedom/actions/runs/37324154843 | success | `drawpaper-android-debug` 4.9 MB（unsigned app-debug.apk） |
+
+本地合并后门禁（develop tip）：`pnpm -r build` 通过（主 chunk 487KB、precache
+81 条）、typecheck 0 error、eslint 0 error、单测 core 165 + web 199、Playwright
+e2e 43 全过、verify-precache 通过。
+
+**发布动作仍未执行**：未打任何 `v*` tag；正式 release（publish job 创建
+GitHub Release 并挂两架构 setup.exe）由维护者审查后打 `v0.1.0-rc.1`/正式 tag
+触发，步骤见 §4。
