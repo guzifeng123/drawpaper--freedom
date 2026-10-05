@@ -1,5 +1,6 @@
 import type { KBNoteDoc } from '@drawpaper/core';
 import { editorStore } from '@/store/editor-store';
+import { getAsset, isOpfsAvailable } from '@/storage/opfs';
 
 /**
  * DEV-only 测试钩子（window.__drawpaper__）。
@@ -25,6 +26,13 @@ export interface DrawpaperDevHook {
   invoke(action: string, ...args: unknown[]): unknown;
   /** 常驻渲染离屏打印容器（e2e 截图/矢量 PDF 用）。 */
   setDebugSheets(on: boolean): void;
+  // ---- Wave5b 附件 OPFS 检视（DEV-only，供 e2e 断言）----
+  /** OPFS（navigator.storage.getDirectory）当前是否可用。 */
+  opfsAvailable(): boolean;
+  /** 当前文档登记的 assetRef 列表。 */
+  listAssetRefs(): string[];
+  /** 检查某 assetRef 的 blob 是否真的落在 OPFS 中。 */
+  opfsHasAsset(ref: string): Promise<boolean>;
 }
 
 declare global {
@@ -141,6 +149,17 @@ export function installDevHooks(): void {
     },
     setDebugSheets(on: boolean) {
       window.__drawpaper_debugSheets = on;
+    },
+    opfsAvailable() {
+      return isOpfsAvailable();
+    },
+    listAssetRefs() {
+      return [...editorStore.getState().doc.assetRefs];
+    },
+    async opfsHasAsset(ref: string) {
+      if (!isOpfsAvailable()) return false;
+      const blob = await getAsset(ref);
+      return blob !== null;
     },
   };
 }
