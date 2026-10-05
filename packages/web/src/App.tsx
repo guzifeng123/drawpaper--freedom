@@ -67,7 +67,7 @@ export default function App() {
   useWiringUi((s) => s.trashNonce);
 
   // 导出数据流
-  const { result, sheetsVisible, actions, scope, setScope } = useExportModel(panelsApi);
+  const { result, sheetsVisible, actions, scope, setScope, busy } = useExportModel(panelsApi);
 
   // 定时备份调度：backupEnabled 开启且 dirty 时每 10 分钟下载一份 .kbnote 备份。
   const backupEnabled = useEditorStore((s) => s.backupEnabled);
@@ -157,7 +157,7 @@ export default function App() {
       ) : null}
 
       {/* 导出弹窗 + 离屏打印容器 */}
-      <ExportDialog api={panelsApi} actions={actions} scope={scope} onScopeChange={setScope} />
+      <ExportDialog api={panelsApi} actions={actions} scope={scope} onScopeChange={setScope} busy={busy} />
       {sheetsVisible && result.pages.length > 0 && (
         <PrintSheets result={result} doc={doc} settings={doc.page} edgeLabelsVisible={doc.page.edgeLabels} />
       )}

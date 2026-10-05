@@ -14,7 +14,7 @@ import TableRow from '@tiptap/extension-table-row';
 import TableCell from '@tiptap/extension-table-cell';
 import TableHeader from '@tiptap/extension-table-header';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
-import { lowlight } from './highlight';
+import { ensureHighlighter } from './highlight';
 import { buildMarkdownInputRules } from './input-rules';
 
 /**
@@ -44,7 +44,11 @@ export interface CreateBlockEditorOptions {
  *   + Underline + Highlight(多色) + TextStyle + Color + Link(autolink, Cmd+K)
  *   + Placeholder + Image + TaskList/TaskItem。
  */
-export function createBlockEditor(opts: CreateBlockEditorOptions): Editor {
+export async function createBlockEditor(opts: CreateBlockEditorOptions): Promise<Editor> {
+  // 懒加载：lowlight（hljs + 语言）从首包剥离，在首次创建块编辑器时拉取并缓存。
+  // 编辑是用户双击触发（非首屏），一次 ~90KB 加载后全程复用；CodeBlockLowlight
+  // 扩展在 addProseMirrorPlugins 时校验真实 lowlight 实例，故必须 await 拿到真实实例。
+  const hl = await ensureHighlighter();
   return new Editor({
     content: opts.content as object,
     editable: opts.editable ?? true,
@@ -82,14 +86,22 @@ export function createBlockEditor(opts: CreateBlockEditorOptions): Editor {
       TableRow,
       TableHeader,
       TableCell,
-      // P1：代码块 + lowlight 语法高亮
-      CodeBlockLowlight.configure({ lowlight }),
+      // P1：代码块 + lowlight 语法高亮（懒加载后才有真实 lowlight；否则用空壳占位）
+      CodeBlockLowlight.configure({ lowlight: hl ? hl.lowlight : dummyLowlight }),
     ],
     onUpdate: ({ editor }) => {
       opts.onUpdate?.(editor.getJSON());
     },
   });
 }
+
+/** lowlight 占位：静态渲染 / 无代码块内容时不跑装饰，仅满足扩展类型。 */
+const dummyLowlight = {
+  highlight: () => [],
+  listLanguages: () => [],
+  registered: () => false,
+  register: () => undefined,
+} as unknown as typeof import('./highlight-data').lowlight;
 
 let _staticExts: readonly unknown[] | null = null;
 
@@ -117,7 +129,9 @@ export function getStaticExtensions(): readonly unknown[] {
     TableRow,
     TableHeader,
     TableCell,
-    CodeBlockLowlight.configure({ lowlight }),
+    // P1 静态渲染同样需要 table / codeBlock 扩展，才能输出 <table> 与 hljs class。
+    // generateHTML 不跑装饰，lowlight 用空壳即可（不加载重型模块）。
+    CodeBlockLowlight.configure({ lowlight: dummyLowlight }),
   ];
   return _staticExts;
 }

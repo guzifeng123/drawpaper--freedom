@@ -1,12 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { tiptapJsonToHtml } from './static';
-import { renderEquation, stripDollars } from './katex-html';
+import { renderEquation, ensureKatex, stripDollars } from './katex-html';
 import { setCodeLanguage, readCodeLanguage } from './code-ops';
-import { codeToHtml, extractCodeText } from './highlight';
+import { codeToHtml, extractCodeText, ensureHighlighter } from './highlight';
 import { filterSlashItems } from './slash-menu';
 
 describe('P1 静态渲染（SSR，不挂编辑器实例）', () => {
-  it('代码块 codeToHtml 输出带 hljs token class', () => {
+  it('代码块 codeToHtml 输出带 hljs token class', async () => {
+    await ensureHighlighter();
     const html = codeToHtml('const a = 1', 'js');
     expect(html).toContain('hljs');
     expect(html).toContain('language-js');
@@ -43,7 +44,8 @@ describe('P1 静态渲染（SSR，不挂编辑器实例）', () => {
     expect(html).toContain('<th');
   });
 
-  it('KaTeX 渲染输出 katex class，且字体本地（无 CDN/外网字体引用）', () => {
+  it('KaTeX 渲染输出 katex class，且字体本地（无 CDN/外网字体引用）', async () => {
+    await ensureKatex();
     const html = renderEquation('E = mc^2');
     expect(html).toContain('katex');
     // 注意：MathML 命名空间 http://www.w3.org/... 不是网络请求；只禁止 CDN 字体外链
@@ -51,7 +53,8 @@ describe('P1 静态渲染（SSR，不挂编辑器实例）', () => {
     expect(html).not.toContain('cdn');
   });
 
-  it('KaTeX 渲染失败不抛异常，输出错误标记', () => {
+  it('KaTeX 渲染失败不抛异常，输出错误标记', async () => {
+    await ensureKatex();
     const html = renderEquation('\\unknowncommand{');
     // throwOnError:false → 仍输出 katex-error 或 katex 结构，不抛
     expect(html.length).toBeGreaterThan(0);

@@ -1,52 +1,34 @@
-import hljs from 'highlight.js/lib/core';
-import javascript from 'highlight.js/lib/languages/javascript';
-import typescript from 'highlight.js/lib/languages/typescript';
-import json from 'highlight.js/lib/languages/json';
-import python from 'highlight.js/lib/languages/python';
-import rust from 'highlight.js/lib/languages/rust';
-import go from 'highlight.js/lib/languages/go';
-import java from 'highlight.js/lib/languages/java';
-import xml from 'highlight.js/lib/languages/xml';
-import css from 'highlight.js/lib/languages/css';
-import bash from 'highlight.js/lib/languages/bash';
-import yaml from 'highlight.js/lib/languages/yaml';
-import { createLowlight } from 'lowlight';
-
 /**
- * highlight.ts —— 统一语法高亮（代码块）。
+ * highlight.ts —— 语法高亮统一入口（轻量壳，懒加载重型模块）。
  *
- * 只注册 P1 常用的 11 种语言（而非全量 common），控制主包体积。
- * - live 编辑：lowlight（CodeBlockLowlight 装饰）。
- * - 静态 SSR：Tiptap 的 generateHTML 不跑装饰插件，故直接用 highlight.js
- *   产出带 `hljs-*` token class 的 HTML 字符串（500 块帧率关键）。
+ * 只保留无依赖的纯数据/纯函数：语言下拉选项、代码文本抽取、加载器。
+ * 重型 hljs + 11 语言 + lowlight 在 highlight-data.ts，由 ensureHighlighter() 动态 import，
+ * 代码块首次渲染/编辑时才加载，不进首包。
+ *
  * 高亮 CSS 主题见 editor/css/editor-theme.css（CSS 变量适配深色）。
  */
-hljs.registerLanguage('js', javascript);
-hljs.registerLanguage('ts', typescript);
-hljs.registerLanguage('json', json);
-hljs.registerLanguage('python', python);
-hljs.registerLanguage('rust', rust);
-hljs.registerLanguage('go', go);
-hljs.registerLanguage('java', java);
-hljs.registerLanguage('html', xml);
-hljs.registerLanguage('css', css);
-hljs.registerLanguage('bash', bash);
-hljs.registerLanguage('yaml', yaml);
 
-/** 与 hljs 同一批语言，供 CodeBlockLowlight live 高亮。 */
-export const lowlight = createLowlight({
-  js: javascript,
-  ts: typescript,
-  json,
-  python,
-  rust,
-  go,
-  java,
-  html: xml,
-  css,
-  bash,
-  yaml,
-});
+import type { lowlight as LowlightType } from './highlight-data';
+
+export interface Highlighter {
+  lowlight: typeof LowlightType;
+  codeToHtml: (code: string, language?: string) => string;
+}
+
+let highlighterPromise: Promise<Highlighter> | null = null;
+let highlighterLoaded: Highlighter | null = null;
+
+/** 动态加载重型高亮模块（hljs + lowlight），全程只加载一次。 */
+export function ensureHighlighter(): Promise<Highlighter> {
+  if (highlighterLoaded) return Promise.resolve(highlighterLoaded);
+  if (highlighterPromise) return highlighterPromise;
+  highlighterPromise = (async () => {
+    const mod = await import('./highlight-data');
+    highlighterLoaded = { lowlight: mod.lowlight, codeToHtml: mod.codeToHtml };
+    return highlighterLoaded;
+  })();
+  return highlighterPromise;
+}
 
 /** 代码块语言下拉选项（P1 常用集）。 */
 export const CODE_LANGUAGES: readonly { value: string; label: string }[] = [
@@ -63,28 +45,18 @@ export const CODE_LANGUAGES: readonly { value: string; label: string }[] = [
   { value: 'yaml', label: 'YAML' },
 ];
 
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+/** 同步渲染：要求 highlighter 已通过 ensureHighlighter() 加载；未加载时抛错。 */
+export function codeToHtml(code: string, language?: string): string {
+  if (!highlighterLoaded) {
+    throw new Error('[drawpaper] highlighter not loaded. Await ensureHighlighter() before codeToHtml().');
+  }
+  return highlighterLoaded.codeToHtml(code, language);
 }
 
-/**
- * 把代码字符串高亮成 `<pre class="hljs language-x"><code>…token spans…</code></pre>` HTML。
- * 未知语言/失败时退化为转义纯文本。
- */
-export function codeToHtml(code: string, language?: string): string {
-  const lang = language && hljs.getLanguage(language) ? language : undefined;
-  let inner: string;
-  if (lang) {
-    try {
-      inner = hljs.highlight(code, { language: lang }).value;
-    } catch {
-      inner = escapeHtml(code);
-    }
-  } else {
-    inner = escapeHtml(code);
-  }
-  const cls = lang ? `hljs language-${lang}` : 'hljs';
-  return `<pre class="${cls}"><code>${inner}</code></pre>`;
+/** 异步渲染：先确保高亮模块加载完成，再同步渲染。 */
+export async function codeToHtmlAsync(code: string, language?: string): Promise<string> {
+  await ensureHighlighter();
+  return codeToHtml(code, language);
 }
 
 /** 从 Tiptap codeBlock PM doc 抽取纯代码文本。 */

@@ -20,6 +20,7 @@ import {
 import { buildPagesSvg, downloadSvgPages } from './svg-export';
 import { docToMarkdown, downloadTextFile } from './markdown-export';
 import { buildExportFileName } from './filename';
+import { pushToast } from '@/panels/lib/toast';
 
 const EMPTY_RESULT: PaginateResult = { pages: [], orphans: [], totalPages: 0, notes: [] };
 
@@ -107,10 +108,12 @@ export function useExportModel(api: PanelsApi): {
   actions: ExportDialogActions;
   scope: ExportScope;
   setScope: (s: ExportScope) => void;
+  busy: 'png' | 'pdf' | null;
 } {
   const [result, setResult] = React.useState<PaginateResult>(EMPTY_RESULT);
   const [sheetsVisible, setSheetsVisible] = React.useState(false);
   const [scope, setScope] = React.useState<ExportScope>('all');
+  const [busy, setBusy] = React.useState<'png' | 'pdf' | null>(null);
 
   const computeResult = React.useCallback((): PaginateResult => computePanelsPaginate(api, scope), [api, scope]);
 
@@ -139,27 +142,43 @@ export function useExportModel(api: PanelsApi): {
       onExportPng: () => {
         setResult(computeResult());
         void afterSheetsRender(async () => {
-          const sheets = collectSheetElements();
-          const name = buildExportFileName({
-            title: api.doc?.title ?? '未命名',
-            date: new Date(),
-            orientation: api.page.orientation,
-            ext: 'png',
-          });
-          await downloadSheetsAsPng(sheets, name);
+          setBusy('png');
+          try {
+            const sheets = collectSheetElements();
+            const name = buildExportFileName({
+              title: api.doc?.title ?? '未命名',
+              date: new Date(),
+              orientation: api.page.orientation,
+              ext: 'png',
+            });
+            await downloadSheetsAsPng(sheets, name);
+          } catch (err) {
+            console.error(err);
+            pushToast('error', 'PNG 导出失败（图形库加载或渲染出错）');
+          } finally {
+            setBusy(null);
+          }
         });
       },
       onExportPdf: () => {
         setResult(computeResult());
         void afterSheetsRender(async () => {
-          const sheets = collectSheetElements();
-          const name = buildExportFileName({
-            title: api.doc?.title ?? '未命名',
-            date: new Date(),
-            orientation: api.page.orientation,
-            ext: 'pdf',
-          });
-          await downloadSheetsAsPdf(sheets, name, api.page.orientation);
+          setBusy('pdf');
+          try {
+            const sheets = collectSheetElements();
+            const name = buildExportFileName({
+              title: api.doc?.title ?? '未命名',
+              date: new Date(),
+              orientation: api.page.orientation,
+              ext: 'pdf',
+            });
+            await downloadSheetsAsPdf(sheets, name, api.page.orientation);
+          } catch (err) {
+            console.error(err);
+            pushToast('error', 'PDF 合成失败（pdf-lib 加载或渲染出错）');
+          } finally {
+            setBusy(null);
+          }
         });
       },
       onExportSvg: () => {
@@ -193,5 +212,5 @@ export function useExportModel(api: PanelsApi): {
     [api, afterSheetsRender, computeResult],
   );
 
-  return { result, sheetsVisible, actions, scope, setScope };
+  return { result, sheetsVisible, actions, scope, setScope, busy };
 }

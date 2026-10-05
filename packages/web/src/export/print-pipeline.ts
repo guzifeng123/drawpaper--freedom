@@ -3,8 +3,6 @@
  * - 矢量主线：动态注入 @page，body 加 class 隐藏应用外壳，window.print()。
  * - 位图：html-to-image(scale≈3) 逐页 PNG → pdf-lib 合成多页 PDF。
  */
-import { toPng } from 'html-to-image';
-import { PDFDocument } from 'pdf-lib';
 import type { PageOrientation } from '@drawpaper/core';
 import { buildPageFileName } from './filename';
 
@@ -101,6 +99,8 @@ export async function downloadSheetsAsPng(
 ): Promise<void> {
   const restore = revealOffScreenForCapture();
   try {
+    // 懒加载：html-to-image 仅在用户点「导出 PNG」时拉取，不进首包。
+    const { toPng } = await import('html-to-image');
     for (let i = 0; i < sheets.length; i++) {
       const el = sheets[i];
       if (!el) continue;
@@ -120,6 +120,11 @@ export async function downloadSheetsAsPdf(
 ): Promise<void> {
   const restore = revealOffScreenForCapture();
   try {
+    // 懒加载：pdf-lib + html-to-image 仅在用户点「直接下载 PDF」时拉取，不进首包。
+    const [{ PDFDocument }, { toPng }] = await Promise.all([
+      import('pdf-lib'),
+      import('html-to-image'),
+    ]);
     const pdf = await PDFDocument.create();
     const { width, height } = A4_PT[orientation];
     for (const el of sheets) {

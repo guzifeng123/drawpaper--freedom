@@ -1,9 +1,9 @@
-import { memo, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { ExternalLink, FileText, Trash2, Upload, CalendarClock } from 'lucide-react';
 import { useEditorApi } from '../canvas/editor-context';
 import { StaticHtml } from '../tiptap/static';
-import { renderEquation } from '../tiptap/katex-html';
-import { CODE_LANGUAGES, codeToHtml, extractCodeText } from '../tiptap/highlight';
+import { renderEquationAsync } from '../tiptap/katex-html';
+import { CODE_LANGUAGES, codeToHtmlAsync, extractCodeText } from '../tiptap/highlight';
 import { setCodeLanguage, readCodeLanguage } from '../tiptap/code-ops';
 import {
   type EquationData,
@@ -25,6 +25,38 @@ function formatSize(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
+
+/** 公式块静态 HTML：懒加载 katex，加载中显示占位，加载完替换（不阻塞虚拟化）。 */
+const EquationHtml = memo(function EquationHtml({ source }: { source: string }) {
+  const [html, setHtml] = useState('');
+  useEffect(() => {
+    let alive = true;
+    void renderEquationAsync(source).then((h) => {
+      if (alive) setHtml(h);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [source]);
+  if (!html) return <div className="py-3 text-center text-xs text-slate-400">公式渲染中…</div>;
+  return <div className="equation-html w-full py-1 text-center" dangerouslySetInnerHTML={{ __html: html }} />;
+});
+
+/** 代码块静态高亮 HTML：懒加载 hljs，加载中显示占位。 */
+const CodeHtml = memo(function CodeHtml({ code, lang }: { code: string; lang?: string }) {
+  const [html, setHtml] = useState('');
+  useEffect(() => {
+    let alive = true;
+    void codeToHtmlAsync(code, lang).then((h) => {
+      if (alive) setHtml(h);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [code, lang]);
+  if (!html) return <div className="py-1 pr-12 text-xs text-slate-500">代码高亮加载中…</div>;
+  return <div className="py-1 pr-12" dangerouslySetInnerHTML={{ __html: html }} />;
+});
 
 /** 表格块：Tiptap Table（块内编辑，Tab 跳格）。 */
 export const TableBlock = memo(function TableBlock({ data, selected }: { data: AppNode['data']; selected: boolean }) {
@@ -70,7 +102,7 @@ export const CodeBlock = memo(function CodeBlock({ data, selected }: { data: App
               ))}
             </select>
           </div>
-          <div className="py-1 pr-12" dangerouslySetInnerHTML={{ __html: codeToHtml(code, lang) }} />
+          <CodeHtml code={code} lang={lang} />
         </div>
         );
       }}
@@ -92,7 +124,7 @@ export const EquationBlock = memo(function EquationBlock({ data, selected }: { d
       contentClassName="flex items-center justify-center overflow-auto"
       renderStatic={() =>
         d.source ? (
-          <div className="equation-html w-full py-1 text-center" dangerouslySetInnerHTML={{ __html: renderEquation(d.source) }} />
+          <EquationHtml source={d.source} />
         ) : (
           <div className="py-3 text-center text-xs text-slate-400">双击编辑公式（$...$）</div>
         )
