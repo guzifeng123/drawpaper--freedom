@@ -266,3 +266,68 @@ describe('剪贴板 / 导入导出', () => {
     expect(store.getState().doc.nodes.map((n) => n.id)).toHaveLength(2);
   });
 });
+
+describe('P2.1 弯折点随块移动 / 多选清空宏', () => {
+  it('拖动 source 块 → 该边弯折点按位移平移；undo 一并回退', () => {
+    const a = mkNode('a', 0, 0);
+    const b = mkNode('b', 300, 0);
+    const e = mkEdge('e1', 'a', 'b');
+    e.points = [{ x: 100, y: 50 }];
+    store = createEditorStore(baseDoc([a, b], [e]), { analyzer: noopAnalyzer() });
+    // source(a) 从 (0,0) 拖到 (50,20) → 弯折点 (100,50) 平移到 (150,70)
+    store.getState().moveNode('a', 50, 20);
+    let pts = store.getState().doc.edges.find((ed) => ed.id === 'e1')!.points!;
+    expect(pts).toEqual([{ x: 150, y: 70 }]);
+    // undo：节点与弯折点同时回到原点
+    store.getState().undo();
+    pts = store.getState().doc.edges.find((ed) => ed.id === 'e1')!.points!;
+    expect(pts).toEqual([{ x: 100, y: 50 }]);
+    expect(store.getState().doc.nodes.find((n) => n.id === 'a')!.x).toBe(0);
+  });
+
+  it('只拖动 target 块 → 弯折点不动（刚性锚定 source）', () => {
+    const a = mkNode('a', 0, 0);
+    const b = mkNode('b', 300, 0);
+    const e = mkEdge('e1', 'a', 'b');
+    e.points = [{ x: 100, y: 50 }];
+    store = createEditorStore(baseDoc([a, b], [e]), { analyzer: noopAnalyzer() });
+    store.getState().moveNode('b', 360, 80);
+    const pts = store.getState().doc.edges.find((ed) => ed.id === 'e1')!.points!;
+    expect(pts).toEqual([{ x: 100, y: 50 }]);
+  });
+
+  it('两端同移（多选手势）→ 弯折点只随 source 平移一次，不重复平移', () => {
+    const a = mkNode('a', 0, 0);
+    const b = mkNode('b', 300, 0);
+    const e = mkEdge('e1', 'a', 'b');
+    e.points = [{ x: 100, y: 50 }];
+    store = createEditorStore(baseDoc([a, b], [e]), { analyzer: noopAnalyzer() });
+    // 模拟多选手势：两端各 +60,+10（source 平一次，target 不平）
+    store.getState().moveNode('a', 60, 10);
+    store.getState().moveNode('b', 360, 10);
+    const pts = store.getState().doc.edges.find((ed) => ed.id === 'e1')!.points!;
+    expect(pts).toEqual([{ x: 160, y: 60 }]);
+  });
+
+  it('clearEdgesPoints：多选边一次宏清空，undo 一次恢复全部', () => {
+    const a = mkNode('a', 0, 0);
+    const b = mkNode('b', 300, 0);
+    const c = mkNode('c', 600, 0);
+    const e1 = mkEdge('e1', 'a', 'b');
+    e1.points = [{ x: 100, y: 50 }, { x: 200, y: 50 }];
+    const e2 = mkEdge('e2', 'b', 'c');
+    e2.points = [{ x: 400, y: 50 }];
+    const e3 = mkEdge('e3', 'a', 'c'); // 无弯折点，应被跳过
+    store = createEditorStore(baseDoc([a, b, c], [e1, e2, e3]), { analyzer: noopAnalyzer() });
+    store.getState().clearEdgesPoints(['e1', 'e2', 'e3']);
+    expect(store.getState().doc.edges.find((e) => e.id === 'e1')!.points).toBeUndefined();
+    expect(store.getState().doc.edges.find((e) => e.id === 'e2')!.points).toBeUndefined();
+    // 一次 undo 恢复 e1/e2 的原弯折点（宏 = 一个撤销单元）
+    store.getState().undo();
+    expect(store.getState().doc.edges.find((e) => e.id === 'e1')!.points).toEqual([
+      { x: 100, y: 50 },
+      { x: 200, y: 50 },
+    ]);
+    expect(store.getState().doc.edges.find((e) => e.id === 'e2')!.points).toEqual([{ x: 400, y: 50 }]);
+  });
+});

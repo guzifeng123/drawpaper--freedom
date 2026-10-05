@@ -1,4 +1,4 @@
-import { memo, useRef, useState } from 'react';
+import { memo, useRef, useState, useEffect } from 'react';
 import {
   BaseEdge,
   EdgeLabelRenderer,
@@ -8,8 +8,14 @@ import {
 } from '@xyflow/react';
 import { EDGE_COLORS, DEFAULT_EDGE_COLOR } from '@drawpaper/core';
 import { useEditorApi } from '../canvas/editor-context';
-import { ArrowLeftRight } from 'lucide-react';
-import { buildEdgePath, edgeMidpoint, type EdgeEnd } from './edge-geometry';
+import { ArrowLeftRight, Trash2 } from 'lucide-react';
+import {
+  buildEdgePath,
+  edgeMidpoint,
+  type EdgeEnd,
+} from './edge-geometry';
+import { setActiveBendAnchor } from './bend-active';
+import { getBendMenu, setBendMenu, subscribeBendMenu } from './bend-menu';
 
 interface BendPoint {
   x: number;
@@ -19,12 +25,14 @@ interface BendPoint {
 /**
  * ParentEdge —— 唯一的边类型：有向父子边（带实心箭头）。
  *
- * 弯折点（P2 §4.3）：
- * - 选中边时，中点出现拖拽手柄（无 points 时拖出第一个弯折点）；
- * - 已有弯折点逐点显示为小圆手柄，可拖动改位、双击删除；
- * - 选中锚点后按 Delete/Backspace = 清空全部弯折点恢复贝塞尔（与「删边」区分：
- *   未锚定选中时 Delete 仍走 RF 原生删边）。
- * - points 世界坐标经 data.points 透传；api.setEdgePoints 可撤销持久化。
+ * 弯折点（P2.1 打磨）：
+ * - 双击边路径（非锚点）：在光标世界坐标处插入一个弯折点（走 setEdgePoints，可撤销）；
+ * - 选中边时中点出现拖拽手柄（无 points 时拖出第一个弯折点）；
+ * - 已有弯折点逐点显示为小锚点（热区 ≥24px），可拖动改位；
+ * - 键盘删除：点中某个锚点后按 Delete/Backspace 只删该锚点（不再清空全部弯折）；
+ *   边被选中但未选中锚点时 Delete 仍删边（RF 原生）；points 清空后恢复贝塞尔；
+ * - 多选边时浮动工具条出现「清除弯折点」，对每条选中边 setEdgePoints([])（一次可撤销宏）；
+ * - 右键锚点弹出小菜单：删除此弯折点。
  */
 
 export const ParentEdge = memo(function ParentEdge(props: EdgeProps) {
@@ -44,7 +52,9 @@ export const ParentEdge = memo(function ParentEdge(props: EdgeProps) {
   const rf = useReactFlow();
   const [label, setLabel] = useState<string>(typeof props.label === 'string' ? props.label : '');
   const [editingLabel, setEditingLabel] = useState(false);
-  const [pointActive, setPointActive] = useState(false);
+  // 右键锚点小菜单（模块级单例，避免重挂载丢 state）。
+  const [menu, setMenuLocal] = useState(() => getBendMenu());
+  useEffect(() => subscribeBendMenu(() => setMenuLocal(getBendMenu())), []);
 
   const selectedEdges = useStore((s) => s.edges.filter((e) => e.selected));
   const dimmed = (data as { dimmed?: boolean } | undefined)?.dimmed ?? false;
@@ -69,10 +79,14 @@ export const ParentEdge = memo(function ParentEdge(props: EdgeProps) {
   const drag = useRef<{ idx: number | null; startX: number; startY: number; base: BendPoint[] } | null>(null);
 
   const onHandlePointerDown = (e: React.PointerEvent, idx: number | null) => {
+    // 右键（button===2）：不 preventDefault / 不捕获指针 / 不进入拖拽，否则浏览器
+    // contextmenu 不触发，右键菜单弹不出。右键只用于弹菜单（onContextMenu 处理）。
+    if (e.button === 2) return;
     e.preventDefault();
     e.stopPropagation();
-    (e.target as Element).setPointerCapture(e.pointerId);
-    setPointActive(true);
+    (e.currentTarget as Element).setPointerCapture?.(e.pointerId);
+    // 登记「激活锚点」：全局 Delete 据此只删这一个点（idx===null 的中点手柄不登记）
+    if (idx !== null) setActiveBendAnchor({ edgeId: id, index: idx });
     drag.current = {
       idx, // null = 从 midpoint 新建
       startX: e.clientX,
@@ -86,13 +100,11 @@ export const ParentEdge = memo(function ParentEdge(props: EdgeProps) {
     const pos = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
     const next = d.base.map((p) => ({ ...p }));
     if (d.idx === null) {
-      // midpoint 手柄：拖到的位置即新建弯折点（先占位 1 个点）
       next.length = 0;
       next.push(pos);
     } else {
       next[d.idx] = pos;
     }
-    // 拖拽中实时预览（非持久化，松手才 commit）
     setLivePath(next);
   };
   const onHandlePointerUp = (e: React.PointerEvent) => {
@@ -116,20 +128,18 @@ export const ParentEdge = memo(function ParentEdge(props: EdgeProps) {
   const renderPoints = live ?? points;
   const renderPath = buildEdgePath(s, t, renderPoints);
 
-  // 双击锚点删除该点
+  // 删第 idx 个弯折点（右键菜单 / 双击锚点共用）
   const deletePoint = (idx: number) => {
     const next = points.filter((_, i) => i !== idx);
+    setActiveBendAnchor(null);
+    setBendMenu(null);
     api.setEdgePoints?.(id, next);
   };
 
-  // Delete/Backspace：锚点激活时清空弯折点（而非删边）
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (pointActive && (e.key === 'Delete' || e.key === 'Backspace')) {
-      e.preventDefault();
-      e.stopPropagation();
-      api.setEdgePoints?.(id, []);
-      setPointActive(false);
-    }
+  // 多选边一键清除：对每条选中边清空 points（core 侧合并为一次可撤销宏）
+  const onClearAllBends = () => {
+    const ids = selectedEdges.length > 1 ? selectedEdges.map((e) => e.id) : [id];
+    api.clearEdgesPoints?.(ids);
   };
 
   return (
@@ -144,42 +154,78 @@ export const ParentEdge = memo(function ParentEdge(props: EdgeProps) {
       {/* 选中：中点手柄 + 既有弯折点手柄 */}
       {selected && !dimmed && (
         <EdgeLabelRenderer>
-          <div
-            tabIndex={-1}
-            onKeyDown={onKeyDown}
-            style={{ position: 'absolute', inset: 0 }}
-            className="nodrag nopan"
-          >
+          <div style={{ position: 'absolute', inset: 0 }} className="nodrag nopan pointer-events-none">
             {/* 中点手柄（无 points 时拖出第一个弯折点；有 points 时作为加新点入口） */}
             <div
-              title="拖动新增弯折点；选中锚点后按 Delete 清空弯折"
+              data-testid="edge-bend-midpoint"
+              title="拖动新增弯折点；双击边路径也可加点"
               onPointerDown={(e) => onHandlePointerDown(e, null)}
               onPointerMove={onHandlePointerMove}
               onPointerUp={onHandlePointerUp}
-              className="nodrag nopan absolute h-3 w-3 -translate-x-1/2 -translate-y-1/2 cursor-crosshair rounded-full border border-blue-400 bg-white shadow"
+              className="nodrag nopan pointer-events-auto absolute flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 cursor-crosshair items-center justify-center"
               style={{ left: mid.x, top: mid.y }}
-            />
-            {/* 既有弯折点 */}
+            >
+              <span className="block h-3 w-3 rounded-full border border-blue-400 bg-white shadow" />
+            </div>
+            {/* 既有弯折点（热区 24px = h-6 w-6，视觉圆点 14px） */}
             {renderPoints.map((p, i) => (
               <div
                 key={i}
-                title={`弯折点 #${i + 1}：拖动改位，双击删除`}
+                data-testid="edge-bend-anchor"
+                title={`弯折点 #${i + 1}：拖动改位；右键删除；Delete 键删此点`}
                 onDoubleClick={(e) => {
                   e.stopPropagation();
                   deletePoint(i);
                 }}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setActiveBendAnchor({ edgeId: id, index: i });
+                  setBendMenu({ edgeId: id, index: i, x: p.x, y: p.y });
+                }}
                 onPointerDown={(e) => onHandlePointerDown(e, i)}
                 onPointerMove={onHandlePointerMove}
                 onPointerUp={onHandlePointerUp}
-                className="nodrag nopan absolute h-3.5 w-3.5 -translate-x-1/2 -translate-y-1/2 cursor-grab rounded-full border-2 border-blue-500 bg-blue-100 shadow"
+                className="nodrag nopan pointer-events-auto absolute flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 cursor-grab items-center justify-center"
                 style={{ left: p.x, top: p.y }}
-              />
+              >
+                <span className="block h-3.5 w-3.5 rounded-full border-2 border-blue-500 bg-blue-100 shadow" />
+              </div>
             ))}
+            {/* 右键锚点小菜单（轻量自制，无新依赖） */}
+            {menu && menu.edgeId === id && (
+              <div
+                className="nodrag nopan pointer-events-auto absolute"
+                style={{ left: menu.x, top: menu.y, transform: 'translate(12px, 12px)' }}
+              >
+                <div className="rounded-md border bg-white py-1 shadow-lg">
+                  <button
+                    data-testid="edge-bend-menu-delete"
+                    className="flex w-full items-center gap-1 px-3 py-1 text-left text-xs text-slate-700 hover:bg-slate-100"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deletePoint(menu.index);
+                    }}
+                  >
+                    <Trash2 size={12} /> 删除此弯折点
+                  </button>
+                  <button
+                    className="w-full px-3 py-1 text-left text-xs text-slate-400 hover:bg-slate-50"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setBendMenu(null);
+                    }}
+                  >
+                    取消
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </EdgeLabelRenderer>
       )}
 
-      {/* 边色板 + 反转（选中且未降透明时浮在边中点） */}
+      {/* 边色板 + 反转（选中且未降透明时浮在边中点）；多选时追加「清除弯折点」 */}
       {selected && !dimmed && (
         <EdgeLabelRenderer>
           <div
@@ -210,6 +256,23 @@ export const ParentEdge = memo(function ParentEdge(props: EdgeProps) {
             >
               <ArrowLeftRight size={12} />
             </button>
+            {/* 多选边时才出现：一键清除全部选中边的弯折点（一次可撤销宏） */}
+            {selectedEdges.length > 1 && (
+              <>
+                <span className="mx-0.5 h-3 w-px bg-slate-200" />
+                <button
+                  data-testid="edge-clear-bends"
+                  title="清除所有选中边的弯折点（恢复贝塞尔）"
+                  className="flex items-center gap-0.5 rounded p-0.5 text-[10px] text-slate-500 hover:text-blue-600"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onClearAllBends();
+                  }}
+                >
+                  <Trash2 size={12} /> 清除弯折
+                </button>
+              </>
+            )}
           </div>
         </EdgeLabelRenderer>
       )}
