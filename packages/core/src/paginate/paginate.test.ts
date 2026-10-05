@@ -121,9 +121,13 @@ describe('paginate / fit', () => {
     expect(r.pages[0]!.scale).toBeLessThanOrEqual(2);
   });
 
-  it('超大内容（scale<0.25）退化为多页', () => {
-    // 内容 10000×10000 → naturalScale≈0.068 <0.25 → 退化 tiles
-    const input = fitInput({ n: { x: 0, y: 0 } }, { n: { width: 10000, height: 10000 } });
+  it('超大内容（scale<0.25）退化为多页（裁剪后仍多页）', () => {
+    // 4 个节点铺在 4000×4000 四角：naturalScale≈0.17<0.25 → 退化 tiles；
+    // 四角节点各占一页（无空白页可裁），裁剪后仍 >1 页。
+    const input = fitInput(
+      { a: { x: 0, y: 0 }, b: { x: 4000, y: 0 }, c: { x: 0, y: 4000 }, d: { x: 4000, y: 4000 } },
+      { a: { width: 400, height: 300 }, b: { width: 400, height: 300 }, c: { width: 400, height: 300 }, d: { width: 400, height: 300 } },
+    );
     const r = paginateFit(input);
     expect(r.pages.length).toBeGreaterThan(1);
     expect(r.pages[0]!.scale).toBeCloseTo(0.25, 5);
@@ -175,6 +179,88 @@ describe('paginate / tiles', () => {
     const r = paginateTiles(input);
     const pagesWithNode = r.pages.filter((p) => p.nodeIds.includes('near'));
     expect(pagesWithNode).toHaveLength(1);
+  });
+});
+
+describe('paginate / tiles 空白页裁剪与重编号', () => {
+  function sparseInput(over?: Partial<PaginateSettings>, edges: Edge[] = []): PaginateInput {
+    // n1/n2 主簇跨页相连；n3 孤块甩到远处（5000,5000），撑出大网格却无节点。
+    const positions = {
+      n1: { x: 0, y: 0 },
+      n2: { x: 900, y: 0 },
+      n3: { x: 5000, y: 5000 },
+    };
+    const measured = {
+      n1: { width: 260, height: 80 },
+      n2: { width: 260, height: 80 },
+      n3: { width: 260, height: 80 },
+    };
+    return {
+      layout: makeLayout(positions),
+      measured,
+      settings: makeSettings(over),
+      edges,
+    };
+  }
+
+  it('稀疏夹具：网格空白页被裁，剩余页连续重编号', () => {
+    const edges = [makeEdge('e_cross', 'n1', 'n2')];
+    const r = paginateTiles(sparseInput({}, edges));
+    // 原始 2 列 × 6 行 = 12 页，仅 3 页有节点 → 裁到 3 页。
+    expect(r.pages.length).toBe(3);
+    expect(r.totalPages).toBe(3);
+    // 页码连续 0,1,2。
+    r.pages.forEach((p, i) => {
+      expect(p.index).toBe(i);
+      expect(p.pageNumber).toBe(i);
+    });
+    // 无任何零节点残留页。
+    for (const p of r.pages) expect(p.nodeIds.length).toBeGreaterThan(0);
+    // 三个节点各在一页。
+    const allNodes = r.pages.flatMap((p) => p.nodeIds).sort();
+    expect(allNodes).toEqual(['n1', 'n2', 'n3']);
+  });
+
+  it('裁剪后跨页续接标记仍成对且互指正确', () => {
+    const edges = [makeEdge('e_cross', 'n1', 'n2')];
+    const r = paginateTiles(sparseInput({}, edges));
+    const markers = r.pages.flatMap((p) => p.continuations);
+    expect(markers).toHaveLength(2);
+    expect(markers[0]!.token).toBe(markers[1]!.token);
+    // 互指：A.peer == B.pageIndex，B.peer == A.pageIndex。
+    expect(markers[0]!.peerPageIndex).toBe(markers[1]!.pageIndex);
+    expect(markers[1]!.peerPageIndex).toBe(markers[0]!.pageIndex);
+    // marker 所在页索引合法（< 总页数）。
+    for (const m of markers) {
+      expect(m.pageIndex).toBeGreaterThanOrEqual(0);
+      expect(m.pageIndex).toBeLessThan(r.totalPages);
+      expect(m.peerPageIndex).toBeGreaterThanOrEqual(0);
+      expect(m.peerPageIndex).toBeLessThan(r.totalPages);
+    }
+  });
+
+  it('含节点页不被误裁（孤块页保留并标黄）', () => {
+    const r = paginateTiles(sparseInput());
+    // 孤块 n3 仍在导出中。
+    expect(r.pages.some((p) => p.nodeIds.includes('n3'))).toBe(true);
+    const warn = r.orphans.find((o) => o.nodeId === 'n3');
+    expect(warn?.severity).toBe('warn');
+  });
+
+  it('手动分页符切出的空白页保留（不裁剪）', () => {
+    // n_a 在页顶、n_b 在下一页；手动符在页 0 中部 → 页 0 被切成两带，上带含 n_a、下带空白。
+    const positions = { n_a: { x: 0, y: 0 }, n_b: { x: 0, y: 1500 } };
+    const measured = { n_a: { width: 200, height: 200 }, n_b: { width: 200, height: 200 } };
+    const settings = makeSettings({ pageBreaks: [{ at: 600 }] });
+    const input: PaginateInput = { layout: makeLayout(positions), measured, settings, edges: [] };
+    const r = paginateTiles(input);
+    // 上带(n_a) + 手动空白带(preserveBlank) + 下页(n_b) = 3 页。
+    expect(r.pages.length).toBe(3);
+    const blank = r.pages.find((p) => p.nodeIds.length === 0);
+    expect(blank, '手动分页符产生的空白页应保留').toBeTruthy();
+    expect(blank!.preserveBlank).toBe(true);
+    // 页码仍连续。
+    r.pages.forEach((p, i) => expect(p.index).toBe(i));
   });
 });
 

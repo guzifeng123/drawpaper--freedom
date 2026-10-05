@@ -10,6 +10,37 @@ import { mmToPx } from '@drawpaper/core';
 import { TiptapStatic } from './render/tiptap-static';
 import { sheetSizePx, pageNumberLabel } from './layout-utils';
 
+/** 续接标记圆圈半径（px）。 */
+const MARKER_R = 9;
+/** 边标签与标记圆圈中心的安全距离（圆圈半径 + 标签半高 + 间隙）。 */
+const LABEL_SAFE_R = 20;
+
+/**
+ * 计算边自由标签的落点：贝塞尔中点为基准，沿「推离标记圆圈」方向平移，
+ * 避免长标签压住续接标记圆圈/数字；迭代 2~3 次稳定。
+ */
+function placeEdgeLabel(
+  mx: number,
+  my: number,
+  markers: ReadonlyArray<{ x: number; y: number }>,
+): { x: number; y: number } {
+  let lx = mx;
+  let ly = my - 6;
+  for (let iter = 0; iter < 3; iter++) {
+    for (const m of markers) {
+      const dx = lx - m.x;
+      const dy = ly - m.y;
+      const d = Math.hypot(dx, dy);
+      if (d < LABEL_SAFE_R && d > 1e-6) {
+        const push = LABEL_SAFE_R - d;
+        lx += (dx / d) * push;
+        ly += (dy / d) * push;
+      }
+    }
+  }
+  return { x: lx, y: ly };
+}
+
 /**
  * 离屏打印容器（body 下 portal）。
  * - 屏幕上 display:none；打印时 body 加 .drawpaper-printing 后可见（见 index.css）。
@@ -30,6 +61,15 @@ export function PrintSheets({ result, doc, settings, edgeLabelsVisible }: PrintS
   const nodeById = new Map<string, BlockNode>(doc.nodes.map((n) => [n.id, n]));
   const edgeById = new Map<string, Edge>(doc.edges.map((e) => [e.id, e]));
   const orphanIds = new Set(result.orphans.map((o) => o.nodeId));
+
+  // 成对续接标记编号：按 token 首次出现顺序分配 1..N（两页共享同一编号）。
+  // 圆圈内只显示短数字，不再塞整条 edgeId，避免溢出压住旁边的边标签。
+  const tokenToNumber = new Map<string, number>();
+  for (const p of result.pages) {
+    for (const c of p.continuations) {
+      if (!tokenToNumber.has(c.token)) tokenToNumber.set(c.token, tokenToNumber.size + 1);
+    }
+  }
 
   return createPortal(
     <div className={gray ? 'drawpaper-print-container tp-gray' : 'drawpaper-print-container'}>
@@ -131,37 +171,52 @@ export function PrintSheets({ result, doc, settings, edgeLabelsVisible }: PrintS
                       <path d="M 0 0 L 10 5 L 0 10 z" fill={gray ? '#333' : '#94A3B8'} />
                     </marker>
                   </defs>
-                  {page.edgeIds.map((eid) => {
-                    const e = edgeById.get(eid);
-                    const s = e && nodeById.get(e.source);
-                    const t = e && nodeById.get(e.target);
-                    if (!e || !s || !t) return null;
-                    const sr = drawnRect(s);
-                    const tr = drawnRect(t);
-                    const x1 = sr.x + sr.w;
-                    const y1 = sr.y + sr.h / 2;
-                    const x2 = tr.x;
-                    const y2 = tr.y + tr.h / 2;
-                    const cx1 = x1 + Math.max(40, (x2 - x1) / 2);
-                    const cx2 = x2 - Math.max(40, (x2 - x1) / 2);
-                    const color = gray ? '#333' : e.style.color;
-                    return (
-                      <g key={eid}>
-                        <path
-                          d={`M ${x1} ${y1} C ${cx1} ${y1}, ${cx2} ${y2}, ${x2} ${y2}`}
-                          fill="none"
-                          stroke={color}
-                          strokeWidth={1.5}
-                          markerEnd={`url(#arrow-${page.index})`}
-                        />
-                        {edgeLabelsVisible && e.label ? (
-                          <text x={(x1 + x2) / 2} y={(y1 + y2) / 2 - 4} fontSize={9} fill={gray ? '#333' : '#64748b'} textAnchor="middle">
-                            {e.label}
-                          </text>
-                        ) : null}
-                      </g>
-                    );
-                  })}
+                  {(() => {
+                    const markers = page.continuations.map((c) => ({ x: c.x, y: c.y }));
+                    return page.edgeIds.map((eid) => {
+                      const e = edgeById.get(eid);
+                      const s = e && nodeById.get(e.source);
+                      const t = e && nodeById.get(e.target);
+                      if (!e || !s || !t) return null;
+                      const sr = drawnRect(s);
+                      const tr = drawnRect(t);
+                      const x1 = sr.x + sr.w;
+                      const y1 = sr.y + sr.h / 2;
+                      const x2 = tr.x;
+                      const y2 = tr.y + tr.h / 2;
+                      const cx1 = x1 + Math.max(40, (x2 - x1) / 2);
+                      const cx2 = x2 - Math.max(40, (x2 - x1) / 2);
+                      const color = gray ? '#333' : e.style.color;
+                      const anchor = edgeLabelsVisible && e.label
+                        ? placeEdgeLabel((x1 + x2) / 2, (y1 + y2) / 2, markers)
+                        : null;
+                      return (
+                        <g key={eid}>
+                          <path
+                            d={`M ${x1} ${y1} C ${cx1} ${y1}, ${cx2} ${y2}, ${x2} ${y2}`}
+                            fill="none"
+                            stroke={color}
+                            strokeWidth={1.5}
+                            markerEnd={`url(#arrow-${page.index})`}
+                          />
+                          {anchor ? (
+                            <text
+                              x={anchor.x}
+                              y={anchor.y}
+                              fontSize={9}
+                              fill={gray ? '#111827' : '#334155'}
+                              textAnchor="middle"
+                              stroke="#ffffff"
+                              strokeWidth={3}
+                              paintOrder="stroke"
+                            >
+                              {e.label}
+                            </text>
+                          ) : null}
+                        </g>
+                      );
+                    });
+                  })()}
 
                   {/* 跨页续接标记：同编号小圆圈 */}
                   {page.continuations.map((c) => (
@@ -169,7 +224,7 @@ export function PrintSheets({ result, doc, settings, edgeLabelsVisible }: PrintS
                       <circle
                         cx={c.x}
                         cy={c.y}
-                        r={9}
+                        r={MARKER_R}
                         fill="#fff"
                         stroke={gray ? '#333' : '#0ea5e9'}
                         strokeWidth={1.5}
@@ -181,7 +236,7 @@ export function PrintSheets({ result, doc, settings, edgeLabelsVisible }: PrintS
                         textAnchor="middle"
                         fill={gray ? '#333' : '#0ea5e9'}
                       >
-                        {c.token}
+                        {tokenToNumber.get(c.token) ?? ''}
                       </text>
                     </g>
                   ))}

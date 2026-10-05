@@ -84,11 +84,17 @@ describe('PrintSheets', () => {
     expect(document.body.textContent).toContain('第 2 / 2 页');
   });
 
-  it('跨页续接标记成对出现（同 token）', () => {
+  it('跨页续接标记成对出现（同 token，圆圈内显示成对短编号）', () => {
     render(<PrintSheets result={makeResult()} doc={makeDoc()} settings={baseSettings} edgeLabelsVisible />);
     const circles = document.querySelectorAll('.drawpaper-print-container circle');
     expect(circles.length).toBe(2);
-    expect(document.body.textContent).toContain('A');
+    // token 'A' 是首个出现的 cont → 两页圆圈都显示编号 1。
+    const contTexts = Array.from(
+      document.querySelectorAll('.drawpaper-print-container .sheet svg g'),
+    )
+      .filter((g) => g.querySelector('circle'))
+      .map((g) => g.textContent);
+    expect(contTexts).toEqual(['1', '1']);
   });
 
   it('孤块黄色角标', () => {
