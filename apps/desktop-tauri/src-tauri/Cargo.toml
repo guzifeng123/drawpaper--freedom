@@ -29,6 +29,10 @@ tauri-plugin-single-instance = "2.0"
 tauri-plugin-notification = "2.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Dialog commands await the native picker via a oneshot channel. (tokio is
+# already in the dependency tree via tauri itself; we just need the `sync`
+# feature surface in our crate.)
+tokio = { version = "1", features = ["sync"] }
 # Recents list / auto-save folder metadata lives in a small JSON file next to
 # the app config dir; no extra KV store dependency.
 dirs = "5"

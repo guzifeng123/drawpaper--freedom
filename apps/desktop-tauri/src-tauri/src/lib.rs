@@ -18,7 +18,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use tauri::{Emitter, Manager, Menu, MenuEvent, Submenu, AboutMetadata};
+use tauri::{Emitter, Manager};
+use tauri::menu::{AboutMetadata, Menu, MenuEvent, Submenu};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
 
@@ -153,7 +154,7 @@ async fn open_kbnote(
     let Some(path) = picked else {
         return Ok(None);
     };
-    let path: PathBuf = path.into();
+    let path: PathBuf = path.into_path().map_err(|e| e.to_string())?;
     let text = fs::read_to_string(&path).map_err(|e| format!("read failed: {e}"))?;
     let name = path
         .file_name()
@@ -209,7 +210,7 @@ async fn save_kbnote(
             // User cancelled the save dialog — treat as cancel, not error.
             return Err("cancelled".to_string());
         };
-        p.into()
+        p.into_path().map_err(|e| e.to_string())?
     };
 
     if let Some(parent) = target.parent() {
@@ -293,7 +294,7 @@ async fn choose_auto_save_dir(
     let Some(folder) = picked else {
         return Ok(None);
     };
-    let folder: PathBuf = folder.into();
+    let folder = folder.into_path().map_err(|e| e.to_string())?;
     {
         let mut d = state.auto_save_dir.lock().unwrap();
         *d = Some(folder.clone());
@@ -395,7 +396,7 @@ fn backup_doc(
     fs::write(&target, text).map_err(|e| format!("backup write: {e}"))?;
 
     // Prune: list *.kbnote in backup_dir, sort by mtime, drop oldest beyond KEEP.
-    if let Ok(mut entries) = fs::read_dir(&backup_dir) {
+    if let Ok(entries) = fs::read_dir(&backup_dir) {
         let mut files: Vec<(PathBuf, std::time::SystemTime)> = entries
             .filter_map(Result::ok)
             .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("kbnote"))
@@ -420,70 +421,34 @@ fn backup_doc(
 // ---------------------------------------------------------------------------
 
 fn build_menu(app: &tauri::App) -> Menu {
-    use tauri::menu::{AboutMenuItem, PredefinedMenuItem, Submenu};
+    use tauri::menu::{AboutMenuItem, MenuItem, PredefinedMenuItem, Submenu};
+
+    // `MenuItem::with_id` returns a Result; build an owned item in one call.
+    fn item(app: &tauri::App, id: &str, text: &str) -> MenuItem<tauri::Wry> {
+        MenuItem::with_id(app, id, text, true, None::<&str>).unwrap()
+    }
 
     let file = Submenu::new(app, "文件", true).unwrap();
-    file.append(&tauri::menu::MenuItem::with_id(
-        app, "file:new", "新建画布", true, None::<&str>,
-    ))
-    .unwrap();
-    file.append(&tauri::menu::MenuItem::with_id(
-        app, "file:open", "打开…\tCtrl+O", true, None::<&str>,
-    ))
-    .unwrap();
-    file.append(&tauri::menu::MenuItem::with_id(
-        app, "file:save", "保存\tCtrl+S", true, None::<&str>,
-    ))
-    .unwrap();
-    file.append(&tauri::menu::MenuItem::with_id(
-        app, "file:save-as", "另存为…", true, None::<&str>,
-    ))
-    .unwrap();
+    file.append(&item(app, "file:new", "新建画布")).unwrap();
+    file.append(&item(app, "file:open", "打开…\tCtrl+O")).unwrap();
+    file.append(&item(app, "file:save", "保存\tCtrl+S")).unwrap();
+    file.append(&item(app, "file:save-as", "另存为…")).unwrap();
     file.append(&PredefinedMenuItem::separator(app)).unwrap();
-    file.append(&tauri::menu::MenuItem::with_id(
-        app, "file:open-recent", "打开最近", true, None::<&str>,
-    ))
-    .unwrap();
-    file.append(&tauri::menu::MenuItem::with_id(
-        app, "file:clear-recent", "清空最近", true, None::<&str>,
-    ))
-    .unwrap();
+    file.append(&item(app, "file:open-recent", "打开最近")).unwrap();
+    file.append(&item(app, "file:clear-recent", "清空最近")).unwrap();
 
     let edit = Submenu::new(app, "编辑", true).unwrap();
-    edit.append(&tauri::menu::MenuItem::with_id(
-        app, "edit:undo", "撤销\tCtrl+Z", true, None::<&str>,
-    ))
-    .unwrap();
-    edit.append(&tauri::menu::MenuItem::with_id(
-        app, "edit:redo", "重做\tCtrl+Shift+Z", true, None::<&str>,
-    ))
-    .unwrap();
+    edit.append(&item(app, "edit:undo", "撤销\tCtrl+Z")).unwrap();
+    edit.append(&item(app, "edit:redo", "重做\tCtrl+Shift+Z")).unwrap();
 
     let export = Submenu::new(app, "导出", true).unwrap();
-    export
-        .append(&tauri::menu::MenuItem::with_id(
-            app, "export:print", "打印 / 另存为 PDF\tCtrl+P", true, None::<&str>,
-        ))
-        .unwrap();
-    export
-        .append(&tauri::menu::MenuItem::with_id(
-            app, "export:pdf", "直接下载 PDF", true, None::<&str>,
-        ))
-        .unwrap();
+    export.append(&item(app, "export:print", "打印 / 另存为 PDF\tCtrl+P")).unwrap();
+    export.append(&item(app, "export:pdf", "直接下载 PDF")).unwrap();
 
     let view = Submenu::new(app, "视图", true).unwrap();
-    view.append(&tauri::menu::MenuItem::with_id(
-        app, "view:fit", "适应屏幕\tCtrl+0", true, None::<&str>,
-    ))
-    .unwrap();
-    view.append(&tauri::menu::MenuItem::with_id(
-        app, "view:zoom-in", "放大\tCtrl+=", true, None::<&str>,
-    ))
-    .unwrap();
-    view.append(&tauri::menu::MenuItem::with_id(
-        app, "view:zoom-out", "缩小\tCtrl+-", true, None::<&str>,
-    ))
-    .unwrap();
+    view.append(&item(app, "view:fit", "适应屏幕\tCtrl+0")).unwrap();
+    view.append(&item(app, "view:zoom-in", "放大\tCtrl+=")).unwrap();
+    view.append(&item(app, "view:zoom-out", "缩小\tCtrl+-")).unwrap();
 
     let help = Submenu::new(app, "帮助", true).unwrap();
     help.append(&AboutMenuItem::new(
@@ -538,10 +503,8 @@ pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_notification::init())
+        // single-instance MUST be registered before any other plugin so it can
+        // exit the second process before the rest of the app initializes.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // A second instance was launched (e.g. user double-clicked another
             // .kbnote). Forward the argv path to the already-running window.
@@ -555,6 +518,10 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }))
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
         .setup(|app| {
             // Load persisted recents into state.
