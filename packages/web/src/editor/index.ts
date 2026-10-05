@@ -29,4 +29,4 @@ export {
   DEFAULT_GESTURE_CONFIG,
 } from './state/gesture';
 export type { GestureState, GestureEvent, GestureIntent, GestureConfig } from './state/gesture';
-export { renderEquation, stripDollars } from './tiptap/katex-html';
+export { renderEquationAsync, renderEquation, ensureKatex, stripDollars } from './tiptap/katex-html';

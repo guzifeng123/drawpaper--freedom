@@ -58,11 +58,13 @@ export function ExportDialog({
   actions,
   scope,
   onScopeChange,
+  busy,
 }: {
   api: PanelsApi;
   actions: ExportDialogActions;
   scope: ExportScope;
   onScopeChange: (s: ExportScope) => void;
+  busy?: 'png' | 'pdf' | null;
 }) {
   const src = api.page;
   const [orientation, setOrientationState] = React.useState<PageOrientation>(src.orientation);
@@ -247,11 +249,11 @@ export function ExportDialog({
             <Button onClick={actions.onPrint}>
               <Printer className="h-4 w-4" /> 打印 / 另存 PDF
             </Button>
-            <Button variant="outline" onClick={actions.onExportPng}>
-              <ImageDown className="h-4 w-4" /> 导出高清 PNG
+            <Button variant="outline" onClick={actions.onExportPng} disabled={busy === 'png' || busy === 'pdf'}>
+              <ImageDown className="h-4 w-4" /> {busy === 'png' ? '加载导出库…' : '导出高清 PNG'}
             </Button>
-            <Button variant="outline" onClick={actions.onExportPdf}>
-              <FileDown className="h-4 w-4" /> 直接下载 PDF
+            <Button variant="outline" onClick={actions.onExportPdf} disabled={busy === 'png' || busy === 'pdf'}>
+              <FileDown className="h-4 w-4" /> {busy === 'pdf' ? '加载导出库…' : '直接下载 PDF'}
             </Button>
             <Button variant="outline" onClick={actions.onExportSvg}>
               <FileCode className="h-4 w-4" /> 矢量 SVG

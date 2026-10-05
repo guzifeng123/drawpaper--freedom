@@ -55,42 +55,50 @@ export const BlockShell = memo(function BlockShell({
   // 进入编辑：挂载真实 Tiptap Editor（特殊块提供 renderEditor 时跳过）
   useEffect(() => {
     if (!isEditing || renderEditor) return;
-    const ed = createBlockEditor({
+    let cancelled = false;
+    let ed: Editor | null = null;
+    // createBlockEditor 现可异步（代码块内容时懒加载 lowlight）；加载完再挂载。
+    void createBlockEditor({
       content: block.content.data,
       autofocus: 'end',
       onUpdate: (json) => api.updateContent(block.id, json),
-    });
-    const dom = ed.view.dom;
+    }).then((editor) => {
+      if (cancelled) {
+        editor.destroy();
+        return;
+      }
+      ed = editor;
+      const dom = ed.view.dom;
 
-    const onPaste = (ev: ClipboardEvent) => {
-      const item = Array.from(ev.clipboardData?.items ?? []).find((i) => i.type.startsWith('image/'));
-      if (item) {
-        ev.preventDefault();
-        ev.stopPropagation();
-        const file = item.getAsFile();
-        if (file) {
-          const reader = new FileReader();
-          reader.onload = () => {
-            api.addImageBlock(String(reader.result), block.x + block.width + 48, block.y);
-          };
-          reader.readAsDataURL(file);
+      const onPaste = (ev: ClipboardEvent) => {
+        const item = Array.from(ev.clipboardData?.items ?? []).find((i) => i.type.startsWith('image/'));
+        if (item) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          const file = item.getAsFile();
+          if (file) {
+            const reader = new FileReader();
+            reader.onload = () => {
+              api.addImageBlock(String(reader.result), block.x + block.width + 48, block.y);
+            };
+            reader.readAsDataURL(file);
+          }
         }
-      }
-    };
-    const onKey = (ev: KeyboardEvent) => {
-      if (ev.key === 'Escape') {
-        ev.preventDefault();
-        ev.stopPropagation();
-        api.setEditingNode(null);
-      }
-    };
-    dom.addEventListener('paste', onPaste, true);
-    dom.addEventListener('keydown', onKey, true);
-    setEditor(ed);
+      };
+      const onKey = (ev: KeyboardEvent) => {
+        if (ev.key === 'Escape') {
+          ev.preventDefault();
+          ev.stopPropagation();
+          api.setEditingNode(null);
+        }
+      };
+      dom.addEventListener('paste', onPaste, true);
+      dom.addEventListener('keydown', onKey, true);
+      setEditor(ed);
+    });
     return () => {
-      dom.removeEventListener('paste', onPaste, true);
-      dom.removeEventListener('keydown', onKey, true);
-      ed.destroy();
+      cancelled = true;
+      ed?.destroy();
       setEditor(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

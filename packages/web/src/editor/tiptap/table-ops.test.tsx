@@ -16,7 +16,7 @@ const cell = (text: string) => ({
   content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
 });
 
-function makeEditor(): Editor {
+async function makeEditor(): Promise<Editor> {
   return createBlockEditor({
     content: {
       type: 'doc',
@@ -47,15 +47,15 @@ function selectRowCells(ed: Editor, row: number): void {
 }
 
 describe('表格合并/拆分（命令层）', () => {
-  it('默认两格均为 colspan=1', () => {
-    const ed = makeEditor();
+  it('默认两格均为 colspan=1', async () => {
+    const ed = await makeEditor();
     expect(ed.getHTML()).toContain('<td');
     expect(ed.getHTML()).not.toContain('colspan="2"');
     ed.destroy();
   });
 
-  it('普通光标下 mergeCells 不可用；CellSelection 下可用', () => {
-    const ed = makeEditor();
+  it('普通光标下 mergeCells 不可用；CellSelection 下可用', async () => {
+    const ed = await makeEditor();
     
     // 普通光标：mergeCells 命令返回 false
     expect(mergeCells(ed.state, undefined)).toBe(false);
@@ -65,8 +65,8 @@ describe('表格合并/拆分（命令层）', () => {
     ed.destroy();
   });
 
-  it('mergeCells 产生 colspan=2，splitCell 还原', () => {
-    const ed = makeEditor();
+  it('mergeCells 产生 colspan=2，splitCell 还原', async () => {
+    const ed = await makeEditor();
     
     selectRowCells(ed, 0);
     // 在 CellSelection 上直接 dispatch（与工具条按钮同命令；不在链上 .focus 以免折叠选区）。
