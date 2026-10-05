@@ -18,6 +18,11 @@ concurrency:
 jobs:
   ci:
     runs-on: ubuntu-latest
+    env:
+      # .npmrc pins registry.npmmirror.com (fast for local China dev).
+      # GitHub runners are in the US; override to the official registry so CI
+      # doesn't flake on mirror connectivity.
+      npm_config_registry: https://registry.npmjs.org/
     defaults:
       run:
         working-directory: .

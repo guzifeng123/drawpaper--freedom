@@ -19,6 +19,8 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      npm_config_registry: https://registry.npmjs.org/
     strategy:
       fail-fast: false
       matrix:
