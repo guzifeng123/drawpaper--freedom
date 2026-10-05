@@ -3,6 +3,7 @@ import { parseKBNote, KBNoteFileError, serializeKBNote } from '@drawpaper/core';
 import { editorStore } from '@/store/editor-store';
 import { getAsset, isOpfsAvailable } from '@/storage/opfs';
 import { loadBacklinks } from '@/storage/backlinks';
+import { mountOverviewDev, unmountOverviewDev } from '@/overview/dev-mount';
 
 /**
  * DEV-only 测试钩子（window.__drawpaper__）。
@@ -50,6 +51,11 @@ export interface DrawpaperDevHook {
   exportCurrent(): string;
   /** 查询指向 (docId, nodeId?) 的反链条目（来源文档/块标题）。 */
   backlinksTo(docId: string, nodeId?: string | null): Promise<unknown[]>;
+  // ---- Wave6b 全局知识图谱总览（DEV-only，供 e2e 临时挂载；Wave7 由 App 正式挂载）----
+  /** 临时挂载只读全局总览画布（全屏 fixed 容器）。 */
+  mountOverviewDev(): void;
+  /** 卸载临时总览容器。 */
+  unmountOverviewDev(): void;
 }
 
 declare global {
@@ -196,6 +202,12 @@ export function installDevHooks(): void {
     },
     async backlinksTo(docId: string, nodeId: string | null = null) {
       return loadBacklinks(editorStore.getState().doc, docId, nodeId);
+    },
+    mountOverviewDev() {
+      mountOverviewDev();
+    },
+    unmountOverviewDev() {
+      unmountOverviewDev();
     },
   };
 }
