@@ -162,6 +162,6 @@ jobs:
             Windows 桌面安装包（NSIS，Win10/11）。本地优先：所有数据留在本机，无账号、无云同步。
 
             - `drawpaper_*_x64-setup.exe` — 64 位 Intel/AMD
-            - `drawpaper_*_aarch64-setup.exe` — ARM64（Copilot+、Surface Pro X 等）
+            - `drawpaper_*_arm64-setup.exe` — ARM64（Copilot+、Surface Pro X 等）
 
             本版为预发布（RC），尚未启用自动更新：升级请手动下载新安装包覆盖安装。详见仓库 `CHANGELOG.md` 与 `docs/RELEASE.md`。
