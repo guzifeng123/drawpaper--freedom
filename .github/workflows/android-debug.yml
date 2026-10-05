@@ -1,0 +1,107 @@
+name: android-debug
+
+# Builds an unsigned Android debug APK from the Capacitor shell. Not signed,
+# not uploaded to Play Store — just an installable artifact for manual testing
+# on a tablet. Runs on every push to feat/**/fix/**/develop (same trigger as
+# web-ci) so we can catch breakage early.
+
+on:
+  push:
+    branches:
+      - develop
+      - 'feat/**'
+      - 'fix/**'
+  pull_request:
+    branches:
+      - develop
+
+concurrency:
+  group: android-debug-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    env:
+      npm_config_registry: https://registry.npmjs.org/
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+          run_install: false
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile --registry=https://registry.npmjs.org/
+
+      - name: Build web frontend
+        run: pnpm -r build
+
+      - name: Setup JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      # android-actions/setup-android@v3 targets the Node 20 runtime which is
+      # being force-upgraded to Node 24 on hosted runners (deprecation Sep 2025)
+      # and fails at the action step. Install cmdline-tools directly instead —
+      # deterministic and version-pinned.
+      - name: Install Android cmdline-tools
+        shell: bash
+        run: |
+          set +e
+          export ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"
+          export ANDROID_HOME="$ANDROID_SDK_ROOT"
+          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+          if [ ! -x "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" ]; then
+            curl -fsSL -o /tmp/cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip 2>&1 | tee /tmp/sdk-setup.log
+            unzip -q /tmp/cmdtools.zip -d /tmp/cmdtools
+            mv /tmp/cmdtools/cmdline-tools "$ANDROID_SDK_ROOT/cmdline-tools/latest"
+          fi
+          SDKMGR="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMGR" --licenses 2>&1 | tee -a /tmp/sdk-setup.log
+          "$SDKMGR" "platform-tools" "platforms;android-34" "build-tools;34.0.0" 2>&1 | tee -a /tmp/sdk-setup.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" != "0" ]; then
+            tail -n 40 /tmp/sdk-setup.log | while IFS= read -r line; do
+              echo "::error title=android-sdk-setup::${line:0:900}"
+            done
+            exit "$code"
+          fi
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+
+      - name: Setup Capacitor CLI
+        working-directory: apps/mobile-capacitor
+        run: pnpm install --ignore-workspace --registry=https://registry.npmjs.org/
+
+      - name: Add Android platform (CI ephemeral)
+        working-directory: apps/mobile-capacitor
+        run: npx cap add android
+
+      - name: Sync web bundle into Android project
+        working-directory: apps/mobile-capacitor
+        run: npx cap sync android
+
+      - name: Gradle assembleDebug
+        working-directory: apps/mobile-capacitor/android
+        run: ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload app-debug.apk
+        uses: actions/upload-artifact@v4
+        with:
+          name: drawpaper-android-debug
+          path: apps/mobile-capacitor/android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14

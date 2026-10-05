@@ -4,10 +4,10 @@
   "version": "0.2.0",
   "identifier": "com.drawpaper.app",
   "build": {
-    "beforeDevCommand": "pnpm --filter @drawpaper/web dev",
+    "beforeDevCommand": "pnpm --dir ../../packages/web dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "pnpm --filter @drawpaper/web build",
-    "frontendDist": "../../packages/web/dist"
+    "beforeBuildCommand": "pnpm --dir ../../packages/web build",
+    "frontendDist": "../../../packages/web/dist"
   },
   "app": {
     "windows": [
@@ -25,12 +25,15 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: asset: http://asset.localhost; script-src 'self'; connect-src 'self' https://api.openai.com https://*"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: asset: http://asset.localhost; script-src 'self'; connect-src 'self' https://*"
     }
   },
   "bundle": {
     "active": true,
-    "targets": ["msi", "nsis"],
+    "targets": [
+      "msi",
+      "nsis"
+    ],
     "publisher": "drawpaper contributors",
     "copyright": "MIT",
     "shortDescription": "Local-first infinite-canvas knowledge-block note tool",
@@ -44,27 +47,32 @@
     ],
     "windows": {
       "wix": {
-        "language": ["zh-CN", "en-US"]
+        "language": [
+          "zh-CN",
+          "en-US"
+        ]
       },
       "nsis": {
-        "languages": ["SimpChinese", "English"]
-      },
-      "fileAssociations": [
-        {
-          "ext": ["kbnote"],
-          "description": "drawpaper knowledge-block note",
-          "identifier": "com.drawpaper.app.kbnote",
-          "icon": "icons/icon.ico"
-        }
-      ]
+        "languages": [
+          "SimpChinese",
+          "English"
+        ]
+      }
     },
     "macOS": {
       "frameworks": [],
       "minimumSystemVersion": "10.15"
     },
-    "linux": {
-      "appDependencies": []
-    }
+    "fileAssociations": [
+      {
+        "ext": [
+          "kbnote"
+        ],
+        "name": "drawpaper knowledge-block note",
+        "description": "drawpaper knowledge-block note (.kbnote)",
+        "role": "Editor"
+      }
+    ]
   },
   "plugins": {}
 }

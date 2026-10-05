@@ -18,10 +18,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
-use tauri::{
-    Emitter, Manager, Menu, MenuEvent, Submenu, AboutMetadata, WebviewUrl, WebviewWindowBuilder,
-};
+use tauri::{Emitter, Manager};
+use tauri::menu::{AboutMetadata, Menu, MenuEvent, Submenu};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_notification::NotificationExt;
 
 // ---------------------------------------------------------------------------
 // State
@@ -30,6 +30,10 @@ use tauri_plugin_dialog::DialogExt;
 const RECENTS_CAP: usize = 10;
 const RECENTS_FILE: &str = "drawpaper-recents.json";
 const AUTOSAVE_FILE: &str = "drawpaper-autosave.json";
+/// Backup directory under app_data_dir: `backups/{title}_备份_{ts}.kbnote`.
+const BACKUP_DIR: &str = "backups";
+/// Keep at most N backups per app launch (pruned oldest-first on each write).
+const BACKUP_KEEP: usize = 20;
 
 /// Per-session mutable state. Accessed from commands via `State<AppState>`.
 #[derive(Default)]
@@ -150,7 +154,7 @@ async fn open_kbnote(
     let Some(path) = picked else {
         return Ok(None);
     };
-    let path: PathBuf = path.into();
+    let path: PathBuf = path.into_path().map_err(|e| e.to_string())?;
     let text = fs::read_to_string(&path).map_err(|e| format!("read failed: {e}"))?;
     let name = path
         .file_name()
@@ -206,7 +210,7 @@ async fn save_kbnote(
             // User cancelled the save dialog — treat as cancel, not error.
             return Err("cancelled".to_string());
         };
-        p.into()
+        p.into_path().map_err(|e| e.to_string())?
     };
 
     if let Some(parent) = target.parent() {
@@ -290,7 +294,7 @@ async fn choose_auto_save_dir(
     let Some(folder) = picked else {
         return Ok(None);
     };
-    let folder: PathBuf = folder.into();
+    let folder = folder.into_path().map_err(|e| e.to_string())?;
     {
         let mut d = state.auto_save_dir.lock().unwrap();
         *d = Some(folder.clone());
@@ -327,86 +331,140 @@ fn auto_save_doc(
 }
 
 // ---------------------------------------------------------------------------
+// Native notifications + auto-backup (P2 收尾).
+//
+// The web side already has an in-app toast; on the desktop shell we ALSO post
+// a native Windows Action Center notification so the user sees "保存成功" even
+// when the window is backgrounded. Browsers fall back to the existing toast.
+// ---------------------------------------------------------------------------
+
+/// Post a native system notification. No-op / best-effort on failure (e.g.
+/// user revoked notification permission) — never rejects the caller.
+#[tauri::command]
+fn notify(app: tauri::AppHandle, title: String, body: String) {
+    app.notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show()
+        .unwrap_or_else(|e| log::warn!("notification failed: {e}"));
+}
+
+/// Sanitize a doc title into a filesystem-safe filename stem.
+fn safe_stem(title: &str) -> String {
+    let cleaned: String = title
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            c => c,
+        })
+        .collect();
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        "untitled".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+/// Write a timestamped backup copy under app_data_dir/backups/ and prune to
+/// the newest BACKUP_KEEP files. Called by the web side after a successful save
+/// (debounced by the caller, same 500ms rhythm as OPFS autosave).
+///
+/// This is the "real folder backup" safety net on top of Dexie: even if the
+/// browser storage is corrupted/cleared, the user has N on-disk .kbnote
+/// snapshots they can double-click to reopen.
+#[tauri::command]
+fn backup_doc(
+    app: tauri::AppHandle,
+    title: String,
+    text: String,
+) -> Result<String, String> {
+    let backup_dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("app_data_dir: {e}"))?
+        .join(BACKUP_DIR);
+    fs::create_dir_all(&backup_dir).map_err(|e| format!("mkdir backups: {e}"))?;
+
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let name = format!("{}_备份_{ts}.kbnote", safe_stem(&title));
+    let target = backup_dir.join(&name);
+    fs::write(&target, text).map_err(|e| format!("backup write: {e}"))?;
+
+    // Prune: list *.kbnote in backup_dir, sort by mtime, drop oldest beyond KEEP.
+    if let Ok(entries) = fs::read_dir(&backup_dir) {
+        let mut files: Vec<(PathBuf, std::time::SystemTime)> = entries
+            .filter_map(Result::ok)
+            .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("kbnote"))
+            .filter_map(|e| {
+                let p = e.path();
+                let mtime = fs::metadata(&p).ok()?.modified().ok()?;
+                Some((p, mtime))
+            })
+            .collect();
+        files.sort_by_key(|(_, mtime)| *mtime);
+        let excess = files.len().saturating_sub(BACKUP_KEEP);
+        for (old, _) in files.into_iter().take(excess) {
+            let _ = fs::remove_file(old);
+        }
+    }
+
+    Ok(target.to_string_lossy().to_string())
+}
+
+// ---------------------------------------------------------------------------
 // Menu
 // ---------------------------------------------------------------------------
 
-fn build_menu(app: &tauri::App) -> Menu {
-    use tauri::menu::{AboutMenuItem, PredefinedMenuItem, Submenu};
+fn build_menu(app: &tauri::App) -> Menu<tauri::Wry> {
+    use tauri::menu::{MenuItem, PredefinedMenuItem, Submenu};
+
+    // `MenuItem::with_id` returns a Result; build an owned item in one call.
+    fn item(app: &tauri::App, id: &str, text: &str) -> MenuItem<tauri::Wry> {
+        MenuItem::with_id(app, id, text, true, None::<&str>).unwrap()
+    }
 
     let file = Submenu::new(app, "文件", true).unwrap();
-    file.append(&tauri::menu::MenuItem::with_id(
-        app, "file:new", "新建画布", true, None::<&str>,
-    ))
-    .unwrap();
-    file.append(&tauri::menu::MenuItem::with_id(
-        app, "file:open", "打开…\tCtrl+O", true, None::<&str>,
-    ))
-    .unwrap();
-    file.append(&tauri::menu::MenuItem::with_id(
-        app, "file:save", "保存\tCtrl+S", true, None::<&str>,
-    ))
-    .unwrap();
-    file.append(&tauri::menu::MenuItem::with_id(
-        app, "file:save-as", "另存为…", true, None::<&str>,
-    ))
-    .unwrap();
-    file.append(&PredefinedMenuItem::separator(app)).unwrap();
-    file.append(&tauri::menu::MenuItem::with_id(
-        app, "file:open-recent", "打开最近", true, None::<&str>,
-    ))
-    .unwrap();
-    file.append(&tauri::menu::MenuItem::with_id(
-        app, "file:clear-recent", "清空最近", true, None::<&str>,
-    ))
-    .unwrap();
+    file.append(&item(app, "file:new", "新建画布")).unwrap();
+    file.append(&item(app, "file:open", "打开…\tCtrl+O")).unwrap();
+    file.append(&item(app, "file:save", "保存\tCtrl+S")).unwrap();
+    file.append(&item(app, "file:save-as", "另存为…")).unwrap();
+    file.append(&PredefinedMenuItem::separator(app).unwrap()).unwrap();
+    file.append(&item(app, "file:open-recent", "打开最近")).unwrap();
+    file.append(&item(app, "file:clear-recent", "清空最近")).unwrap();
 
     let edit = Submenu::new(app, "编辑", true).unwrap();
-    edit.append(&tauri::menu::MenuItem::with_id(
-        app, "edit:undo", "撤销\tCtrl+Z", true, None::<&str>,
-    ))
-    .unwrap();
-    edit.append(&tauri::menu::MenuItem::with_id(
-        app, "edit:redo", "重做\tCtrl+Shift+Z", true, None::<&str>,
-    ))
-    .unwrap();
+    edit.append(&item(app, "edit:undo", "撤销\tCtrl+Z")).unwrap();
+    edit.append(&item(app, "edit:redo", "重做\tCtrl+Shift+Z")).unwrap();
 
     let export = Submenu::new(app, "导出", true).unwrap();
-    export
-        .append(&tauri::menu::MenuItem::with_id(
-            app, "export:print", "打印 / 另存为 PDF\tCtrl+P", true, None::<&str>,
-        ))
-        .unwrap();
-    export
-        .append(&tauri::menu::MenuItem::with_id(
-            app, "export:pdf", "直接下载 PDF", true, None::<&str>,
-        ))
-        .unwrap();
+    export.append(&item(app, "export:print", "打印 / 另存为 PDF\tCtrl+P")).unwrap();
+    export.append(&item(app, "export:pdf", "直接下载 PDF")).unwrap();
 
     let view = Submenu::new(app, "视图", true).unwrap();
-    view.append(&tauri::menu::MenuItem::with_id(
-        app, "view:fit", "适应屏幕\tCtrl+0", true, None::<&str>,
-    ))
-    .unwrap();
-    view.append(&tauri::menu::MenuItem::with_id(
-        app, "view:zoom-in", "放大\tCtrl+=", true, None::<&str>,
-    ))
-    .unwrap();
-    view.append(&tauri::menu::MenuItem::with_id(
-        app, "view:zoom-out", "缩小\tCtrl+-", true, None::<&str>,
-    ))
-    .unwrap();
+    view.append(&item(app, "view:fit", "适应屏幕\tCtrl+0")).unwrap();
+    view.append(&item(app, "view:zoom-in", "放大\tCtrl+=")).unwrap();
+    view.append(&item(app, "view:zoom-out", "缩小\tCtrl+-")).unwrap();
 
     let help = Submenu::new(app, "帮助", true).unwrap();
-    help.append(&AboutMenuItem::new(
-        app,
-        Some(AboutMetadata {
-            name: Some("drawpaper".to_string()),
-            version: Some(env!("CARGO_PKG_VERSION").to_string()),
-            authors: Some(vec!["drawpaper contributors".to_string()]),
-            comments: Some("Local-first infinite-canvas knowledge-block notes.".to_string()),
-            ..Default::default()
-        }),
-    ))
+    help.append(
+        &PredefinedMenuItem::about(
+            app,
+            Some("关于 drawpaper"),
+            Some(AboutMetadata {
+                name: Some("drawpaper".to_string()),
+                version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                authors: Some(vec!["drawpaper contributors".to_string()]),
+                comments: Some("Local-first infinite-canvas knowledge-block notes.".to_string()),
+                ..Default::default()
+            }),
+        )
+        .unwrap(),
+    )
     .unwrap();
 
     Menu::with_items(
@@ -449,9 +507,8 @@ pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_fs::init())
-        .plugin(tauri_plugin_opener::init())
+        // single-instance MUST be registered before any other plugin so it can
+        // exit the second process before the rest of the app initializes.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // A second instance was launched (e.g. user double-clicked another
             // .kbnote). Forward the argv path to the already-running window.
@@ -465,6 +522,10 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }))
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .manage(AppState::default())
         .setup(|app| {
             // Load persisted recents into state.
@@ -487,7 +548,7 @@ pub fn run() {
             app.on_menu_event(move |app: &tauri::AppHandle, event: MenuEvent| {
                 // Every menu click becomes an `app:menu` event with the item id.
                 // The frontend maps ids to store actions (undo/redo/print/fit).
-                let _ = app.emit("app:menu", serde_json::json!({ "id": event.as_ref() }));
+                let _ = app.emit("app:menu", serde_json::json!({ "id": event.id.0.as_str() }));
             });
 
             Ok(())
@@ -501,6 +562,8 @@ pub fn run() {
             get_startup_file,
             choose_auto_save_dir,
             auto_save_doc,
+            notify,
+            backup_doc,
         ])
         .run(tauri::generate_context!())
         .expect("error while running drawpaper desktop shell");

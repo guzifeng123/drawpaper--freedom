@@ -1,0 +1,89 @@
+name: web-ci
+
+on:
+  push:
+    branches:
+      - develop
+      - 'feat/**'
+      - 'fix/**'
+  pull_request:
+    branches:
+      - develop
+
+# Cancel in-flight runs on the same ref to save CI minutes.
+concurrency:
+  group: web-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    env:
+      # .npmrc pins registry.npmmirror.com (fast for local China dev).
+      # GitHub runners are in the US; override to the official registry so CI
+      # doesn't flake on mirror connectivity.
+      npm_config_registry: https://registry.npmjs.org/
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+          run_install: false
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: 'Diagnostic: pnpm/node/registry versions'
+        run: |
+          pnpm --version
+          node --version
+          pnpm config get registry
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --registry=https://registry.npmjs.org/ --reporter=append-only
+
+      - name: Build all packages
+        run: pnpm -r build
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint
+        run: pnpm lint
+
+      - name: Unit tests (core + web)
+        run: pnpm -r test
+
+      - name: Verify PWA precache completeness
+        run: node packages/web/scripts/verify-precache.mjs
+
+      - name: Install Playwright chromium
+        working-directory: packages/web
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Playwright e2e
+        working-directory: packages/web
+        run: npx playwright test
+        env:
+          CI: '1'
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            packages/web/playwright-report
+            packages/web/test-results
+          retention-days: 7
+          if-no-files-found: warn

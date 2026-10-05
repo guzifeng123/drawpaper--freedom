@@ -121,6 +121,23 @@ export class TauriHostAdapter implements HostAdapter {
       if (payload && typeof payload.path === 'string') handler(payload.path);
     });
   }
+
+  /**
+   * 原生系统通知（Windows Action Center）。
+   * 浏览器端不调用本方法，走现有 in-app toast。集成期在保存成功/失败/
+   * 迁移提示处判断 `host instanceof TauriHostAdapter` 后调用。
+   */
+  notify(title: string, body: string): Promise<void> {
+    return this.invoke('notify', { title, body });
+  }
+
+  /**
+   * 写一份带时间戳的备份到 app_data_dir/backups/，Rust 端自动裁剪到最近 20 份。
+   * 集成期在自动保存成功后调用（500ms 防抖由调用方控制）。
+   */
+  backupDoc(title: string, text: string): Promise<string> {
+    return this.invoke<string>('backup_doc', { title, text });
+  }
 }
 
 /**
