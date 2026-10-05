@@ -13,8 +13,12 @@ import { DocsListPanel } from '@/panels/DocsListPanel';
 import { SearchPanel } from '@/panels/SearchPanel';
 import { OutlinePanel } from '@/panels/OutlinePanel';
 import { TagFilterBar } from '@/panels/TagFilterBar';
+import { BacklinksPanel } from '@/panels/BacklinksPanel';
 import { Toaster } from '@/panels/lib/toast';
 import { AiPanel } from '@/ai/AiPanel';
+import { setDocRefClickHandler, installDocRefClickDelegate } from '@/editor/tiptap/doc-ref-mark';
+import { OverviewCanvas } from '@/overview/OverviewCanvas';
+import { DexieOverviewProvider } from '@/overview/DexieOverviewProvider';
 import {
   ExportDialog,
   PageBreakOverlay,
@@ -63,8 +67,34 @@ export default function App() {
   useWiringUi((s) => s.activeSearchIndex);
   const aiPanelOpen = useWiringUi((s) => s.aiPanelOpen);
   const outlineOpen = useWiringUi((s) => s.outlineOpen);
+  const backlinksOpen = useWiringUi((s) => s.backlinksOpen);
+  const overviewOpen = useWiringUi((s) => s.overviewOpen);
   useWiringUi((s) => s.snapshotsNonce);
   useWiringUi((s) => s.trashNonce);
+
+  // 全局图谱总览 provider（只读 Dexie；引用稳定）。
+  const overviewProvider = useMemo(() => new DexieOverviewProvider(), []);
+
+  // 跨文档双链：docRef chip 点击 → 真实 store openDocRef（跨文档 openDoc+flyTo+高亮）。
+  useEffect(() => {
+    setDocRefClickHandler((attrs) => {
+      const targetDocId = attrs.targetDocId;
+      const targetNodeId = attrs.targetNodeId ?? '';
+      const s = editorStore.getState();
+      if (targetDocId === s.currentDocId) {
+        s.flyToNode(targetNodeId);
+      } else {
+        void s.openDoc(targetDocId).then(() => {
+          editorStore.getState().flyToNode(targetNodeId);
+        });
+      }
+    });
+    const dispose = installDocRefClickDelegate();
+    return () => {
+      setDocRefClickHandler(null);
+      dispose();
+    };
+  }, []);
 
   // 导出数据流
   const { result, sheetsVisible, actions, scope, setScope, busy } = useExportModel(panelsApi);
@@ -139,6 +169,24 @@ export default function App() {
       {/* 大纲（左侧可折叠，默认收起避免遮挡建块区域）+ 标签筛选条 */}
       {outlineOpen ? <OutlinePanel api={panelsApi} /> : null}
       <TagFilterBar api={panelsApi} />
+      {/* 反链面板（右侧可折叠，文档级/块级联动 editingNodeId） */}
+      {backlinksOpen ? (
+        <div className="absolute right-4 top-14 z-20 flex h-[70vh] w-72 flex-col rounded-lg border bg-card/95 shadow-lg">
+          <div className="flex justify-end px-1 pt-1">
+            <button
+              type="button"
+              aria-label="关闭反链面板"
+              className="rounded p-1 text-muted-foreground hover:bg-accent"
+              onClick={() => useWiringUi.getState().setBacklinksOpen(false)}
+            >
+              ×
+            </button>
+          </div>
+          <div className="min-h-0 flex-1">
+            <BacklinksPanel api={panelsApi} />
+          </div>
+        </div>
+      ) : null}
       {/* AI 辅助面板（右侧可开关） */}
       {aiPanelOpen ? (
         <div className="absolute bottom-4 right-4 z-20 w-72 rounded-lg border bg-card/95 p-3 shadow-lg">
@@ -181,6 +229,25 @@ export default function App() {
           >
             取消
           </button>
+        </div>
+      ) : null}
+
+      {/* 全局知识图谱总览（全屏只读，点块跳回文档） */}
+      {overviewOpen ? (
+        <div className="fixed inset-0 z-40 bg-background">
+          <OverviewCanvas
+            provider={overviewProvider}
+            onClose={() => useWiringUi.getState().setOverviewOpen(false)}
+            onOpenDocNode={(docId, nodeId) => {
+              useWiringUi.getState().setOverviewOpen(false);
+              const s = editorStore.getState();
+              if (docId === s.currentDocId) {
+                s.flyToNode(nodeId);
+              } else {
+                void s.openDoc(docId).then(() => editorStore.getState().flyToNode(nodeId));
+              }
+            }}
+          />
         </div>
       ) : null}
 

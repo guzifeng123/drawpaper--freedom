@@ -28,6 +28,10 @@ export interface WiringUiState {
 
   /** BacklinksPanel 当前查看的块维度（null = 文档级反链）。 */
   backlinksNodeId: string | null;
+  /** 右侧反链面板是否展开。 */
+  backlinksOpen: boolean;
+  /** 全局图谱总览全屏是否打开。 */
+  overviewOpen: boolean;
 
   setExportOpen(open: boolean): void;
   setSearchOpen(open: boolean): void;
@@ -38,6 +42,8 @@ export interface WiringUiState {
   setOutlineOpen(open: boolean): void;
   setMigrationAwaitingConfirm(v: boolean): void;
   setBacklinksNodeId(id: string | null): void;
+  setBacklinksOpen(open: boolean): void;
+  setOverviewOpen(open: boolean): void;
 }
 
 export const useWiringUi = create<WiringUiState>((set) => ({
@@ -50,6 +56,8 @@ export const useWiringUi = create<WiringUiState>((set) => ({
   outlineOpen: false,
   migrationAwaitingConfirm: false,
   backlinksNodeId: null,
+  backlinksOpen: false,
+  overviewOpen: false,
   setExportOpen: (open) => set({ exportOpen: open }),
   setSearchOpen: (open) => set({ searchOpen: open }),
   setActiveSearchIndex: (i) => set({ activeSearchIndex: i }),
@@ -59,6 +67,8 @@ export const useWiringUi = create<WiringUiState>((set) => ({
   setOutlineOpen: (open) => set({ outlineOpen: open }),
   setMigrationAwaitingConfirm: (v) => set({ migrationAwaitingConfirm: v }),
   setBacklinksNodeId: (id) => set({ backlinksNodeId: id }),
+  setBacklinksOpen: (open) => set({ backlinksOpen: open }),
+  setOverviewOpen: (open) => set({ overviewOpen: open }),
 }));
 
 /** 非 React 侧（快捷键 / 适配层）直接读最新 UI 态。 */

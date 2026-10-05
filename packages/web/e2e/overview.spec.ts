@@ -14,7 +14,7 @@ import { test, expect } from '@playwright/test';
 function v2Doc(
   id: string,
   title: string,
-  blocks: Array<{ id: string; text: string }>,
+  blocks: Array<{ id: string; text: string; refTo?: { doc: string; node: string; title: string } }>,
   links: Array<Record<string, unknown>>,
 ): string {
   return JSON.stringify({
@@ -32,7 +32,19 @@ function v2Doc(
       height: 80,
       content: {
         format: 'tiptap-json',
-        data: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: b.text }] }] },
+        data: {
+          type: 'doc',
+          content: [
+            b.refTo
+              ? {
+                  type: 'paragraph',
+                  content: [
+                    { type: 'text', text: b.text, marks: [{ type: 'docRef', attrs: { targetDocId: b.refTo.doc, targetNodeId: b.refTo.node, targetTitle: b.refTo.title } }] },
+                  ],
+                }
+              : { type: 'paragraph', content: [{ type: 'text', text: b.text }] },
+          ],
+        },
       },
     })),
     edges: [],
@@ -67,7 +79,7 @@ test.describe('Wave6b 全局知识图谱总览', () => {
       'ov_docA',
       '总览A',
       [
-        { id: 'a1', text: '总览A 引言' },
+        { id: 'a1', text: '总览A 引言', refTo: { doc: 'ov_docB', node: 'b1', title: '总览B 结果' } },
         { id: 'a2', text: '总览A 方法' },
         { id: 'a3', text: '总览A 讨论' },
       ],
