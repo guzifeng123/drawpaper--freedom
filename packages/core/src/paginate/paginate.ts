@@ -63,6 +63,11 @@ export interface PageSheet {
   nodeDrawOffsets?: Record<string, { x: number; y: number }>;
   headerText?: string;
   footerText?: string;
+  /**
+   * 保留空白页标记：由显式手动分页符切出的页（即便一个节点都没有）。
+   * 这类空白页是用户意图，trimBlankPages 不得裁剪；网格自动铺出的零节点页（无此标记）会被裁掉。
+   */
+  preserveBlank?: boolean;
 }
 
 /** 分页器总输出。 */
@@ -269,6 +274,39 @@ function makePageSheet(
   };
 }
 
+// ---------- 裁剪空白页 + 连续重编号（统一收尾） ----------
+
+/**
+ * 稀疏网格会铺出「不含任何节点」的页（孤块离主树很远、折叠后留空等）。
+ * 本函数在「保持节点零切割、世界坐标 / worldRect / nodeDrawOffsets 不变」的前提下：
+ *  1. 裁掉严格空白页（nodeIds 为空且无 preserveBlank 标记）；
+ *  2. 剩余页从 0 起连续重编号（index / pageNumber）；
+ *  3. 同步重映射所有跨页续接标记的 pageIndex / peerPageIndex（token 不变、成对互指）。
+ *
+ * 例外：preserveBlank=true 的页（显式手动分页符切出的页）即便空白也保留——那是用户意图的页边界。
+ * 防御：若全部页都被裁光（不应发生），原样返回，至少保留一页。
+ */
+function finalizePages(pages: PageSheet[]): PageSheet[] {
+  if (pages.length === 0) return pages;
+  const kept = pages.filter((p) => p.nodeIds.length > 0 || p.preserveBlank);
+  if (kept.length === 0) return pages;
+  if (kept.length === pages.length) return pages; // 无空白页，零成本短路。
+  const oldToNew = new Map<number, number>();
+  kept.forEach((p, i) => oldToNew.set(p.index, i));
+  for (const p of kept) {
+    const ni = oldToNew.get(p.index)!;
+    p.index = ni;
+    p.pageNumber = ni;
+    for (const c of p.continuations) {
+      c.pageIndex = ni;
+      const peer = oldToNew.get(c.peerPageIndex);
+      // peer 必为含端点节点的保留页；查不到（理论不发生）时保持原值，避免误指。
+      if (peer !== undefined) c.peerPageIndex = peer;
+    }
+  }
+  return kept;
+}
+
 // ---------- fit ----------
 
 /**
@@ -303,7 +341,8 @@ export function paginateFit(input: PaginateInput): PaginateResult {
       `fit 退化：自然缩放 ${naturalScale.toFixed(3)} < 0.25，按固定 scale=0.25 平铺多页（见 tiles 网格）。`,
     );
     const tiles = runTilesGrid(input, active, cr, 0.25, { x: bbox.x, y: bbox.y }, notes);
-    return { pages: tiles.pages, orphans: tiles.orphans, totalPages: tiles.pages.length, notes };
+    const pages = finalizePages(tiles.pages);
+    return { pages, orphans: tiles.orphans, totalPages: pages.length, notes };
   }
 
   const scale = Math.min(naturalScale, 2);
@@ -543,6 +582,8 @@ function applyTilesBreaks(
         edgeIds: [],
         continuations: [],
         nodeDrawOffsets: {},
+        // 由显式手动分页符切出：即便本带无节点也保留（用户意图的页边界）。
+        preserveBlank: true,
       };
       for (const id of page.nodeIds) {
         if (bandOfNode.get(id) !== k) continue;
@@ -561,10 +602,17 @@ function applyTilesBreaks(
       out.push(sub);
     }
   }
-  // 重编页号。
+  // 重编页号 + 续接标记 peer 重映射（非切页保留页上的跨页标记仍成对互指）。
+  const oldToNew = new Map<number, number>();
+  out.forEach((p, i) => oldToNew.set(p.index, i));
   out.forEach((p, i) => {
     p.index = i;
     p.pageNumber = i;
+    for (const c of p.continuations) {
+      c.pageIndex = i;
+      const peer = oldToNew.get(c.peerPageIndex);
+      if (peer !== undefined) c.peerPageIndex = peer;
+    }
   });
   return out;
 }
@@ -589,8 +637,15 @@ export function paginateTiles(input: PaginateInput): PaginateResult {
   const { pages, orphans } = runTilesGrid(input, active, cr, 1, origin, notes);
   const breaks = (input.settings.pageBreaks ?? []).map((b) => b.at).filter(Number.isFinite);
   const axis: 'x' | 'y' = input.settings.orientation === 'landscape' ? 'x' : 'y';
-  const finalPages = breaks.length > 0 ? applyTilesBreaks(pages, input, breaks, cr, axis) : pages;
+  const afterBreaks = breaks.length > 0 ? applyTilesBreaks(pages, input, breaks, cr, axis) : pages;
+  // 裁掉网格自动铺出的零节点空白页（手动分页符切出的空白页因 preserveBlank 保留），连续重编号。
+  const finalPages = finalizePages(afterBreaks);
   if (breaks.length > 0) notes.push(`应用 ${breaks.length} 个手动分页符。`);
+  if (finalPages.length < afterBreaks.length) {
+    notes.push(
+      `裁剪空白页：网格自动铺出的 ${afterBreaks.length - finalPages.length} 张零节点页已裁，导出 ${finalPages.length} 页。`,
+    );
+  }
   return { pages: finalPages, orphans, totalPages: finalPages.length, notes };
 }
 
@@ -739,5 +794,7 @@ export function paginateFlow(input: PaginateInput): PaginateResult {
     });
   }
   notes.push(`flow 重排：${flow.length} 个块 → ${pages.length} 页。`);
-  return { pages, orphans, totalPages: pages.length, notes };
+  // flow 逐块连续排版，页页有节点；这里再跑一次裁剪兜底（防御性，通常为空操作）。
+  const finalPages = finalizePages(pages);
+  return { pages: finalPages, orphans, totalPages: finalPages.length, notes };
 }

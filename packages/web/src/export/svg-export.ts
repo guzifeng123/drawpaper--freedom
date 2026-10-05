@@ -85,7 +85,13 @@ function renderEdge(
     `</g>`;
 }
 
-function renderSheet(sheet: PageSheet, doc: KBNoteDoc, size: { width: number; height: number }, opts: SvgExportOptions): string {
+function renderSheet(
+  sheet: PageSheet,
+  doc: KBNoteDoc,
+  size: { width: number; height: number },
+  opts: SvgExportOptions,
+  tokenToNumber?: ReadonlyMap<string, number>,
+): string {
   const nodes = new Map(doc.nodes.map((n) => [n.id, n]));
   const edges = new Map(doc.edges.map((e) => [e.id, e]));
   const offsets = sheet.nodeDrawOffsets ?? {};
@@ -105,7 +111,7 @@ function renderSheet(sheet: PageSheet, doc: KBNoteDoc, size: { width: number; he
   const contSvg = sheet.continuations
     .map(
       (c) =>
-        `<g class="cont"><circle cx="${c.x}" cy="${c.y}" r="7" fill="#e0f2fe" stroke="#0284c7"/><text x="${c.x}" y="${c.y + 3}" font-size="8" text-anchor="middle" fill="#075985">${escXml(c.token.replace('cont:', ''))}</text></g>`,
+        `<g class="cont"><circle cx="${c.x}" cy="${c.y}" r="7" fill="#e0f2fe" stroke="#0284c7"/><text x="${c.x}" y="${c.y + 3}" font-size="8" text-anchor="middle" fill="#075985">${tokenToNumber?.get(c.token) ?? escXml(c.token.replace('cont:', ''))}</text></g>`,
     )
     .join('\n  ');
 
@@ -138,7 +144,14 @@ export function buildPagesSvg(
   opts: SvgExportOptions,
 ): string[] {
   const size = pagePixelSize(opts.orientation);
-  return result.pages.map((sheet) => renderSheet(sheet, doc, size, opts));
+  // 与 PrintSheets 一致：按 token 首次出现顺序分配成对短编号。
+  const tokenToNumber = new Map<string, number>();
+  for (const sheet of result.pages) {
+    for (const c of sheet.continuations) {
+      if (!tokenToNumber.has(c.token)) tokenToNumber.set(c.token, tokenToNumber.size + 1);
+    }
+  }
+  return result.pages.map((sheet) => renderSheet(sheet, doc, size, opts, tokenToNumber));
 }
 
 /** 逐页下载 .svg（不打 zip）。 */
