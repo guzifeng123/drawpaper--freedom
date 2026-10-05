@@ -120,10 +120,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Download all installer artifacts
+      - name: Download NSIS installers (x64)
+        # download-artifact@v4: name a single artifact per step. v4 does NOT
+        # support the v3 "download all unnamed artifacts into one dir" pattern;
+        # without `name` it fans each artifact into its own subdir, which is
+        # fragile here. Two explicit downloads to two distinct paths is the
+        # deterministic form.
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          name: nsis-x64
+          path: artifacts/nsis-x64
+
+      - name: Download NSIS installers (arm64)
+        uses: actions/download-artifact@v4
+        with:
+          name: nsis-arm64
+          path: artifacts/nsis-arm64
 
       - name: List installers
         run: |
@@ -136,18 +148,20 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: drawpaper ${{ github.ref_name }}
-          # rc / beta / alpha tags are prereleases; final vX.Y.Z is stable.
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          # This workflow is only cut for RC/beta/pre-release tags; pin
+          # prerelease: true explicitly instead of inferring from the tag shape,
+          # so a stable vX.Y.Z must flip this deliberately rather than by accident.
+          prerelease: true
           files: |
-            artifacts/nsis-x64/*.exe
-            artifacts/nsis-arm64/*.exe
+            artifacts/nsis-x64/**/*.exe
+            artifacts/nsis-arm64/**/*.exe
           generate_release_notes: false
           body: |
-            ## drawpaper ${{ github.ref_name }}
+            ## drawpaper ${{ github.ref_name }}（预发布）
 
-            Windows desktop installers (NSIS, Win10/11).
+            Windows 桌面安装包（NSIS，Win10/11）。本地优先：所有数据留在本机，无账号、无云同步。
 
-            - `drawpaper_*_x64-setup.exe` — 64-bit Intel/AMD
-            - `drawpaper_*_aarch64-setup.exe` — ARM64 (Copilot+, Surface Pro X, etc.)
+            - `drawpaper_*_x64-setup.exe` — 64 位 Intel/AMD
+            - `drawpaper_*_aarch64-setup.exe` — ARM64（Copilot+、Surface Pro X 等）
 
-            Local-first: all data stays on-device. No account, no cloud sync.
+            本版为预发布（RC），尚未启用自动更新：升级请手动下载新安装包覆盖安装。详见仓库 `CHANGELOG.md` 与 `docs/RELEASE.md`。
