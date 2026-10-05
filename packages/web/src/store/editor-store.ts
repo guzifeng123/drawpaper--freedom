@@ -1,4 +1,4 @@
-import { createEditorStore } from '@drawpaper/core';
+import { createEditorStore, CURRENT_DOC_VERSION } from '@drawpaper/core';
 import type { KBNoteDoc } from '@drawpaper/core';
 import { DexieStorageAdapter } from '../storage/db';
 import { WebHostAdapter } from '../host/web-host';
@@ -15,7 +15,7 @@ import { createConflictBridge, type ConflictBridge } from '../wiring/conflict-br
 function blankInitialDoc(): KBNoteDoc {
   return {
     format: 'knowledge-block-notes',
-    version: 1,
+    version: CURRENT_DOC_VERSION,
     id: 'boot',
     title: '未命名画布',
     board: { createdAt: Date.now(), updatedAt: Date.now() },
@@ -38,6 +38,7 @@ function blankInitialDoc(): KBNoteDoc {
       pageBreaks: [],
     },
     assetRefs: [],
+    links: [],
   };
 }
 

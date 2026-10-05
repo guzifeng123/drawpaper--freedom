@@ -4,6 +4,7 @@ export * from './edge-colors.js';
 export * from './node.js';
 export * from './edge.js';
 export * from './tag.js';
+export * from './links.js';
 export * from './layout.js';
 export * from './viewport.js';
 export * from './page.js';

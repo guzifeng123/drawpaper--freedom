@@ -14,7 +14,7 @@ describe('factory: createDoc', () => {
   it('produces a valid empty doc with doc_ prefix and defaults', () => {
     const doc = createDoc('测试');
     expect(doc.format).toBe('knowledge-block-notes');
-    expect(doc.version).toBe(1);
+    expect(doc.version).toBe(2);
     expect(doc.id.startsWith(ID_PREFIX.doc)).toBe(true);
     expect(doc.title).toBe('测试');
     expect(doc.nodes).toEqual([]);
@@ -24,6 +24,7 @@ describe('factory: createDoc', () => {
     expect(doc.viewport).toEqual({ x: 0, y: 0, zoom: 1 });
     expect(doc.page.mode).toBe('fit');
     expect(doc.assetRefs).toEqual([]);
+    expect(doc.links).toEqual([]);
   });
 
   it('defaults title when omitted', () => {

@@ -43,6 +43,21 @@ export class ActiveFileManager implements FsaCapability {
   private writeTimer: ReturnType<typeof setTimeout> | undefined;
   private pendingText: string | null = null;
   private pendingResolve: ((ok: boolean) => void) | null = null;
+  /** v1→v2 升级确认门控：true 时暂停对活动文件的写盘（Dexie 自动保存不受影响）。 */
+  private writesBlocked = false;
+
+  /** 升级门控：blocked=true 时 writeActiveFile 暂停写盘，直到用户确认。 */
+  setWritesBlocked(blocked: boolean): void {
+    this.writesBlocked = blocked;
+    if (blocked && this.writeTimer !== undefined) {
+      clearTimeout(this.writeTimer);
+      this.writeTimer = undefined;
+    }
+  }
+
+  isWritesBlocked(): boolean {
+    return this.writesBlocked;
+  }
 
   isSupported(): boolean {
     if (typeof window === 'undefined') return false;
@@ -66,6 +81,7 @@ export class ActiveFileManager implements FsaCapability {
   }
 
   writeActiveFile(text: string): Promise<boolean> {
+    if (this.writesBlocked) return Promise.resolve(false);
     if (!this.activeHandle) return Promise.resolve(false);
     this.pendingText = text;
     if (this.writeTimer !== undefined) clearTimeout(this.writeTimer);

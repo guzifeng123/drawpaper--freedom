@@ -39,20 +39,42 @@ export function serializeKBNote(doc: KBNoteDoc): string {
     viewport: doc.viewport,
     page: doc.page,
     assetRefs: doc.assetRefs,
+    links: doc.links,
   };
   return JSON.stringify(ordered, null, 2);
 }
 
 /**
+ * v1 -> v2 迁移步（纯数据补字段，不做内容抽取）：
+ *  - version 置 2
+ *  - 补 links = []（反链索引由 web 从 Tiptap docRef mark 重建，迁移期不抽取）
+ *  - edges 原样保留（points 缺省即默认贝塞尔）
+ * 不从 Tiptap 内容抽取链接——那是 web 侧链接 agent 的职责。
+ */
+function migrateV1ToV2(raw: unknown): unknown {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return raw;
+  const obj = raw as Record<string, unknown>;
+  return {
+    ...obj,
+    version: 2,
+    links: Array.isArray(obj['links']) ? obj['links'] : [],
+  };
+}
+
+/**
  * 迁移管线：一个 version step = 把 v(n) 的 JSON 对象升级为 v(n+1)。
- * 注册 key 为「源版本」。当前只有 v1（恒等，无 step），结构为未来就绪。
+ * 注册 key 为「源版本」。以后每升一版，在此注册一步即可。
  */
 export type MigrationStep = (raw: unknown) => unknown;
 
 /** version n -> 升级到 n+1 的 step 注册表。 */
 export const MIGRATION_REGISTRY: Record<number, MigrationStep> = {
-  // v1 为当前版本，恒等（无需升级）。未来：
-  // 1: (raw) => upgradedFromV1ToV2(raw),
+  1: migrateV1ToV2,
+};
+
+/** 每个迁移步的人类可读说明（migrationNotes 展示给用户）。 */
+export const MIGRATION_NOTES: Record<number, string> = {
+  1: 'v1→v2：新增 links/points 字段',
 };
 
 export interface ParseKBNoteResult {
@@ -80,8 +102,8 @@ export function migrate(raw: unknown, fromVersion: number): MigrateResult {
       throw new KBNoteFileError('unsupported-version', `未注册从版本 ${v} 的迁移步骤`);
     }
     current = step(current);
+    notes.push(MIGRATION_NOTES[v] ?? `migrated v${v} -> v${v + 1}`);
     v += 1;
-    notes.push(`migrated v${v - 1} -> v${v}`);
   }
   return { value: current, notes };
 }

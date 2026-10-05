@@ -227,3 +227,79 @@ describe('validateGraph: issue codes', () => {
     expect(issues.filter((i) => i.code === 'parentid-mismatch')).toHaveLength(0);
   });
 });
+
+describe('v2: edge.points', () => {
+  it('accepts a points array of finite coordinates, strips unknown keys', () => {
+    const d = parseKBNoteDoc(
+      doc({
+        edges: [
+          {
+            id: 'e1',
+            source: 'n1',
+            target: 'n2',
+            points: [{ x: 10, y: 20, bogus: 'x' }],
+          },
+        ],
+      }),
+    );
+    expect(d.edges[0]!.points).toEqual([{ x: 10, y: 20 }]);
+  });
+
+  it('rejects non-finite point coordinate', () => {
+    expect(() =>
+      parseKBNoteDoc(
+        doc({ edges: [{ id: 'e1', source: 'n1', target: 'n2', points: [{ x: NaN, y: 0 }] }] }),
+      ),
+    ).toThrow(KBNoteParseError);
+  });
+
+  it('rejects more than 64 points', () => {
+    const points = Array.from({ length: 65 }, (_, i) => ({ x: i, y: 0 }));
+    expect(() =>
+      parseKBNoteDoc(doc({ edges: [{ id: 'e1', source: 'n1', target: 'n2', points }] })),
+    ).toThrow(KBNoteParseError);
+  });
+
+  it('accepts 64 points', () => {
+    const points = Array.from({ length: 64 }, (_, i) => ({ x: i, y: 0 }));
+    const d = parseKBNoteDoc(doc({ edges: [{ id: 'e1', source: 'n1', target: 'n2', points }] }));
+    expect(d.edges[0]!.points).toHaveLength(64);
+  });
+});
+
+describe('v2: links', () => {
+  it('defaults links to [] when absent', () => {
+    const d = parseKBNoteDoc(doc());
+    expect(d.links).toEqual([]);
+  });
+
+  it('accepts a valid DocRefLink', () => {
+    const d = parseKBNoteDoc(
+      doc({
+        links: [
+          {
+            id: 'ln_1',
+            sourceDocId: 'doc1',
+            sourceNodeId: 'n1',
+            targetDocId: 'doc2',
+            targetNodeId: 'n2',
+            targetTitle: '目标',
+            createdAt: 1,
+          },
+        ],
+      }),
+    );
+    expect(d.links).toHaveLength(1);
+    expect(d.links[0]!.targetTitle).toBe('目标');
+  });
+
+  it('rejects a malformed link (missing createdAt)', () => {
+    expect(() =>
+      parseKBNoteDoc(
+        doc({
+          links: [{ id: 'ln_1', sourceDocId: 'a', sourceNodeId: 'n', targetDocId: 'a', targetNodeId: 'n', targetTitle: 'x' }],
+        }),
+      ),
+    ).toThrow(KBNoteParseError);
+  });
+});
