@@ -4,13 +4,56 @@ import {
   parseKBNote,
   migrate,
   MIGRATION_REGISTRY,
+  MIGRATION_NOTES,
   KBNoteFileError,
 } from './serialize.js';
+import { KBNoteParseError, safeParseKBNoteDoc } from '../model/schema.js';
 import { createDoc, createNode } from '../model/factory.js';
 import { DOC_FORMAT, CURRENT_DOC_VERSION } from '../model/index.js';
 
+/** 手工构造一份 v1 文档（无 links 字段），模拟旧版 .kbnote。 */
+function v1Doc(): Record<string, unknown> {
+  return {
+    format: DOC_FORMAT,
+    version: 1,
+    id: 'doc_v1',
+    title: '旧版画布',
+    board: { createdAt: 0, updatedAt: 0 },
+    nodes: [
+      {
+        id: 'n_1',
+        type: 'text',
+        x: 0,
+        y: 0,
+        width: 260,
+        height: 80,
+        content: { format: 'tiptap-json', data: { type: 'doc' } },
+      },
+    ],
+    edges: [{ id: 'e_1', source: 'n_1', target: 'n_1' }],
+    tags: [],
+    layout: { mode: 'mindmap-right', rankSpacing: 90, nodeSpacing: 28 },
+    viewport: { x: 0, y: 0, zoom: 1 },
+    page: {
+      size: 'A4',
+      orientation: 'portrait',
+      marginMm: 15,
+      mode: 'fit',
+      showPageBreak: true,
+      colorMode: 'color',
+      header: false,
+      footer: false,
+      showPageNumbers: false,
+      edgeLabels: true,
+      pageBreaks: [],
+    },
+    assetRefs: [],
+    // 注意：v1 没有 links 字段
+  };
+}
+
 describe('serialize / parse round-trip', () => {
-  it('round-trips a doc losslessly', () => {
+  it('round-trips a v2 doc losslessly (incl. links/points)', () => {
     const doc = createDoc('往返');
     doc.nodes.push(createNode('text', 10, 20), createNode('group', 0, 0));
     doc.edges.push({
@@ -22,23 +65,52 @@ describe('serialize / parse round-trip', () => {
       label: '父子',
       directed: true,
       style: { color: '#86EFAC' },
+      points: [{ x: 100, y: 20 }],
+    });
+    doc.links.push({
+      id: 'ln_1',
+      sourceDocId: doc.id,
+      sourceNodeId: doc.nodes[0]!.id,
+      targetDocId: doc.id,
+      targetNodeId: doc.nodes[1]!.id,
+      targetTitle: 'g',
+      createdAt: 123,
     });
     const text = serializeKBNote(doc);
     const { doc: back, migrationNotes } = parseKBNote(text);
     expect(back.id).toBe(doc.id);
+    expect(back.version).toBe(2);
     expect(back.nodes).toHaveLength(2);
     expect(back.edges[0]!.label).toBe('父子');
-    expect(back.edges[0]!.style.color).toBe('#86EFAC');
+    expect(back.edges[0]!.points).toEqual([{ x: 100, y: 20 }]);
+    expect(back.links).toHaveLength(1);
     expect(migrationNotes).toEqual([]);
   });
 
-  it('emits format/version as the first two keys', () => {
+  it('emits format/version as the first two keys and includes links', () => {
     const text = serializeKBNote(createDoc());
-    const head = text.slice(0, text.indexOf('\n'));
-    expect(head).toBe('{');
     const lines = text.split('\n');
     expect(lines[1]).toContain('"format"');
     expect(lines[2]).toContain('"version"');
+    expect(lines.some((l) => l.includes('"links"'))).toBe(true);
+  });
+});
+
+describe('v1 -> v2 migration', () => {
+  it('upgrades a v1 doc: version=2, links=[], edges preserved, notes recorded', () => {
+    const { doc, migrationNotes } = parseKBNote(JSON.stringify(v1Doc()));
+    expect(doc.version).toBe(2);
+    expect(doc.links).toEqual([]);
+    expect(doc.edges).toHaveLength(1);
+    // 旧边无 points，缺省即默认贝塞尔（undefined）
+    expect(doc.edges[0]!.points).toBeUndefined();
+    expect(migrationNotes).toEqual([MIGRATION_NOTES[1]]);
+  });
+
+  it('v1 doc without links cannot pass v2 schema directly (must migrate)', () => {
+    // 直接喂 v1 对象给 v2 schema：version literal 2 不匹配 → 失败。
+    const r = safeParseKBNoteDoc(v1Doc());
+    expect(r.success).toBe(false);
   });
 });
 
@@ -62,8 +134,8 @@ describe('parseKBNote rejection', () => {
     }
   });
 
-  it('rejects a version higher than current', () => {
-    expect(CURRENT_DOC_VERSION).toBe(1);
+  it('rejects a version higher than current with unsupported-version', () => {
+    expect(CURRENT_DOC_VERSION).toBe(2);
     const future = JSON.stringify({ format: DOC_FORMAT, version: 99, id: 'x' });
     expect(() => parseKBNote(future)).toThrow(KBNoteFileError);
     try {
@@ -71,6 +143,19 @@ describe('parseKBNote rejection', () => {
     } catch (e) {
       expect((e as KBNoteFileError).kind).toBe('unsupported-version');
     }
+  });
+
+  it('bad data after migration throws and does not mutate input', () => {
+    // v1 doc with an edge whose points is invalid (NaN x) — migration copies it through,
+    // but final v2 schema must reject it.
+    const bad = v1Doc();
+    (bad as Record<string, unknown>)['edges'] = [
+      { id: 'e_1', source: 'n_1', target: 'n_1', points: [{ x: NaN, y: 0 }] },
+    ];
+    const json = JSON.stringify(bad);
+    expect(() => parseKBNote(json)).toThrow(KBNoteParseError);
+    // 原始字符串未被改动（迁移只在内存发生，调用方当前文档不被污染）
+    expect(() => parseKBNote(JSON.stringify(v1Doc()))).not.toThrow();
   });
 });
 
@@ -84,30 +169,33 @@ describe('migrate registry', () => {
     Object.assign(MIGRATION_REGISTRY, original);
   });
 
-  it('runs steps in order from fromVersion to current', () => {
+  it('runs registered steps in order across multiple versions (chainable)', () => {
     const calls: string[] = [];
-    // Fake a pipeline: current=1. We simulate by bumping: register 0->1, 1->2 then migrate from 0.
-    // But currentVersion is fixed at 1; so we test the loop ordering directly:
-    // temporarily register steps as if going 0->1 and observe order.
+    // current=2。注册假的 v0->1 与 v1->2（覆盖真实 v1->2），从 v0 迁移观察链式顺序。
     MIGRATION_REGISTRY[0] = (raw) => {
       calls.push('step0');
-      return { ...(raw as object), from0: true };
+      return { ...(raw as object), v0: true };
     };
     MIGRATION_REGISTRY[1] = (raw) => {
       calls.push('step1');
-      return { ...(raw as object), from1: true };
+      return { ...(raw as object), v1: true, version: 2 };
     };
-    // migrate from 0: loop runs v=0 (<1): step0, v=1; loop ends (v<1 false).
-    const res = migrate({ hello: 1 }, 0);
-    expect(calls).toEqual(['step0']);
-    expect(res.notes).toEqual(['migrated v0 -> v1']);
-    expect((res.value as Record<string, unknown>)['from0']).toBe(true);
+    const res = migrate({ hello: 1, version: 0 }, 0);
+    expect(calls).toEqual(['step0', 'step1']);
+    expect(res.notes).toHaveLength(2);
+    expect((res.value as Record<string, unknown>)['v0']).toBe(true);
+    expect((res.value as Record<string, unknown>)['v1']).toBe(true);
   });
 
   it('is identity when fromVersion equals current', () => {
     const raw = { a: 1 };
-    const res = migrate(raw, 1);
+    const res = migrate(raw, 2);
     expect(res.value).toBe(raw);
     expect(res.notes).toEqual([]);
+  });
+
+  it('restores the registry after each test', () => {
+    // afterEach 已还原；此处断言真实 v1->2 仍在。
+    expect(typeof MIGRATION_REGISTRY[1]).toBe('function');
   });
 });

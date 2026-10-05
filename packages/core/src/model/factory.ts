@@ -78,6 +78,7 @@ export function createDoc(title: string = '未命名画布'): KBNoteDoc {
       pageBreaks: [],
     },
     assetRefs: [],
+    links: [],
   };
 }
 

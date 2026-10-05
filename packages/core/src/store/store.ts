@@ -495,6 +495,7 @@ function blankDoc(now: number): KBNoteDoc {
       pageBreaks: [],
     },
     assetRefs: [],
+    links: [],
   };
 }
 

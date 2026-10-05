@@ -76,9 +76,15 @@ export const BlockNodeSchema = z.object({
   reminder: z.object({ dueAt: z.number().optional() }).optional(),
 });
 
-// ---- 边（无 relation/line/direction 字段）----
+// ---- 边（无 relation/line/direction 字段；v2 起允许 points）----
 const EdgeStyleSchema = z.object({
   color: z.string().default(DEFAULT_EDGE_COLOR.hex),
+});
+
+/** 手动弯折点（世界坐标）。未知键剥离；x/y 必须有限数。 */
+export const EdgePointSchema = z.object({
+  x: finiteNumber,
+  y: finiteNumber,
 });
 
 export const EdgeSchema = z.object({
@@ -90,6 +96,19 @@ export const EdgeSchema = z.object({
   label: z.string().default(''),
   directed: z.literal(true).default(true),
   style: EdgeStyleSchema.default({ color: DEFAULT_EDGE_COLOR.hex }),
+  // v2：手动弯折点，最多 64 个；缺省/空数组 = 默认贝塞尔。
+  points: z.array(EdgePointSchema).max(64, 'points 最多 64 个弯折点').optional(),
+});
+
+// ---- 文档引用链接（v2）----
+export const DocRefLinkSchema = z.object({
+  id: z.string().min(1),
+  sourceDocId: z.string().min(1),
+  sourceNodeId: z.string().min(1),
+  targetDocId: z.string().min(1),
+  targetNodeId: z.string().min(1),
+  targetTitle: z.string(),
+  createdAt: finiteNumber,
 });
 
 // ---- 其余顶层对象 ----
@@ -141,6 +160,7 @@ export const KBNoteDocSchema = z.object({
   viewport: ViewportSchema.default({ x: 0, y: 0, zoom: 1 }),
   page: PageSettingsSchema.default({}),
   assetRefs: z.array(z.string()).default([]),
+  links: z.array(DocRefLinkSchema).default([]),
 });
 
 // ---- 类型化解析错误 ----

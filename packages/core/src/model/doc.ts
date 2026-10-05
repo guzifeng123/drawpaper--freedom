@@ -4,6 +4,7 @@ import type { Tag } from './tag.js';
 import type { LayoutPrefs } from './layout.js';
 import type { Viewport } from './viewport.js';
 import type { PageSettings } from './page.js';
+import type { DocRefLink } from './links.js';
 import type { DOC_FORMAT, CURRENT_DOC_VERSION } from './constants.js';
 
 /** 文档级时间戳元信息。 */
@@ -19,7 +20,7 @@ export interface BoardMeta {
 export interface KBNoteDoc {
   /** 固定为 'knowledge-block-notes'。 */
   format: typeof DOC_FORMAT;
-  /** schema 版本，当前 1。 */
+  /** schema 版本，当前 2。 */
   version: typeof CURRENT_DOC_VERSION;
 
   id: string;
@@ -37,4 +38,10 @@ export interface KBNoteDoc {
 
   /** OPFS 大 Blob 附件引用 id 列表（图片等）。JSON 内只存引用。 */
   assetRefs: string[];
+
+  /**
+   * 文档引用链接（[[双向链接]]）规范化反链索引，v2 必填、缺省 []。
+   * 与 assetRefs 同级；后续由 web 从 Tiptap docRef mark 内容重建。
+   */
+  links: DocRefLink[];
 }
