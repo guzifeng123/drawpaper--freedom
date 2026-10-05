@@ -420,7 +420,7 @@ fn backup_doc(
 // Menu
 // ---------------------------------------------------------------------------
 
-fn build_menu(app: &tauri::App) -> Menu {
+fn build_menu(app: &tauri::App) -> Menu<tauri::Wry> {
     use tauri::menu::{MenuItem, PredefinedMenuItem, Submenu};
 
     // `MenuItem::with_id` returns a Result; build an owned item in one call.
