@@ -41,6 +41,36 @@ export function createEditorApi(store: EditorStoreApi, bridge: ConflictBridge): 
   let cachedEdgesRef: Edge[] | null = null;
   let cachedChildCount: Record<string, number> = {};
 
+  // Wave7 robustness（10k 块 TTI）：批量合并 ResizeObserver 尺寸上报。
+  // 大文档首屏 N 个节点各自挂载时会同步 fire report()，若每次都 store.set
+  // 会触发 N 次快照失效 + rfNodes 重算（O(N²)）。这里把一帧内的上报合并成
+  // 一次 store.set，语义不变（同一 id 后报覆盖先报）。
+  const pendingSizes: Record<string, MeasuredSize> = {};
+  let sizeFlushScheduled = false;
+  const flushMeasuredSizes = () => {
+    sizeFlushScheduled = false;
+    const pending = pendingSizes;
+    if (Object.keys(pending).length === 0) return;
+    for (const k of Object.keys(pending)) delete pending[k];
+    const cur = store.getState().measuredSizes;
+    const merged: Record<string, MeasuredSize> = { ...cur };
+    for (const [id, p] of Object.entries(pending)) {
+      const prev = merged[id];
+      merged[id] = {
+        width: p.width ?? prev?.width ?? 260,
+        height: p.height ?? prev?.height ?? 80,
+      };
+    }
+    store.getState().setMeasuredSizes(merged);
+  };
+  const scheduleSizeFlush = () => {
+    if (sizeFlushScheduled) return;
+    sizeFlushScheduled = true;
+    // rAF 对齐 React 提交节奏；无 rAF（测试）退化为微任务。
+    if (typeof requestAnimationFrame === 'function') requestAnimationFrame(flushMeasuredSizes);
+    else Promise.resolve().then(flushMeasuredSizes);
+  };
+
   const buildSnapshot = (): EditorSnapshot => {
     const s = store.getState();
 
@@ -128,17 +158,14 @@ export function createEditorApi(store: EditorStoreApi, bridge: ConflictBridge): 
     resizeNode: (id, w, h) => store.getState().resizeNode(id, w, h),
     setMeasuredSizes: (patches) => {
       // EditorApi 允许只报 height；store.measuredSizes 需要完整 {width,height}。
-      // 以现有 measuredSizes 为底做合并，宽度缺省取已有值/默认。
-      const cur = store.getState().measuredSizes;
-      const merged: Record<string, MeasuredSize> = { ...cur };
+      // Wave7：先入待合并缓冲，rAF 对齐后一次性 flush（避免大文档首屏 N 次 store.set）。
       for (const [id, p] of Object.entries(patches)) {
-        const prev = merged[id];
-        merged[id] = {
-          width: p.width ?? prev?.width ?? 260,
-          height: p.height ?? prev?.height ?? 80,
+        pendingSizes[id] = {
+          width: p.width ?? pendingSizes[id]?.width ?? 260,
+          height: p.height ?? pendingSizes[id]?.height ?? 80,
         };
       }
-      store.getState().setMeasuredSizes(merged);
+      scheduleSizeFlush();
     },
 
     // ---- 边 ----
@@ -204,7 +231,13 @@ export function createEditorApi(store: EditorStoreApi, bridge: ConflictBridge): 
     // ---- P1 附件上传（OPFS 资产管线）----
     putImageAsset: async (file) => {
       const r = await store.getState().putImageAsset(file);
-      return { assetRef: r.assetRef ?? r.src, name: file.name, size: file.size };
+      // OPFS 不可用/写失败时 core 返回空 src（assetRef 为空）。
+      // 接线层降级为 dataURL 内联：附件内容写进文档 JSON，刷新不丢。
+      // （不动 opfs.ts 生产代码；dataURL 仅在 OPFS 不可用时出现。）
+      const assetRef = r.assetRef ?? r.src;
+      if (assetRef) return { assetRef, name: file.name, size: file.size };
+      const dataUrl = await readFileAsDataURL(file);
+      return { assetRef: dataUrl, name: file.name, size: file.size };
     },
 
     // ---- 保存 ----
@@ -212,4 +245,14 @@ export function createEditorApi(store: EditorStoreApi, bridge: ConflictBridge): 
   };
 
   return api;
+}
+
+/** File → dataURL（OPFS 不可用时附件内联降级用）。 */
+function readFileAsDataURL(file: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error ?? new Error('FileReader failed'));
+    reader.readAsDataURL(file);
+  });
 }

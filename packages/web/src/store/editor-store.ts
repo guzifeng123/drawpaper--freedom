@@ -3,9 +3,10 @@ import type { KBNoteDoc } from '@drawpaper/core';
 import { DexieStorageAdapter } from '../storage/db';
 import { WebHostAdapter } from '../host/web-host';
 import { buildIndex, searchDocs } from '../storage/search-index';
-import { activeFileManager } from '../storage/fsa';
+import { activeFileManager, setStorageQuotaWarningHook } from '../storage/fsa';
 import { TEMPLATE_REGISTRY } from '../storage/templates';
 import { createConflictBridge, type ConflictBridge } from '../wiring/conflict-bridge';
+import { pushToast } from '../panels/lib/toast';
 
 /**
  * React 单例 editor store：注入浏览器 storage / host，启动时打开最近文档或新建空白。
@@ -54,6 +55,16 @@ export const editorStore = createEditorStore(blankInitialDoc(), {
   resolveConflictUi: (pending) => conflictBridge.handler(pending),
   templates: TEMPLATE_REGISTRY,
   fsa: activeFileManager,
+});
+
+// Wave7 robustness：FSA 写盘配额/失败不再静默，弹 toast 告知用户
+//（另存为路径仍会走 web-host 的 anchor 下载兜底，这里只做提示）。
+setStorageQuotaWarningHook((kind) => {
+  if (kind === 'quota') {
+    pushToast('error', '浏览器存储配额不足，自动保存/落盘可能失败，请清理浏览器数据或用「导出 .kbnote」另存');
+  } else {
+    pushToast('warn', '写入本地文件失败，已降级为浏览器下载');
+  }
 });
 
 /** 启动后：列出文档 → 打开最近一份；没有则新建。 */

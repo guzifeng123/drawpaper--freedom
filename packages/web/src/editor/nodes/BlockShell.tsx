@@ -113,7 +113,9 @@ export const BlockShell = memo(function BlockShell({
     };
     const ro = new ResizeObserver(report);
     ro.observe(el);
-    report();
+    // 不在这里同步 read el.scrollHeight：大文档首屏 N 个节点会各触发一次强制
+    // reflow（O(N) 同步布局）。ResizeObserver 自身在 observe 后会异步回调一次，
+    // 高度经 create-editor-api 的 rAF 合并批量上报，语义一致。
     return () => ro.disconnect();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [block.id, isEditing]);

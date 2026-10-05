@@ -27,6 +27,71 @@ const KBNOTE_TYPES = {
   accept: { 'application/json': ['.kbnote'] },
 } as const;
 
+// ============ 配额感知（Safari/Firefox 兜底 + QuotaExceededError 提示）============
+
+/**
+ * 写盘/配额失败的外部通知钩子。fsa.ts 不直接依赖 toast 组件，
+ * 由 web 接线层（editor-store）挂一个 pushToast 实现，便于单测替换。
+ */
+export type StorageQuotaWarning = (kind: 'quota' | 'write-failed', detail?: string) => void;
+let quotaWarningHook: StorageQuotaWarning = () => {
+  /* 默认静默；接线层挂载后才弹 toast */
+};
+export function setStorageQuotaWarningHook(hook: StorageQuotaWarning): void {
+  quotaWarningHook = hook;
+}
+
+/**
+ * 判断一个异常是否为「配额/磁盘已满」类错误。
+ * 覆盖 DOMException.name、Firefox 的 NS_ERROR_* 以及 message 文本。
+ */
+export function isQuotaError(err: unknown): boolean {
+  const name = (err as { name?: string } | null | undefined)?.name;
+  if (
+    name === 'QuotaExceededError' ||
+    name === 'QuotaExceededError' ||
+    name === 'NS_ERROR_FILE_NO_DEVICE_SPACE' ||
+    name === 'NS_ERROR_DOM_FILESYSTEM_NO_MODIFICATION_ALLOWED_ERR'
+  ) {
+    return true;
+  }
+  const msg = (err as { message?: string } | null | undefined)?.message ?? '';
+  return /quota|no space|no_device_space|enospc/i.test(msg);
+}
+
+/**
+ * 读 navigator.storage.estimate()；不支持或失败返回 null。
+ * 返回 usage/quota 字节数，供导出前做配额预检与人工验证清单使用。
+ */
+export async function estimateStorageQuota(): Promise<{ usage: number; quota: number } | null> {
+  const s = (
+    navigator as unknown as {
+      storage?: { estimate?: () => Promise<{ usage?: number; quota?: number }> };
+    }
+  ).storage;
+  if (typeof s?.estimate !== 'function') return null;
+  try {
+    const e = await s.estimate();
+    return { usage: e.usage ?? 0, quota: e.quota ?? 0 };
+  } catch {
+    return null;
+  }
+}
+
+/** 用户主动取消文件选择（AbortError）不属于错误，静默。 */
+function isAbortError(err: unknown): boolean {
+  return (err as { name?: string } | null | undefined)?.name === 'AbortError';
+}
+
+/** 写盘失败时的统一出口：区分配额错误并通知接线层。 */
+function notifyWriteFailure(err: unknown): void {
+  if (isQuotaError(err)) {
+    quotaWarningHook('quota', typeof err === 'object' && err !== null ? (err as Error).message : undefined);
+  } else {
+    quotaWarningHook('write-failed', typeof err === 'object' && err !== null ? (err as Error).message : undefined);
+  }
+}
+
 /** 单独的小库持久化活动句柄（FileSystemHandle 可结构化克隆进 IndexedDB）。 */
 class FsaDB extends Dexie {
   active!: Table<{ id: string; handle: FileSystemFileHandleLike }, string>;
@@ -97,8 +162,9 @@ export class ActiveFileManager implements FsaCapability {
             await writable.write(t);
             await writable.close();
             ok = true;
-          } catch {
+          } catch (e) {
             ok = false;
+            notifyWriteFailure(e);
           }
         }
         this.pendingResolve?.(ok);
@@ -117,7 +183,9 @@ export class ActiveFileManager implements FsaCapability {
       await writable.close();
       await this.setActive(handle);
       return handle.name ?? suggestedName;
-    } catch {
+    } catch (e) {
+      // 用户取消（AbortError）不告警；仅配额/写盘失败提示。
+      if (!isAbortError(e)) notifyWriteFailure(e);
       return null;
     }
   }
@@ -193,7 +261,9 @@ export async function saveWithFsa(filename: string, text: string): Promise<boole
     await writable.write(text);
     await writable.close();
     return true;
-  } catch {
+  } catch (e) {
+    // 用户取消不告警；配额/写盘失败通知接线层（host 仍会走 anchor 下载兜底）。
+    if (!isAbortError(e)) notifyWriteFailure(e);
     return false;
   }
 }

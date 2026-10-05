@@ -225,3 +225,72 @@ export function buildPerfFixture(totalNodes: number, title = '性能样例'): KB
   doc.edges = edges;
   return doc;
 }
+
+/**
+ * 性能夹具（大 n，迭代版）：buildPerfFixture 的递归版在 n=10000 时
+ * 因左 spine 递归过深爆栈（RangeError）。本版用队列 BFS 建树 + 迭代后序
+ * 计算 Y，形状与 mindmap-right 一致（深度→x，叶子槽位→y），但不递归。
+ * 用于 10000 块基准（perf-10k.bench.spec.ts）。
+ */
+export function buildPerfFixtureWide(totalNodes: number, title = '性能样例'): KBNoteDoc {
+  counter = 100000;
+  const doc = baseDoc(title);
+  const nodes: BlockNode[] = [];
+  const edges: Edge[] = [];
+  const childrenOf = new Map<string, string[]>();
+  const byId = new Map<string, BlockNode>();
+  const SLOT_Y = 96;
+
+  const rootId = nid('root');
+  const root = makeNode(rootId, 'heading', 0, 0, 'root');
+  nodes.push(root);
+  byId.set(rootId, root);
+
+  // BFS 建树：根 3 子，其余每节点 2 子，直到凑够 totalNodes。
+  const queue: string[] = [rootId];
+  let created = 1;
+  while (created < totalNodes && queue.length > 0) {
+    const parentId = queue.shift()!;
+    const childCount = parentId === rootId ? 3 : 2;
+    for (let k = 0; k < childCount && created < totalNodes; k++) {
+      const id = nid('n');
+      created += 1;
+      const parent = byId.get(parentId)!;
+      const node = makeNode(id, 'text', parent.x + 340, 0, `block ${id}`);
+      nodes.push(node);
+      byId.set(id, node);
+      edges.push(makeEdge(parentId, id));
+      const arr = childrenOf.get(parentId) ?? [];
+      arr.push(id);
+      childrenOf.set(parentId, arr);
+      queue.push(id);
+    }
+  }
+
+  // 迭代后序计算 Y：叶子按顺序占槽，内部节点取子节点 y 中点。
+  let ySlot = 0;
+  const yById = new Map<string, number>();
+  const stack: Array<{ id: string; visited: boolean }> = [{ id: rootId, visited: false }];
+  while (stack.length > 0) {
+    const { id, visited } = stack.pop()!;
+    const kids = childrenOf.get(id) ?? [];
+    if (!visited) {
+      stack.push({ id, visited: true });
+      for (let i = kids.length - 1; i >= 0; i--) stack.push({ id: kids[i]!, visited: false });
+    } else {
+      if (kids.length === 0) {
+        yById.set(id, ySlot * SLOT_Y);
+        ySlot += 1;
+      } else {
+        const childYs = kids.map((k) => yById.get(k)!);
+        const node = byId.get(id)!;
+        yById.set(id, (Math.min(...childYs) + Math.max(...childYs)) / 2 - node.height / 2);
+      }
+    }
+  }
+  for (const n of nodes) n.y = yById.get(n.id)!;
+
+  doc.nodes = nodes;
+  doc.edges = edges;
+  return doc;
+}
