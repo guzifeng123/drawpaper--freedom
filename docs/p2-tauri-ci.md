@@ -123,7 +123,36 @@ git push origin v0.1.0-rc.1
 
 ## 5. CI 运行 URL 与结论
 
-（本节在 tag 推送后轮询填充。）
+工作流已推送至 `feat/p2-tauri-ci`（commits d802c1e → 24aacc0）。
+
+**已确认的云端 run**（未认证 API 轮询所得）：
+
+| run | workflow | commit | 结论 | URL |
+|---|---|---|---|---|
+| 37276063882 | web-ci | d802c1e | ❌ failure（Install dependencies） | https://github.com/guzifeng123/drawpaper--freedom/actions/runs/37276063882 |
+| 37276063898 | android-debug | d802c1e | ❌ failure（Install dependencies） | https://github.com/guzifeng123/drawpaper--freedom/actions/runs/37276063898 |
+
+**排查与修复迭代**：
+
+1. 首跑（d802c1e）：`pnpm install --frozen-lockfile` 在 runner 失败。根因判断为
+   `.npmrc` 把 registry 钉到 `registry.npmmirror.com`（国内镜像，US runner 连通性差）。
+2. 0bd278f：加 job 级 `npm_config_registry=npmjs.org` env —— 仍失败（同一步）。
+3. ea81698：加诊断步骤（`pnpm -v`/`node -v`/`pnpm config get registry`）+ append-only reporter。
+4. 6933476：改 `--no-frozen-lockfile`。
+5. 24aacc0：install 命令加 CLI 级 `--registry=https://registry.npmjs.org/`（CLI flag
+   优先级高于 .npmrc，比 env 更确定）。
+
+**当前状态（诚实标注）**：24aacc0 已推送，其 run 的结论因本机出口共享 IP 被 GitHub
+未认证 API 限流（60 req/h 耗尽）无法在本波次内轮询确认。本地门禁全绿
+（build/typecheck/lint 0 error；单测 core 140 + web 178；precache 校验通过）。
+后续在未限流窗口或配 GITHUB_TOKEN 后应轮询
+`https://github.com/guzifeng123/drawpaper--freedom/actions` 确认 web-ci 转绿，
+再打 `v0.1.0-rc.1` tag 触发 release-windows。
+
+**release-windows / v0.1.0-rc.1 tag**：本波次**未打 tag**——因为 web-ci 尚未云端转绿，
+打 tag 会直接触发 Windows 出包并大概率失败。YAML 经人工核验（action 版本、matrix、
+tauri-action 用法、publish job 收敛 release 创建），但**未经云端实跑**。这是本波次
+的客观遗留：本机出口限流导致无法在窗口内完成"推 tag→轮询→修→重打"循环。
 
 ## 6. Android / iOS 状态
 
