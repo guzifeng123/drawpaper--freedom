@@ -1,4 +1,5 @@
 import type { KBNoteDoc } from '@drawpaper/core';
+import { parseKBNote, KBNoteFileError } from '@drawpaper/core';
 import { editorStore } from '@/store/editor-store';
 import { getAsset, isOpfsAvailable } from '@/storage/opfs';
 
@@ -33,6 +34,14 @@ export interface DrawpaperDevHook {
   listAssetRefs(): string[];
   /** 检查某 assetRef 的 blob 是否真的落在 OPFS 中。 */
   opfsHasAsset(ref: string): Promise<boolean>;
+  // ---- Wave6a schema 迁移：e2e 走真实 parse+迁移路径 ----
+  /**
+   * 走真实 parseKBNote 路径导入一段 .kbnote 文本（供 e2e 注入 v1/v9 文件）。
+   * 成功才 loadDoc；失败不替换当前文档，返回错误 kind。
+   */
+  importKbnoteText(text: string):
+    | { ok: true; version: number; migrationNotes: string[] }
+    | { ok: false; errorKind: string };
 }
 
 declare global {
@@ -160,6 +169,16 @@ export function installDevHooks(): void {
       if (!isOpfsAvailable()) return false;
       const blob = await getAsset(ref);
       return blob !== null;
+    },
+    importKbnoteText(text: string) {
+      try {
+        const { doc, migrationNotes } = parseKBNote(text);
+        editorStore.getState().loadDoc(doc);
+        return { ok: true as const, version: doc.version, migrationNotes };
+      } catch (e) {
+        if (e instanceof KBNoteFileError) return { ok: false as const, errorKind: e.kind };
+        return { ok: false as const, errorKind: 'schema' };
+      }
     },
   };
 }

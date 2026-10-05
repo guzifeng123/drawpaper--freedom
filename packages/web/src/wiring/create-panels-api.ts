@@ -1,5 +1,5 @@
 import type { EditorStoreApi, KBNoteDoc } from '@drawpaper/core';
-import { parseKBNote } from '@drawpaper/core';
+import { parseKBNote, KBNoteFileError } from '@drawpaper/core';
 import type { PanelsApi, SearchResultItem, DocMeta, SnapshotInfo, TrashItem } from '@/panels/panels-api';
 import { pushToast } from '@/panels/lib/toast';
 import { useWiringUi } from './ui-store';
@@ -140,11 +140,19 @@ export function createPanelsApi(store: EditorStoreApi): PanelsApi {
       void (async () => {
         try {
           const text = await file.text();
-          const { doc } = parseKBNote(text);
+          const { doc, migrationNotes } = parseKBNote(text);
           store.getState().loadDoc(doc);
-          pushToast('success', `已导入「${doc.title}」`);
+          if (migrationNotes.length > 0) {
+            pushToast('success', `已导入「${doc.title}」（已自动升级 schema）`);
+          } else {
+            pushToast('success', `已导入「${doc.title}」`);
+          }
         } catch (err) {
-          pushToast('error', `导入失败：${err instanceof Error ? err.message : '文件格式错误'}`);
+          if (err instanceof KBNoteFileError && err.kind === 'unsupported-version') {
+            pushToast('error', '文件版本更高，当前应用版本不支持打开');
+          } else {
+            pushToast('error', `导入失败：${err instanceof Error ? err.message : '文件格式错误'}`);
+          }
         }
       })();
     },

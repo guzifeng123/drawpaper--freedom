@@ -51,6 +51,7 @@ export function createEmptyDoc(title = '未命名画布'): KBNoteDoc {
       pageBreaks: [],
     },
     assetRefs: [],
+    links: [],
   };
 }
 

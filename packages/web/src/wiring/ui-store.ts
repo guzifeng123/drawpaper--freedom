@@ -20,6 +20,12 @@ export interface WiringUiState {
   /** 左侧大纲面板是否展开（默认折叠，避免遮挡画布建块区域）。 */
   outlineOpen: boolean;
 
+  /**
+   * 打开的活动文件是 v1：在用户确认「保存时升级为 v2、覆盖原文件」之前，
+   * 暂停对该文件的防抖写盘（Dexie 自动保存照常）。确认后恢复。
+   */
+  migrationAwaitingConfirm: boolean;
+
   setExportOpen(open: boolean): void;
   setSearchOpen(open: boolean): void;
   setActiveSearchIndex(i: number): void;
@@ -27,6 +33,7 @@ export interface WiringUiState {
   bumpTrash(): void;
   setAiPanelOpen(open: boolean): void;
   setOutlineOpen(open: boolean): void;
+  setMigrationAwaitingConfirm(v: boolean): void;
 }
 
 export const useWiringUi = create<WiringUiState>((set) => ({
@@ -37,6 +44,7 @@ export const useWiringUi = create<WiringUiState>((set) => ({
   trashNonce: 0,
   aiPanelOpen: false,
   outlineOpen: false,
+  migrationAwaitingConfirm: false,
   setExportOpen: (open) => set({ exportOpen: open }),
   setSearchOpen: (open) => set({ searchOpen: open }),
   setActiveSearchIndex: (i) => set({ activeSearchIndex: i }),
@@ -44,6 +52,7 @@ export const useWiringUi = create<WiringUiState>((set) => ({
   bumpTrash: () => set((s) => ({ trashNonce: s.trashNonce + 1 })),
   setAiPanelOpen: (open) => set({ aiPanelOpen: open }),
   setOutlineOpen: (open) => set({ outlineOpen: open }),
+  setMigrationAwaitingConfirm: (v) => set({ migrationAwaitingConfirm: v }),
 }));
 
 /** 非 React 侧（快捷键 / 适配层）直接读最新 UI 态。 */

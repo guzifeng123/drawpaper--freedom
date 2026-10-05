@@ -64,7 +64,7 @@ function baseDoc(title: string): KBNoteDoc {
   const now = Date.now();
   return {
     format: 'knowledge-block-notes',
-    version: 1,
+    version: 2,
     id: nid('doc'),
     title,
     board: { createdAt: now, updatedAt: now },
@@ -87,6 +87,7 @@ function baseDoc(title: string): KBNoteDoc {
       pageBreaks: [],
     },
     assetRefs: [],
+    links: [],
   };
 }
 

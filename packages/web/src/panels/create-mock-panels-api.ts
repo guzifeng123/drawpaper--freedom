@@ -68,7 +68,7 @@ function makeSampleDoc(id: string, title: string): KBNoteDoc {
   };
   return {
     format: 'knowledge-block-notes',
-    version: 1,
+    version: 2,
     id,
     title,
     board: { createdAt: now, updatedAt: now },
@@ -79,6 +79,7 @@ function makeSampleDoc(id: string, title: string): KBNoteDoc {
     viewport: { x: 0, y: 0, zoom: 1 },
     page: defaultPageSettings(),
     assetRefs: [],
+    links: [],
   };
 }
 
