@@ -214,4 +214,22 @@ export interface PanelsApi {
   /** 彻底删除（确认由弹层负责，不可恢复）。 */
   purgeFromTrash(id: string): void;
   emptyTrash(): void;
+
+  // ============================================================
+  // Wave6b 跨文档双向链接
+  // ============================================================
+
+  /**
+   * 打开引用：跨文档则切换到 targetDocId，再 flyToNode(targetNodeId) 并高亮脉冲；
+   * 文档内则直接 flyToNode。由 App/CanvasEditor 总装接真实 store（Wave7）。
+   */
+  openDocRef(targetDocId: string, targetNodeId: string): void;
+  /**
+   * 删除一份文档前的反链影响：返回指向它的引用条数与可读样例（用于确认弹层列出）。
+   * 无引用时 count=0。Wave7。
+   */
+  docDeleteImpact(docId: string): Promise<{ count: number; samples: string[] }>;
+  /** BacklinksPanel 当前查看的块维度（null = 文档级反链）。 */
+  backlinksNodeId: string | null;
+  setBacklinksNodeId(id: string | null): void;
 }

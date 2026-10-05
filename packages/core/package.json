@@ -38,6 +38,10 @@
     "./ai": {
       "types": "./dist/ai/index.d.ts",
       "import": "./dist/ai/index.js"
+    },
+    "./overview": {
+      "types": "./dist/overview/index.d.ts",
+      "import": "./dist/overview/index.js"
     }
   },
   "files": ["dist"],

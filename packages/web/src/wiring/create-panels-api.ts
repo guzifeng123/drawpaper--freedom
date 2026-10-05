@@ -1,9 +1,23 @@
 import type { EditorStoreApi, KBNoteDoc } from '@drawpaper/core';
-import { parseKBNote, KBNoteFileError } from '@drawpaper/core';
+import { parseKBNote, KBNoteFileError, linksAffectedByDeleteDoc } from '@drawpaper/core';
 import type { PanelsApi, SearchResultItem, DocMeta, SnapshotInfo, TrashItem } from '@/panels/panels-api';
 import { pushToast } from '@/panels/lib/toast';
 import { useWiringUi } from './ui-store';
 import { storageAdapter, hostAdapter } from '@/store/editor-store';
+import { db } from '@/storage/db';
+
+/** 取块正文前 12 字做摘要（失败回退类型名）。 */
+function summarizeNode(n: { type: string; content?: { data?: unknown } }): string {
+  try {
+    const data = (n.content as { data?: { content?: unknown[] } } | undefined)?.data as
+      | { content?: Array<{ content?: Array<{ text?: string }> }> }
+      | undefined;
+    const txt = data?.content?.[0]?.content?.[0]?.text ?? '';
+    return txt.slice(0, 12) || n.type;
+  } catch {
+    return n.type;
+  }
+}
 
 /** 大纲内联建块用：一段纯文本的 Tiptap doc。 */
 function paraDoc(text: string): unknown {
@@ -320,6 +334,37 @@ export function createPanelsApi(store: EditorStoreApi): PanelsApi {
         trashDirty = true;
         useWiringUi.getState().bumpTrash();
       });
+    },
+
+    // ---- Wave6b 跨文档双向链接 ----
+    openDocRef: (targetDocId, targetNodeId) => {
+      const s = store.getState();
+      if (targetDocId === s.currentDocId) {
+        s.flyToNode(targetNodeId);
+      } else {
+        void s.openDoc(targetDocId).then(() => {
+          store.getState().flyToNode(targetNodeId);
+        });
+      }
+    },
+    get backlinksNodeId() {
+      return useWiringUi.getState().backlinksNodeId;
+    },
+    setBacklinksNodeId: (id) => useWiringUi.getState().setBacklinksNodeId(id),
+    docDeleteImpact: async (docId) => {
+      const all = await db.docs.toArray();
+      const allLinks = all.flatMap((d) => d.links ?? []);
+      const { incoming } = linksAffectedByDeleteDoc(docId, allLinks);
+      const docTitle = new Map(all.map((d) => [d.id, d.title]));
+      const nodeText = new Map(all.map((d) => [d.id, d.nodes]));
+      const samples = incoming.slice(0, 5).map((l) => {
+        const fromDoc = docTitle.get(l.sourceDocId) ?? l.sourceDocId;
+        const nodes = nodeText.get(l.sourceDocId) ?? [];
+        const n = nodes.find((nn) => nn.id === l.sourceNodeId);
+        const label = n ? summarizeNode(n) : l.sourceNodeId;
+        return `《${fromDoc}》块「${label}」`;
+      });
+      return { count: incoming.length, samples };
     },
   };
 

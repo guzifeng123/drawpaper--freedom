@@ -51,4 +51,18 @@ describe('buildPagesSvg', () => {
     expect(svg).toContain('页脚');
     expect(svg).toContain('data-node-id="n1"');
   });
+
+  it('无 points 时 edge 为贝塞尔 path', () => {
+    const [svg] = buildPagesSvg(result(), doc(), { orientation: 'portrait' });
+    expect(svg).toMatch(/d="M [^"]*C/);
+  });
+
+  it('有 points：SVG path 含页本地弯折坐标（世界点经偏移换算）', () => {
+    const d = doc();
+    // 世界弯折点 (200,200)；source 节点世界(0,0)→页本地(60,60)，delta=(60,60)
+    // → 页本地点 = (260,260)
+    (d.edges[0] as { points?: { x: number; y: number }[] }).points = [{ x: 200, y: 200 }];
+    const [svg] = buildPagesSvg(result(), d, { orientation: 'portrait' });
+    expect(svg).toContain('260 260');
+  });
 });

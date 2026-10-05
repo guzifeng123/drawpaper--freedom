@@ -23,6 +23,8 @@ import {
   Radar,
   Sparkles,
   ListTree,
+  ArrowLeftRight,
+  Waypoints,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Toolbar, ToolbarSeparator } from '@/components/ui/toolbar';
@@ -188,6 +190,36 @@ function AiToggle() {
       title="AI 辅助"
     >
       <Sparkles className="h-4 w-4" />
+    </Button>
+  );
+}
+
+/** 右侧反链面板开关。 */
+function BacklinksToggle() {
+  const open = useWiringUi((s) => s.backlinksOpen);
+  return (
+    <Button
+      variant={open ? 'default' : 'ghost'}
+      size="icon"
+      onClick={() => useWiringUi.getState().setBacklinksOpen(!open)}
+      title="反向链接"
+    >
+      <ArrowLeftRight className="h-4 w-4" />
+    </Button>
+  );
+}
+
+/** 全局知识图谱总览入口。 */
+function OverviewToggle() {
+  const open = useWiringUi((s) => s.overviewOpen);
+  return (
+    <Button
+      variant={open ? 'default' : 'ghost'}
+      size="icon"
+      onClick={() => useWiringUi.getState().setOverviewOpen(!open)}
+      title="全局知识图谱"
+    >
+      <Waypoints className="h-4 w-4" />
     </Button>
   );
 }
@@ -412,6 +444,8 @@ export const TopToolbar = React.memo(function TopToolbar({ api }: { api: PanelsA
         </Button>
         <OutlineToggle />
         <AiToggle />
+        <BacklinksToggle />
+        <OverviewToggle />
         <ThemeToggle />
         <Button variant="outline" size="sm" onClick={() => api.openSearch()} title="全文搜索 (Ctrl/Cmd+F)">
           <Search className="h-4 w-4" /> 搜索

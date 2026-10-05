@@ -129,6 +129,7 @@ export function createEditorApi(store: EditorStoreApi, bridge: ConflictBridge): 
     deleteEdge: (id) => store.getState().deleteEdge(id),
     setEdgeColor: (id, color) => store.getState().setEdgeColor(id, color),
     setEdgeLabel: (id, label) => store.getState().setEdgeLabel(id, label),
+    setEdgePoints: (id, points) => store.getState().setEdgePoints(id, points),
     reverseEdge: (id) => store.getState().reverseEdge(id),
 
     // ---- 导图键盘 ----

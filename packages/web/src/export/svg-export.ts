@@ -2,6 +2,7 @@ import type { KBNoteDoc, BlockNode, Edge } from '@drawpaper/core';
 import type { PageSheet, PaginateResult } from '@drawpaper/core';
 import { extractNodePlainText } from '@drawpaper/core';
 import { pagePixelSize } from '@drawpaper/core';
+import { buildEdgePath, type EdgeEnd } from '../editor/edges/edge-geometry';
 
 /**
  * SVG 矢量导出：把每页序列化为独立 .svg（不引第三方依赖）。
@@ -46,10 +47,6 @@ function nodeColor(node: BlockNode, gray?: boolean): { fill: string; stroke: str
   return { fill: '#ffffff', stroke: '#CBD5E1' };
 }
 
-function edgePath(a: { x: number; y: number }, b: { x: number; y: number }): string {
-  const dx = Math.max(40, Math.abs(b.x - a.x) / 2);
-  return `M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}`;
-}
 
 function renderNode(node: BlockNode, offset: { x: number; y: number }, gray?: boolean): string {
   const { fill, stroke } = nodeColor(node, gray);
@@ -79,9 +76,15 @@ function renderEdge(
   if (!so || !to) return '';
   const a = { x: so.x + s.width, y: so.y + s.height / 2 };
   const b = { x: to.x, y: to.y + t.height / 2 };
+  // 世界坐标弯折点 → 页本地（按 source 节点的世界→页本地偏移换算）
+  const delta = { x: so.x - s.x, y: so.y - s.y };
+  const localPoints = (edge.points ?? []).map((p) => ({ x: p.x + delta.x, y: p.y + delta.y }));
   const color = gray ? '#94A3B8' : edge.style.color || '#94A3B8';
+  const sEnd: EdgeEnd = { x: a.x, y: a.y, position: 'right' };
+  const tEnd: EdgeEnd = { x: b.x, y: b.y, position: 'left' };
+  const d = buildEdgePath(sEnd, tEnd, localPoints);
   return `<g class="edge" data-edge-id="${escXml(edge.id)}">` +
-    `<path d="${edgePath(a, b)}" fill="none" stroke="${color}" stroke-width="1.5" marker-end="url(#arrow)"/>` +
+    `<path d="${d}" fill="none" stroke="${color}" stroke-width="1.5" marker-end="url(#arrow)"/>` +
     `</g>`;
 }
 

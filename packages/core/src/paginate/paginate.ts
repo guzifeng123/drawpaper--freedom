@@ -8,6 +8,7 @@ import {
   FLOW_INDENT_PER_LEVEL,
   FLOW_BLOCK_GAP_PX,
 } from './constants.js';
+import { planBentEdgeSegments } from './edge-crossing.js';
 
 /**
  * paginate 模块：A4 分页「视图模型」（纯逻辑，零 DOM）。
@@ -288,7 +289,7 @@ function makePageSheet(
  */
 function finalizePages(pages: PageSheet[]): PageSheet[] {
   if (pages.length === 0) return pages;
-  const kept = pages.filter((p) => p.nodeIds.length > 0 || p.preserveBlank);
+  const kept = pages.filter((p) => p.nodeIds.length > 0 || p.preserveBlank || p.continuations.length > 0);
   if (kept.length === 0) return pages;
   if (kept.length === pages.length) return pages; // 无空白页，零成本短路。
   const oldToNew = new Map<number, number>();
@@ -491,11 +492,30 @@ function runTilesGrid(
     const ps = nodePageIdx.get(e.source);
     const pt = nodePageIdx.get(e.target);
     if (ps === undefined || pt === undefined) continue;
-    if (ps === pt) {
+    if (ps === pt && !(e.points && e.points.length)) {
       pages[ps]!.edgeIds.push(e.id);
       continue;
     }
-    // 跨页：两端各一个 marker。
+    // 弯折边：按 source 锚点 → points → target 锚点 的逐页段分发。
+    if (e.points && e.points.length) {
+      const srcR = nodeRect(input, e.source);
+      const tgtR = nodeRect(input, e.target);
+      const vertices = [
+        anchorPoint(srcR, e.sourceHandle ?? 'right'),
+        ...e.points.map((p) => ({ x: p.x, y: p.y })),
+        anchorPoint(tgtR, e.targetHandle ?? 'left'),
+      ];
+      const pageRects = pages.map((p) => ({ index: p.index, worldRect: p.worldRect }));
+      const { samePageEdges, crossPairs } = planBentEdgeSegments(vertices, pageRects);
+      for (const pi of samePageEdges) pages[pi]!.edgeIds.push(e.id);
+      for (const cp of crossPairs) {
+        const token = `cont:${e.id}:${cp.seg}`;
+        addContinuationAtPoint(pages[cp.pageA]!, token, e.id, cp.pageA, cp.pointA, pageOriginWorld[cp.pageA]!, cr, scale, cp.pageB);
+        addContinuationAtPoint(pages[cp.pageB]!, token, e.id, cp.pageB, cp.pointB, pageOriginWorld[cp.pageB]!, cr, scale, cp.pageA);
+      }
+      continue;
+    }
+    // 跨页（无弯折）：两端各一个 marker。
     const token = `cont:${e.id}`;
     const srcR = nodeRect(input, e.source);
     const tgtR = nodeRect(input, e.target);
@@ -522,6 +542,39 @@ function addContinuation(
   // 端点换算到页面本地，再夹到内容区边界附近。
   const lx = cr.x + (endpointWorld.x - pageOriginWorld.x) * scale;
   const ly = cr.y + (endpointWorld.y - pageOriginWorld.y) * scale;
+  const clampedX = Math.min(Math.max(lx, cr.x), cr.x + cr.width);
+  const clampedY = Math.min(Math.max(ly, cr.y), cr.y + cr.height);
+  page.continuations.push({ token, edgeId, pageIndex, x: clampedX, y: clampedY, peerPageIndex });
+}
+
+/** 由节点矩形 + 句柄朝向给出锚点世界坐标。 */
+function anchorPoint(r: Rect, handle: string): { x: number; y: number } {
+  switch (handle) {
+    case 'left':
+      return { x: r.x, y: r.y + r.height / 2 };
+    case 'top':
+      return { x: r.x + r.width / 2, y: r.y };
+    case 'bottom':
+      return { x: r.x + r.width / 2, y: r.y + r.height };
+    default:
+      return { x: r.x + r.width, y: r.y + r.height / 2 };
+  }
+}
+
+/** 弯折边跨页：按世界落点直接发 marker（不再按节点矩形 clamp）。 */
+function addContinuationAtPoint(
+  page: PageSheet,
+  token: string,
+  edgeId: string,
+  pageIndex: number,
+  worldPoint: { x: number; y: number },
+  pageOriginWorld: { x: number; y: number },
+  cr: ReturnType<typeof contentRect>,
+  scale: number,
+  peerPageIndex: number,
+): void {
+  const lx = cr.x + (worldPoint.x - pageOriginWorld.x) * scale;
+  const ly = cr.y + (worldPoint.y - pageOriginWorld.y) * scale;
   const clampedX = Math.min(Math.max(lx, cr.x), cr.x + cr.width);
   const clampedY = Math.min(Math.max(ly, cr.y), cr.y + cr.height);
   page.continuations.push({ token, edgeId, pageIndex, x: clampedX, y: clampedY, peerPageIndex });
