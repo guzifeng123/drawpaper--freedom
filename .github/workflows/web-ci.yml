@@ -43,14 +43,14 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
-      - name: Diagnostic: pnpm/node/registry versions
+      - name: 'Diagnostic: pnpm/node/registry versions'
         run: |
           pnpm --version
           node --version
           pnpm config get registry
 
       - name: Install dependencies
-        run: pnpm install --no-frozen-lockfile --registry=https://registry.npmjs.org/ --reporter=append-only
+        run: pnpm install --frozen-lockfile --registry=https://registry.npmjs.org/ --reporter=append-only
 
       - name: Build all packages
         run: pnpm -r build

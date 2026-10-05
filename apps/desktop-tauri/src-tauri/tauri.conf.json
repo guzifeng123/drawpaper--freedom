@@ -4,9 +4,9 @@
   "version": "0.2.0",
   "identifier": "com.drawpaper.app",
   "build": {
-    "beforeDevCommand": "pnpm --filter @drawpaper/web dev",
+    "beforeDevCommand": "pnpm --dir ../../packages/web dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "pnpm --filter @drawpaper/web build",
+    "beforeBuildCommand": "pnpm --dir ../../packages/web build",
     "frontendDist": "../../packages/web/dist"
   },
   "app": {
@@ -30,7 +30,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["msi", "nsis"],
+    "targets": [
+      "msi",
+      "nsis"
+    ],
     "publisher": "drawpaper contributors",
     "copyright": "MIT",
     "shortDescription": "Local-first infinite-canvas knowledge-block note tool",
@@ -44,14 +47,22 @@
     ],
     "windows": {
       "wix": {
-        "language": ["zh-CN", "en-US"]
+        "language": [
+          "zh-CN",
+          "en-US"
+        ]
       },
       "nsis": {
-        "languages": ["SimpChinese", "English"]
+        "languages": [
+          "SimpChinese",
+          "English"
+        ]
       },
       "fileAssociations": [
         {
-          "ext": ["kbnote"],
+          "ext": [
+            "kbnote"
+          ],
           "description": "drawpaper knowledge-block note",
           "identifier": "com.drawpaper.app.kbnote",
           "icon": "icons/icon.ico"

@@ -1,8 +1,7 @@
 packages:
   - "packages/*"
 
+# pnpm 11 在 CI(CI=true) 下，未显式批准的依赖构建脚本会让 install 直接失败
+# （ERR_PNPM_IGNORED_BUILDS）。esbuild 需要 postinstall 安装平台二进制，必须放行。
 allowBuilds:
-  esbuild: set this to true or false
-
-onlyBuiltDependencies:
-  - esbuild
+  esbuild: true

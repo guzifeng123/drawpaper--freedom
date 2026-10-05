@@ -3,10 +3,10 @@ name: release-windows
 # Builds Windows NSIS installers (x64 + ARM64) and publishes them to a
 # GitHub Release for the pushed tag. Triggered only on v* tags.
 #
-# Strategy: two matrix jobs BUILD the installers and upload them as workflow
-# artifacts (no release creation inside the matrix, to avoid two parallel jobs
-# racing to create the same release). A third `publish` job collects both
-# artifacts and creates the GitHub release.
+# Strategy: two matrix jobs run the Tauri CLI directly to BUILD the installers
+# and upload them as workflow artifacts (the CLI build does not touch GitHub
+# releases, so parallel jobs cannot race to create the same release). A third
+# `publish` job collects both artifacts and creates the GitHub release.
 
 on:
   push:
@@ -49,25 +49,21 @@ jobs:
           cache-dependency-path: pnpm-lock.yaml
 
       - name: Install JS dependencies
-        run: pnpm install --no-frozen-lockfile --registry=https://registry.npmjs.org/
+        run: pnpm install --frozen-lockfile --registry=https://registry.npmjs.org/
 
-      - name: Add ARM64 Rust target
-        if: matrix.arch == 'arm64'
-        run: rustup target add aarch64-pc-windows-msvc
+      - name: Install Tauri CLI (desktop shell, outside the pnpm workspace)
+        working-directory: apps/desktop-tauri
+        run: pnpm install --ignore-workspace --registry=https://registry.npmjs.org/
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.rust_target }}
 
       - name: Build web frontend
         run: pnpm -r build
 
-      - name: Tauri build (NSIS)
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          projectPath: apps/desktop-tauri
-          # Intentionally no tagName / releaseName: we do NOT create the release
-          # here. Two parallel matrix jobs must not race to create the same tag
-          # release; the `publish` job below owns that step.
-          args: ${{ matrix.extra_args }}
+      - name: Tauri build (NSIS, ${{ matrix.arch }})
+        working-directory: apps/desktop-tauri
+        run: pnpm exec tauri build ${{ matrix.extra_args }}
 
       - name: Upload NSIS installer artifact
         uses: actions/upload-artifact@v4
@@ -76,7 +72,7 @@ jobs:
           path: |
             apps/desktop-tauri/src-tauri/target/**/release/bundle/nsis/*.exe
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 30
 
   publish:
     needs: build
@@ -96,7 +92,7 @@ jobs:
           find artifacts -type f -name '*.exe' -print
           echo "::endgroup::"
 
-      - name: Create prerelease GitHub Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
