@@ -80,6 +80,17 @@ export default tseslint.config(
       ],
     },
   },
+  // ---- Node 构建/校验脚本（*.mjs/*.cjs，如 PWA precache 校验）----
+  {
+    files: ['**/*.mjs', '**/*.cjs', '**/scripts/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: {
+        ...globals.node,
+      },
+    },
+  },
   // ---- packages/web: React hooks 规则（仅 web；core 是 DOM-free 纯逻辑，不加载）----
   // 只启用经典两条（rules-of-hooks / exhaustive-deps），不引入 React Compiler 的
   // set-state-in-effect / immutability 等新门禁——后者会要求重写 Wave1 既有组件。
