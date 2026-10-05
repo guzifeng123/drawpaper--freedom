@@ -1,7 +1,12 @@
 packages:
   - "packages/*"
 
-# pnpm 11 在 CI(CI=true) 下，未显式批准的依赖构建脚本会让 install 直接失败
-# （ERR_PNPM_IGNORED_BUILDS）。esbuild 需要 postinstall 安装平台二进制，必须放行。
+# pnpm 11 在全新安装（CI=true）时，未显式批准的依赖构建脚本会让 install 以
+# 退出码 1 + ERR_PNPM_IGNORED_BUILDS 结束。esbuild 需要 postinstall 安装平台
+# 二进制，必须放行（allowBuilds 是 pnpm 11.7 的批准表，onlyBuiltDependencies
+# 保留以兼容旧版/工具链）。
 allowBuilds:
   esbuild: true
+
+onlyBuiltDependencies:
+  - esbuild
