@@ -2,6 +2,7 @@ import type { KBNoteDoc } from '@drawpaper/core';
 import { parseKBNote, KBNoteFileError } from '@drawpaper/core';
 import { editorStore } from '@/store/editor-store';
 import { getAsset, isOpfsAvailable } from '@/storage/opfs';
+import { mountOverviewDev, unmountOverviewDev } from '@/overview/dev-mount';
 
 /**
  * DEV-only 测试钩子（window.__drawpaper__）。
@@ -42,6 +43,11 @@ export interface DrawpaperDevHook {
   importKbnoteText(text: string):
     | { ok: true; version: number; migrationNotes: string[] }
     | { ok: false; errorKind: string };
+  // ---- Wave6b 全局知识图谱总览（DEV-only，供 e2e 临时挂载；Wave7 由 App 正式挂载）----
+  /** 临时挂载只读全局总览画布（全屏 fixed 容器）。 */
+  mountOverviewDev(): void;
+  /** 卸载临时总览容器。 */
+  unmountOverviewDev(): void;
 }
 
 declare global {
@@ -179,6 +185,12 @@ export function installDevHooks(): void {
         if (e instanceof KBNoteFileError) return { ok: false as const, errorKind: e.kind };
         return { ok: false as const, errorKind: 'schema' };
       }
+    },
+    mountOverviewDev() {
+      mountOverviewDev();
+    },
+    unmountOverviewDev() {
+      unmountOverviewDev();
     },
   };
 }
