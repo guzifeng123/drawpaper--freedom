@@ -35,7 +35,8 @@ export const ConnectHandle = memo(function ConnectHandle({ nodeId, ...rest }: Co
 
   const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if (e.pointerType !== 'touch') return; // 鼠标走 RF 原生
-    if (rest.type !== 'source') return; // P1：仅 source 点支持长按拖出子块
+    const kind = rest.type; // 'source' 或 'target'
+    if (kind !== 'source' && kind !== 'target') return;
     e.preventDefault();
     e.stopPropagation();
     const rect = ref.current?.getBoundingClientRect();
@@ -75,15 +76,23 @@ export const ConnectHandle = memo(function ConnectHandle({ nodeId, ...rest }: Co
       setConnecting(null);
       // 命中目标节点
       const el = document.elementFromPoint(ev.clientX, ev.clientY)?.closest('[data-id]');
-      const targetId = el?.getAttribute('data-id');
-      if (targetId && targetId !== nodeId) {
-        // 与既有 onConnect 一致的自环/重复校验由 store addEdge 处理
-        api.addEdge(nodeId, targetId);
-      } else if (!targetId) {
-        // 松手空白：在 flow 坐标建子块并连父子
-        const pos = rf.screenToFlowPosition({ x: ev.clientX, y: ev.clientY });
-        const childId = api.addNode('text', pos.x - 110, pos.y - 30);
-        api.addEdge(nodeId, childId);
+      const otherId = el?.getAttribute('data-id');
+      if (kind === 'source') {
+        if (otherId && otherId !== nodeId) {
+          // 与既有 onConnect 一致的自环/重复校验由 store addEdge 处理
+          api.addEdge(nodeId, otherId);
+        } else if (!otherId) {
+          // 松手空白：在 flow 坐标建子块并连父子
+          const pos = rf.screenToFlowPosition({ x: ev.clientX, y: ev.clientY });
+          const childId = api.addNode('text', pos.x - 110, pos.y - 30);
+          api.addEdge(nodeId, childId);
+        }
+      } else if (kind === 'target') {
+        // 长按本 target 块（子），拖到某 source 块（父）松手 → addEdge(父, 本块)
+        if (otherId && otherId !== nodeId) {
+          api.addEdge(otherId, nodeId);
+        }
+        // 拖到空白 = 取消（不建块、不连）
       }
       start.current = null;
     };
@@ -134,6 +143,16 @@ export function SourceHandles({ nodeId }: { nodeId: string }) {
     <>
       <ConnectHandle nodeId={nodeId} type="source" position={Position.Right} className="!h-2 !w-2 !bg-slate-400" />
       <ConnectHandle nodeId={nodeId} type="source" position={Position.Bottom} className="!h-2 !w-2 !bg-slate-400" />
+    </>
+  );
+}
+
+/** 供 BlockShell 使用的便捷封装：target 左/上两点（长按入连）。 */
+export function TargetHandles({ nodeId }: { nodeId: string }) {
+  return (
+    <>
+      <ConnectHandle nodeId={nodeId} type="target" position={Position.Left} className="!h-2 !w-2 !bg-slate-400" />
+      <ConnectHandle nodeId={nodeId} type="target" position={Position.Top} className="!h-2 !w-2 !bg-slate-400" />
     </>
   );
 }

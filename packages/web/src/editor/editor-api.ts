@@ -139,6 +139,8 @@ export interface EditorApi {
   deleteEdge(id: string): void;
   setEdgeColor(id: string, color: string): void;
   setEdgeLabel(id: string, label: string): void;
+  /** 设置边手动弯折点（世界坐标，≤64；空数组=恢复贝塞尔）。可撤销。 */
+  setEdgePoints?(id: string, points: Array<{ x: number; y: number }>): void;
   /** 反转边方向（父↔子），含 source/targetHandle 位交换（P1 §4.3）。可选：Wave4 接真实 store。 */
   reverseEdge?(id: string): void;
 

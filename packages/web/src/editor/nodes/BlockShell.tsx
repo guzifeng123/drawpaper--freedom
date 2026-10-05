@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
-import { Handle, Position, NodeResizer, NodeToolbar, type NodeProps } from '@xyflow/react';
+import { Position, NodeResizer, NodeToolbar, type NodeProps } from '@xyflow/react';
 import { EditorContent, type Editor } from '@tiptap/react';
 import type { BlockNode } from '@drawpaper/core';
 import { useEditorApi, useEditingNodeId, useChildCount } from '../canvas/editor-context';
@@ -7,7 +7,7 @@ import { createBlockEditor } from '../tiptap/createBlockEditor';
 import { SlashMenu, type SlashCommand } from '../tiptap/slash-menu';
 import { BlockHoverToolbar } from './block-hover-toolbar';
 import { TableToolbar } from './table-toolbar';
-import { SourceHandles as ConnectHandles } from './ConnectHandle';
+import { SourceHandles as ConnectHandles, TargetHandles } from './ConnectHandle';
 import type { AppNode } from './types';
 
 /**
@@ -176,10 +176,9 @@ export const BlockShell = memo(function BlockShell({
         }}
       />
 
-      {/* 四向 Handle：右/下出（source，ConnectHandle 支持长按拖连），左/上入（target） */}
-      <Handle type="target" position={Position.Left} className="!h-2 !w-2 !bg-slate-400" />
-      <Handle type="target" position={Position.Top} className="!h-2 !w-2 !bg-slate-400" />
+      {/* 四向 Handle：右/下出（source）、左/上入（target），均支持长按拖连 */}
       <ConnectHandles nodeId={block.id} />
+      <TargetHandles nodeId={block.id} />
 
       {/* hover / 选中工具条 */}
       <NodeToolbar position={Position.Top} align="start" isVisible={selected} className="absolute -top-9 left-0">

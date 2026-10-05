@@ -83,6 +83,7 @@ const WHITELIST = new Set([
   'setFocusNode',
   'reparentNode',
   'reverseEdge',
+  'setEdgePoints',
   'applyAISuggestions',
   'setLayoutMode',
   'setTighten',
