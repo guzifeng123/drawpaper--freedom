@@ -11,6 +11,7 @@ import {
   getDescendantSet,
   getRelatedChain,
   getFocusViewSet,
+  buildChildCountMap,
 } from './graph.js';
 import type { BlockNode, Edge } from '../model/index.js';
 
@@ -248,5 +249,27 @@ describe('getFocusViewSet', () => {
     const view = getFocusViewSet(tree, 'root');
     expect(view.dim).toEqual([]);
     expect(view.focus).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'root']);
+  });
+});
+
+describe('buildChildCountMap', () => {
+  it('counts direct children per parent (source=父)', () => {
+    const edges: Edge[] = [
+      { id: 'e1', source: 'a', target: 'b', sourceHandle: 'right', targetHandle: 'left', label: '', directed: true, style: { color: '#94A3B8' } },
+      { id: 'e2', source: 'a', target: 'c', sourceHandle: 'right', targetHandle: 'left', label: '', directed: true, style: { color: '#94A3B8' } },
+      { id: 'e3', source: 'b', target: 'd', sourceHandle: 'right', targetHandle: 'left', label: '', directed: true, style: { color: '#94A3B8' } },
+    ];
+    expect(buildChildCountMap(edges)).toEqual({ a: 2, b: 1 });
+  });
+  it('empty edges → empty map', () => {
+    expect(buildChildCountMap([])).toEqual({});
+  });
+  it('leaf parents absent from map; lookup defaults 0', () => {
+    const edges: Edge[] = [
+      { id: 'e1', source: 'root', target: 'leaf', sourceHandle: 'right', targetHandle: 'left', label: '', directed: true, style: { color: '#94A3B8' } },
+    ];
+    const m = buildChildCountMap(edges);
+    expect(m.root).toBe(1);
+    expect(m.leaf ?? 0).toBe(0);
   });
 });

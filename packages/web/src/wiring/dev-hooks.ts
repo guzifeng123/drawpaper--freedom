@@ -19,6 +19,7 @@ export interface DrawpaperDevHook {
     nodeCount: number;
     layoutUi: { scopeSelected: boolean; tighten: boolean };
     backupEnabled: boolean;
+    searchResults: unknown[];
   };
   /** 按名调用白名单内的 store action。 */
   invoke(action: string, ...args: unknown[]): unknown;
@@ -31,6 +32,8 @@ declare global {
     __drawpaper__?: DrawpaperDevHook;
     /** App 在 DEV 下读取此标志，常驻打印容器供 e2e。 */
     __drawpaper_debugSheets?: boolean;
+    /** 性能分阶段采样（仅 DEV）。 */
+    __perfStages?: Record<string, number>;
   }
 }
 
@@ -87,7 +90,36 @@ export function installDevHooks(): void {
   if (typeof window === 'undefined') return;
   window.__drawpaper__ = {
     loadFixture(doc: KBNoteDoc) {
+      const w = window as unknown as { __perfStages: Record<string, number | number[]> };
+      const stages: Record<string, number | number[]> = {};
+      w.__perfStages = stages;
+      const t0 = performance.now();
       editorStore.getState().loadDoc(doc);
+      stages.switchDocSync = performance.now() - t0;
+      // Long Tasks 观察者
+      const lt: number[] = [];
+      const LO = (window as unknown as { PerformanceObserver?: typeof PerformanceObserver }).PerformanceObserver;
+      if (LO) {
+        try {
+          const obs = new LO((list) => {
+            for (const e of list.getEntries()) lt.push(Math.round(e.duration));
+          });
+          obs.observe({ entryTypes: ['longtask'] });
+        } catch { /* noop */ }
+      }
+      // 两次 rAF 后 = React 首屏提交完成。
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          stages.afterRaf2 = performance.now() - t0;
+          const settle = () => {
+            stages.idle1 = performance.now() - t0;
+            stages.longTasks = lt.slice(0, 20);
+          };
+          const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }).requestIdleCallback;
+          if (ric) ric(settle, { timeout: 3000 });
+          else setTimeout(settle, 1000);
+        }),
+      );
     },
     getState() {
       const s = editorStore.getState();
@@ -97,6 +129,8 @@ export function installDevHooks(): void {
         nodeCount: s.doc.nodes.length,
         layoutUi: { scopeSelected: s.layoutUi.scopeSelected, tighten: s.layoutUi.tighten },
         backupEnabled: s.backupEnabled,
+        searchResults: s.searchResults,
+        searchQuery: s.searchQuery,
       };
     },
     invoke(action: string, ...args: unknown[]) {

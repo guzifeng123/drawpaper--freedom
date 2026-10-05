@@ -159,6 +159,20 @@ export function enumerateSubtree(tree: MainTree, rootId: string): string[] {
   return out;
 }
 
+/**
+ * 纯函数：统计每个节点直接子节点数（source=父）。
+ * O(E) 一次扫边；供 UI 折叠角标等高频读取做 O(1) 查找。
+ * 高频组件此前在 useSyncExternalStore selector 里对 E 条边 reduce，
+ * 每次 store 通知都 O(E)，2000 边 × N 次通知即主线程阻塞数十秒。
+ */
+export function buildChildCountMap(edges: Edge[]): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const e of edges) {
+    out[e.source] = (out[e.source] ?? 0) + 1;
+  }
+  return out;
+}
+
 /** 并查集：忽略方向的连通分量。孤立点自成分量。 */
 export function connectedComponents(nodes: BlockNode[], edges: Edge[]): string[][] {
   const parent = new Map<string, string>();

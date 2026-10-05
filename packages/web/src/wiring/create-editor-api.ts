@@ -1,8 +1,10 @@
 import type {
   BlockType,
   EditorStoreApi,
+  Edge,
   MeasuredSize,
 } from '@drawpaper/core';
+import { buildChildCountMap } from '@drawpaper/core';
 import type {
   ConflictResolutionInput,
   EditorApi,
@@ -32,6 +34,11 @@ export function createEditorApi(store: EditorStoreApi, bridge: ConflictBridge): 
     cached = null;
   });
 
+  // 子节点数映射按 edges 引用缓存：viewport/measuredSizes/选择等不改变 edges 的通知
+  // 不必重扫 E 条边。edges 引用变化（增删边/切换文档）才重建。
+  let cachedEdgesRef: Edge[] | null = null;
+  let cachedChildCount: Record<string, number> = {};
+
   const buildSnapshot = (): EditorSnapshot => {
     const s = store.getState();
 
@@ -58,6 +65,11 @@ export function createEditorApi(store: EditorStoreApi, bridge: ConflictBridge): 
         }
       : null;
 
+    if (s.doc.edges !== cachedEdgesRef) {
+      cachedEdgesRef = s.doc.edges;
+      cachedChildCount = buildChildCountMap(s.doc.edges);
+    }
+
     return {
       doc: s.doc,
       selection: s.selection,
@@ -75,6 +87,8 @@ export function createEditorApi(store: EditorStoreApi, bridge: ConflictBridge): 
       focusNodeId: s.focusNodeId,
       tagFilter: { mode: s.tagFilter.match, tagIds: s.tagFilter.tagIds },
       manualFixed: s.manuallyMoved,
+      // 一次扫边预计算子节点数；高频组件（折叠角标）O(1) 读取。
+      childCount: cachedChildCount,
     };
   };
 

@@ -37,8 +37,8 @@ export function useChildCount(blockId: string): number {
   const api = useEditorApi();
   return useSyncExternalStore(
     api.subscribe,
-    () => api.getState().doc.edges.reduce((n, e) => (e.source === blockId ? n + 1 : n), 0),
-    () => api.getState().doc.edges.reduce((n, e) => (e.source === blockId ? n + 1 : n), 0),
+    () => api.getState().childCount?.[blockId] ?? 0,
+    () => api.getState().childCount?.[blockId] ?? 0,
   );
 }
 
