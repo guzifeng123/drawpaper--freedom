@@ -46,7 +46,9 @@ export default defineConfig({
           if (/[\\/]node_modules[\\/]@xyflow[\\/]/.test(id)) return 'xyflow';
           if (/[\\/]node_modules[\\/](@tiptap|prosemirror-[a-z-]+)[\\/]/.test(id)) return 'tiptap';
           if (/[\\/]node_modules[\\/]katex[\\/]/.test(id)) return 'katex';
-          if (/[\\/]node_modules[\\/](highlight\.js|lowlight)[\\/]/.test(id)) return 'highlight';
+          // highlight.js 语法（lib/languages/*）随 highlight-data 动态 import，单独懒 chunk；
+          // lowlight 核心 + highlight.js core 被 highlight.ts 静态引用，留在主包（小）。
+          if (/[\\/]node_modules[\\/]highlight\.js[\\/]lib[\\/]languages[\\/]/.test(id)) return 'highlight';
           if (/[\\/]node_modules[\\/](@pdf-lib|pdf-lib|zlibjs|pako|rgb2hex)[\\/]/.test(id)) return 'pdf-lib';
           if (/[\\/]node_modules[\\/]html-to-image[\\/]/.test(id)) return 'html-to-image';
           if (/[\\/]node_modules[\\/]dexie[\\/]/.test(id)) return 'dexie';

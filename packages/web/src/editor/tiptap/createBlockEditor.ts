@@ -14,8 +14,24 @@ import TableRow from '@tiptap/extension-table-row';
 import TableCell from '@tiptap/extension-table-cell';
 import TableHeader from '@tiptap/extension-table-header';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
-import { ensureHighlighter } from './highlight';
+import { ensureHighlighter, lowlight } from './highlight';
 import { buildMarkdownInputRules } from './input-rules';
+
+/** 内容里是否含 codeBlock 节点（决定是否需要 await 语言语法 chunk）。 */
+function contentHasCodeBlock(content: unknown): boolean {
+  type Node = { type?: string; content?: unknown[] };
+  let found = false;
+  const walk = (n: Node): void => {
+    if (found) return;
+    if (n.type === 'codeBlock') {
+      found = true;
+      return;
+    }
+    if (Array.isArray(n.content)) n.content.forEach((c) => walk(c as Node));
+  };
+  walk(content as Node);
+  return found;
+}
 
 /**
  * 自研扩展：把 §4.2 的 Markdown 行首快捷规则挂进 inputRules。
@@ -45,10 +61,12 @@ export interface CreateBlockEditorOptions {
  *   + Placeholder + Image + TaskList/TaskItem。
  */
 export async function createBlockEditor(opts: CreateBlockEditorOptions): Promise<Editor> {
-  // 懒加载：lowlight（hljs + 语言）从首包剥离，在首次创建块编辑器时拉取并缓存。
-  // 编辑是用户双击触发（非首屏），一次 ~90KB 加载后全程复用；CodeBlockLowlight
-  // 扩展在 addProseMirrorPlugins 时校验真实 lowlight 实例，故必须 await 拿到真实实例。
-  const hl = await ensureHighlighter();
+  // 文本/普通块：用共享的空 lowlight 单例同步构造 Editor，双击即获焦，不等网络 chunk。
+  // 仅当内容含 codeBlock 时，先 await 加载语言语法 chunk（把语言 register 进同一单例），
+  // 再挂载编辑器——代码块首屏即有正确高亮。
+  if (contentHasCodeBlock(opts.content)) {
+    await ensureHighlighter();
+  }
   return new Editor({
     content: opts.content as object,
     editable: opts.editable ?? true,
@@ -86,22 +104,14 @@ export async function createBlockEditor(opts: CreateBlockEditorOptions): Promise
       TableRow,
       TableHeader,
       TableCell,
-      // P1：代码块 + lowlight 语法高亮（懒加载后才有真实 lowlight；否则用空壳占位）
-      CodeBlockLowlight.configure({ lowlight: hl ? hl.lowlight : dummyLowlight }),
+      // P1：代码块 + lowlight 语法高亮（共享空单例；语言语法已在上面按需 await 注册）
+      CodeBlockLowlight.configure({ lowlight }),
     ],
     onUpdate: ({ editor }) => {
       opts.onUpdate?.(editor.getJSON());
     },
   });
 }
-
-/** lowlight 占位：静态渲染 / 无代码块内容时不跑装饰，仅满足扩展类型。 */
-const dummyLowlight = {
-  highlight: () => [],
-  listLanguages: () => [],
-  registered: () => false,
-  register: () => undefined,
-} as unknown as typeof import('./highlight-data').lowlight;
 
 let _staticExts: readonly unknown[] | null = null;
 
@@ -130,8 +140,8 @@ export function getStaticExtensions(): readonly unknown[] {
     TableHeader,
     TableCell,
     // P1 静态渲染同样需要 table / codeBlock 扩展，才能输出 <table> 与 hljs class。
-    // generateHTML 不跑装饰，lowlight 用空壳即可（不加载重型模块）。
-    CodeBlockLowlight.configure({ lowlight: dummyLowlight }),
+    // generateHTML 不跑装饰，用共享空 lowlight 单例即可（不加载语言语法 chunk）。
+    CodeBlockLowlight.configure({ lowlight }),
   ];
   return _staticExts;
 }
