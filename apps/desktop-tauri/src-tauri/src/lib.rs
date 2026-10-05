@@ -421,7 +421,7 @@ fn backup_doc(
 // ---------------------------------------------------------------------------
 
 fn build_menu(app: &tauri::App) -> Menu {
-    use tauri::menu::{AboutMenuItem, MenuItem, PredefinedMenuItem, Submenu};
+    use tauri::menu::{MenuItem, PredefinedMenuItem, Submenu};
 
     // `MenuItem::with_id` returns a Result; build an owned item in one call.
     fn item(app: &tauri::App, id: &str, text: &str) -> MenuItem<tauri::Wry> {
@@ -433,7 +433,7 @@ fn build_menu(app: &tauri::App) -> Menu {
     file.append(&item(app, "file:open", "打开…\tCtrl+O")).unwrap();
     file.append(&item(app, "file:save", "保存\tCtrl+S")).unwrap();
     file.append(&item(app, "file:save-as", "另存为…")).unwrap();
-    file.append(&PredefinedMenuItem::separator(app)).unwrap();
+    file.append(&PredefinedMenuItem::separator(app).unwrap()).unwrap();
     file.append(&item(app, "file:open-recent", "打开最近")).unwrap();
     file.append(&item(app, "file:clear-recent", "清空最近")).unwrap();
 
@@ -451,16 +451,20 @@ fn build_menu(app: &tauri::App) -> Menu {
     view.append(&item(app, "view:zoom-out", "缩小\tCtrl+-")).unwrap();
 
     let help = Submenu::new(app, "帮助", true).unwrap();
-    help.append(&AboutMenuItem::new(
-        app,
-        Some(AboutMetadata {
-            name: Some("drawpaper".to_string()),
-            version: Some(env!("CARGO_PKG_VERSION").to_string()),
-            authors: Some(vec!["drawpaper contributors".to_string()]),
-            comments: Some("Local-first infinite-canvas knowledge-block notes.".to_string()),
-            ..Default::default()
-        }),
-    ))
+    help.append(
+        &PredefinedMenuItem::about(
+            app,
+            Some("关于 drawpaper"),
+            Some(AboutMetadata {
+                name: Some("drawpaper".to_string()),
+                version: Some(env!("CARGO_PKG_VERSION").to_string()),
+                authors: Some(vec!["drawpaper contributors".to_string()]),
+                comments: Some("Local-first infinite-canvas knowledge-block notes.".to_string()),
+                ..Default::default()
+            }),
+        )
+        .unwrap(),
+    )
     .unwrap();
 
     Menu::with_items(
@@ -544,7 +548,7 @@ pub fn run() {
             app.on_menu_event(move |app: &tauri::AppHandle, event: MenuEvent| {
                 // Every menu click becomes an `app:menu` event with the item id.
                 // The frontend maps ids to store actions (undo/redo/print/fit).
-                let _ = app.emit("app:menu", serde_json::json!({ "id": event.as_ref() }));
+                let _ = app.emit("app:menu", serde_json::json!({ "id": event.id.0.as_str() }));
             });
 
             Ok(())
