@@ -17,6 +17,7 @@ on:
     tags:
       - 'v*'
     branches:
+      - 'develop'
       - 'feat/p2-tauri-ci'
   workflow_dispatch:
 
