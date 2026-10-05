@@ -33,6 +33,21 @@ export interface WiringUiState {
   /** 全局图谱总览全屏是否打开。 */
   overviewOpen: boolean;
 
+  // ============================================================
+  // Wave7 P2.1：删除块时的跨文档反链影响确认
+  // ============================================================
+  /**
+   * 待确认的删块请求（有反链影响时非空）。
+   * incoming：谁链接到本块（《来源文档》块「摘要」）；
+   * outgoing：本块链向谁。incomingLinkIds 供「一并移除」级联。
+   */
+  blockDeleteRequest: {
+    nodeIds: string[];
+    incoming: string[];
+    outgoing: string[];
+    incomingLinkIds: string[];
+  } | null;
+
   setExportOpen(open: boolean): void;
   setSearchOpen(open: boolean): void;
   setActiveSearchIndex(i: number): void;
@@ -44,6 +59,7 @@ export interface WiringUiState {
   setBacklinksNodeId(id: string | null): void;
   setBacklinksOpen(open: boolean): void;
   setOverviewOpen(open: boolean): void;
+  setBlockDeleteRequest(req: WiringUiState['blockDeleteRequest']): void;
 }
 
 export const useWiringUi = create<WiringUiState>((set) => ({
@@ -58,6 +74,7 @@ export const useWiringUi = create<WiringUiState>((set) => ({
   backlinksNodeId: null,
   backlinksOpen: false,
   overviewOpen: false,
+  blockDeleteRequest: null,
   setExportOpen: (open) => set({ exportOpen: open }),
   setSearchOpen: (open) => set({ searchOpen: open }),
   setActiveSearchIndex: (i) => set({ activeSearchIndex: i }),
@@ -69,6 +86,7 @@ export const useWiringUi = create<WiringUiState>((set) => ({
   setBacklinksNodeId: (id) => set({ backlinksNodeId: id }),
   setBacklinksOpen: (open) => set({ backlinksOpen: open }),
   setOverviewOpen: (open) => set({ overviewOpen: open }),
+  setBlockDeleteRequest: (req) => set({ blockDeleteRequest: req }),
 }));
 
 /** 非 React 侧（快捷键 / 适配层）直接读最新 UI 态。 */
