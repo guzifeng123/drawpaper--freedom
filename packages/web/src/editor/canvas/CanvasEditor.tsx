@@ -23,6 +23,7 @@ import { useKeyboardShortcuts } from '../state/useKeyboardShortcuts';
 import { useCoarsePointer } from '../state/use-coarse-pointer';
 import { computeSnap } from '../lib/geometry';
 import { collectFocusSet, collectConnectedSet, collectEdgeChain, applyManualFixed } from '../lib/graph-trace';
+import { classifyFile, dropOffset } from './drop-classify';
 import { nodeMatchesFilter } from '../lib/filter-match';
 import { ConflictDialog } from '../ui/ConflictDialog';
 import { toast } from '../ui/toast';
@@ -72,6 +73,51 @@ function CanvasInner({ api }: { api: EditorApi }) {
   const [hoverEdgeId, setHoverEdgeId] = useState<string | null>(null);
   const rafRef = useRef<number>(0);
   const coarse = useCoarsePointer();
+  const [dragOver, setDragOver] = useState(false);
+
+  // 桌面端文件拖入画布建块（§P2）
+  const onDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    if (!files.length) return;
+    const pos = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i]!;
+      const kind = classifyFile(f.name, f.type);
+      const dx = dropOffset(i).dx;
+      const dy = dropOffset(i).dy;
+      try {
+        if (kind === 'text') {
+          const text = await f.text();
+          const lines = text.split(/\r?\n/);
+          const doc = {
+            type: 'doc',
+            content: lines.map((l) => ({ type: 'paragraph', content: l ? [{ type: 'text', text: l }] : [] })),
+          };
+          const id = api.addNode('text', pos.x + dx, pos.y + dy);
+          api.updateContent(id, doc);
+        } else if (kind === 'image') {
+          const dataUrl = await new Promise<string>((res, rej) => {
+            const r = new FileReader();
+            r.onload = () => res(String(r.result));
+            r.onerror = rej;
+            r.readAsDataURL(f);
+          });
+          api.addImageBlock(dataUrl, pos.x + dx, pos.y + dy);
+        } else if (kind === 'attachment') {
+          if (!api.putImageAsset) {
+            toast('当前浏览器不支持附件本地存储');
+            continue;
+          }
+          await api.putImageAsset(f);
+        }
+        // unsupported：不建块
+      } catch {
+        toast(`「${f.name}」导入失败`);
+      }
+    }
+  };
 
   // 折叠过滤
   const hidden = useMemo(() => hiddenAfterCollapse(snap.doc), [snap.doc]);
@@ -140,7 +186,7 @@ function CanvasInner({ api }: { api: EditorApi }) {
           type: 'parent',
           selected: selectedEdgeIds.has(e.id),
           label: e.label,
-          data: { dimmed: !onChain },
+          data: { dimmed: !onChain, points: e.points },
           style: { stroke: e.style.color, opacity: onChain ? 1 : 0.15 },
           markerEnd: { type: MarkerType.ArrowClosed, width: 18, height: 18, color: e.style.color },
         };
@@ -307,7 +353,17 @@ function CanvasInner({ api }: { api: EditorApi }) {
   }, [api, rf, snap.doc.page.showPageBreak]);
 
   return (
-    <div className="relative h-full w-full" ref={wrapRef}>
+    <div
+      className={`relative h-full w-full ${dragOver ? 'ring-2 ring-inset ring-blue-400' : ''}`}
+      ref={wrapRef}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'copy';
+        setDragOver(true);
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={onDrop}
+    >
       <ReactFlow
         nodes={rfNodes}
         edges={rfEdges}

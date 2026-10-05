@@ -169,6 +169,47 @@ describe('paginate / tiles', () => {
     expect(allMarkers[1]!.peerPageIndex).toBe(allMarkers[0]!.pageIndex);
   });
 
+  it('弯折边折线穿越 3 页：3 页都含该边、marker 成对且 peer 互指', () => {
+    // n1(0,0) 右锚点(260,40)；n2(1500,0) 左锚点(1500,40)；points 横向穿过页0→页1→页2。
+    const edge: Edge = {
+      ...makeEdge('e_bend', 'n1', 'n2'),
+      points: [
+        { x: 1200, y: 40 },
+        { x: 2400, y: 40 },
+      ],
+    };
+    const input = tilesInput(
+      { n1: { x: 0, y: 0 }, n2: { x: 4000, y: 0 } },
+      { n1: { width: 260, height: 80 }, n2: { width: 260, height: 80 } },
+      [edge],
+    );
+    const r = paginateTiles(input);
+    expect(r.pages.length).toBeGreaterThanOrEqual(3);
+    // 3 页都含该边（page0/page2 经 marker，page1 经 edgeId+marker）
+    const perPage = r.pages.map((p) => ({
+      edges: p.edgeIds.filter((id) => id === 'e_bend').length,
+      markers: p.continuations.filter((c) => c.edgeId === 'e_bend'),
+    }));
+    const touched = perPage.filter((p) => p.edges > 0 || p.markers.length > 0);
+    expect(touched.length).toBeGreaterThanOrEqual(3);
+    // 至少两对跨页 marker（起点/终点跨页 + 中间弯折跨页），总数为偶数
+    const all = r.pages.flatMap((p) => p.continuations).filter((c) => c.edgeId === 'e_bend');
+    expect(all.length).toBeGreaterThanOrEqual(4);
+    expect(all.length % 2).toBe(0);
+    // 每对 token 相同、peer 互指
+    const byToken = new Map<string, typeof all>();
+    for (const c of all) {
+      const arr = byToken.get(c.token) ?? [];
+      arr.push(c);
+      byToken.set(c.token, arr);
+    }
+    for (const group of byToken.values()) {
+      expect(group).toHaveLength(2);
+      expect(group[0]!.peerPageIndex).toBe(group[1]!.pageIndex);
+      expect(group[1]!.peerPageIndex).toBe(group[0]!.pageIndex);
+    }
+  });
+
   it('跨边界节点整体只出现在一页', () => {
     // 节点 box [500,760]（宽 260），中心 630 落在第 0 页，但越右边界 → 挪到第 1 页。
     const input = tilesInput(

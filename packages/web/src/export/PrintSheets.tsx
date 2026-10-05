@@ -9,6 +9,7 @@ import type {
 import { mmToPx } from '@drawpaper/core';
 import { TiptapStatic } from './render/tiptap-static';
 import { sheetSizePx, pageNumberLabel } from './layout-utils';
+import { buildEdgePath } from '../editor/edges/edge-geometry';
 
 /** 续接标记圆圈半径（px）。 */
 const MARKER_R = 9;
@@ -184,8 +185,9 @@ export function PrintSheets({ result, doc, settings, edgeLabelsVisible }: PrintS
                       const y1 = sr.y + sr.h / 2;
                       const x2 = tr.x;
                       const y2 = tr.y + tr.h / 2;
-                      const cx1 = x1 + Math.max(40, (x2 - x1) / 2);
-                      const cx2 = x2 - Math.max(40, (x2 - x1) / 2);
+                      // 世界坐标弯折点 → 页本地（按 source 节点换算）
+                      const delta = { x: sr.x - s.x, y: sr.y - s.y };
+                      const localPoints = (e.points ?? []).map((p) => ({ x: p.x + delta.x, y: p.y + delta.y }));
                       const color = gray ? '#333' : e.style.color;
                       const anchor = edgeLabelsVisible && e.label
                         ? placeEdgeLabel((x1 + x2) / 2, (y1 + y2) / 2, markers)
@@ -193,7 +195,11 @@ export function PrintSheets({ result, doc, settings, edgeLabelsVisible }: PrintS
                       return (
                         <g key={eid}>
                           <path
-                            d={`M ${x1} ${y1} C ${cx1} ${y1}, ${cx2} ${y2}, ${x2} ${y2}`}
+                            d={buildEdgePath(
+                              { x: x1, y: y1, position: 'right' },
+                              { x: x2, y: y2, position: 'left' },
+                              localPoints,
+                            )}
                             fill="none"
                             stroke={color}
                             strokeWidth={1.5}

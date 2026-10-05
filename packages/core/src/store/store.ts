@@ -296,6 +296,8 @@ export interface EditorActions {
   setEdgeColor(id: string, color: string): void;
   /** 设置边文字标签。 */
   setEdgeLabel(id: string, label: string): void;
+  /** 设置边手动弯折点（世界坐标，≤64；空数组=恢复贝塞尔）。可撤销。 */
+  setEdgePoints(id: string, points: Array<{ x: number; y: number }>): void;
 
   // ---- 导图键盘建块 ----
   /** Tab：在选中块下新建子块并连父子边。 */
@@ -1110,6 +1112,25 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
             name: 'set-edge-label',
             execute: (d) => ({ ...d, edges: d.edges.map((e) => (e.id === id ? { ...e, label } : e)) }),
             undo: (d) => ({ ...d, edges: d.edges.map((e) => (e.id === id ? { ...e, label: old } : e)) }),
+          });
+        },
+        setEdgePoints: (id, points) => {
+          const edge = get().doc.edges.find((e) => e.id === id);
+          if (!edge) return;
+          const next = points.slice(0, 64);
+          const old = edge.points ? edge.points.map((p) => ({ ...p })) : undefined;
+          runCommand({
+            name: 'set-edge-points',
+            execute: (d) => ({
+              ...d,
+              edges: d.edges.map((e) =>
+                e.id === id ? { ...e, points: next.length ? next : undefined } : e,
+              ),
+            }),
+            undo: (d) => ({
+              ...d,
+              edges: d.edges.map((e) => (e.id === id ? { ...e, points: old ? old.map((p) => ({ ...p })) : undefined } : e)),
+            }),
           });
         },
 
