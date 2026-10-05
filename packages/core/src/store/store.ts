@@ -309,6 +309,11 @@ export interface EditorActions {
   setEdgeLabel(id: string, label: string): void;
   /** 设置边手动弯折点（世界坐标，≤64；空数组=恢复贝塞尔）。可撤销。 */
   setEdgePoints(id: string, points: Array<{ x: number; y: number }>): void;
+  /**
+   * 多选边一键清除弯折点：对每条边把 points 清空（恢复贝塞尔），
+   * 合并为一次可撤销宏（P2.1）。无弯折点的边自动跳过。
+   */
+  clearEdgesPoints(ids: readonly string[]): void;
 
   // ---- 导图键盘建块 ----
   /** Tab：在选中块下新建子块并连父子边。 */
@@ -1030,11 +1035,25 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
           if (!node) return;
           const ox = node.x;
           const oy = node.y;
+          const dx = x - ox;
+          const dy = y - oy;
+          // 【P2.1 弯折点随块移动】弯折点刚性锚定在「源端点」坐标系：
+          //  本节点作为某条边的 source 时，其弯折点随本节点位移整体平移 (dx,dy)；
+          //  本节点仅作为 target 时弯折点不动（折线终点跟着动、内部折点原地保留）。
+          //  多选手势两端同移时：source 平移一次、target 不再平移 → 不重复平移。
+          //  平移与节点位移同处一个可撤销命令（coalesceKey: move），拖拽一次为一个撤销单元。
+          const shiftPts = (d: KBNoteDoc, sx: number, sy: number): KBNoteDoc => ({
+            ...d,
+            edges: d.edges.map((e) => {
+              if (e.source !== id || !e.points || e.points.length === 0) return e;
+              return { ...e, points: e.points.map((p) => ({ x: p.x + sx, y: p.y + sy })) };
+            }),
+          });
           runCommand({
             name: 'move-node',
             coalesceKey: 'move',
-            execute: (d) => mapNode(d, id, (n) => ({ ...n, x, y })),
-            undo: (d) => mapNode(d, id, (n) => ({ ...n, x: ox, y: oy })),
+            execute: (d) => shiftPts(mapNode(d, id, (n) => ({ ...n, x, y })), dx, dy),
+            undo: (d) => shiftPts(mapNode(d, id, (n) => ({ ...n, x: ox, y: oy })), -dx, -dy),
           });
           // 手动移动过的块记入 manualFixed：后续一键布局为其绕行。
           // （Immer 未启用 MapSet 插件：从 get() 读原始集合，整体替换而非变更 draft。）
@@ -1183,6 +1202,29 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
               edges: d.edges.map((e) => (e.id === id ? { ...e, points: old ? old.map((p) => ({ ...p })) : undefined } : e)),
             }),
           });
+        },
+        clearEdgesPoints: (ids) => {
+          const { doc } = get();
+          const cmds: Command[] = [];
+          for (const id of ids) {
+            const edge = doc.edges.find((e) => e.id === id);
+            if (!edge || !edge.points || edge.points.length === 0) continue;
+            const old = edge.points.map((p) => ({ ...p }));
+            cmds.push({
+              name: 'clear-edge-points-one',
+              execute: (d) => ({
+                ...d,
+                edges: d.edges.map((e) => (e.id === id ? { ...e, points: undefined } : e)),
+              }),
+              undo: (d) => ({
+                ...d,
+                edges: d.edges.map((e) =>
+                  e.id === id ? { ...e, points: old.map((p) => ({ ...p })) } : e,
+                ),
+              }),
+            });
+          }
+          runMacro('clear-edge-points', cmds);
         },
 
         // ================= 导图键盘建块 =================

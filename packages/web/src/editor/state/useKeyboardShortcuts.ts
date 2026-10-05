@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useReactFlow } from '@xyflow/react';
 import type { EditorApi } from '../editor-api';
 import { toast } from '../ui/toast';
+import { getActiveBendAnchor, setActiveBendAnchor } from '../edges/bend-active';
 
 /**
  * useKeyboardShortcuts —— 画布级快捷键（§4.6）。
@@ -124,10 +125,24 @@ export function useKeyboardShortcuts(api: EditorApi): void {
         }
         case 'Delete':
         case 'Backspace': {
+          // 【P2.1】点中了某个弯折锚点 → 只删这一个锚点（不再清空全部弯折，也不删边/删块）。
+          const anchor = getActiveBendAnchor();
+          if (anchor) {
+            e.preventDefault();
+            e.stopPropagation();
+            const edge = snap.doc.edges.find((ed) => ed.id === anchor.edgeId);
+            const pts = edge?.points ?? [];
+            if (edge && anchor.index >= 0 && anchor.index < pts.length) {
+              api.setEdgePoints?.(edge.id, pts.filter((_, i) => i !== anchor.index));
+            }
+            setActiveBendAnchor(null);
+            return;
+          }
           if (snap.selection.size) {
             e.preventDefault();
             api.deleteNodes([...snap.selection]);
           }
+          // 否则（仅边被选中）：不拦截，交给 RF 原生 deleteKeyCode 删边。
           return;
         }
         case 'F2': {

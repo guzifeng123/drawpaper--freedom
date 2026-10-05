@@ -13,6 +13,7 @@ import {
   type IsValidConnection,
   type NodeChange,
   type EdgeChange,
+  type Edge,
 } from '@xyflow/react';
 import type { BlockNode, Edge as CoreEdge } from '@drawpaper/core';
 import type { EditorApi } from '../editor-api';
@@ -25,8 +26,10 @@ import { computeSnap } from '../lib/geometry';
 import { collectFocusSet, collectConnectedSet, collectEdgeChain, applyManualFixed } from '../lib/graph-trace';
 import { classifyFile, dropOffset } from './drop-classify';
 import { nodeMatchesFilter } from '../lib/filter-match';
+import { insertBendPoint, type EdgeEnd } from '../edges/edge-geometry';
 import { ConflictDialog } from '../ui/ConflictDialog';
 import { toast } from '../ui/toast';
+import { setActiveBendAnchor } from '../edges/bend-active';
 import { MousePointer2, Spline, Hand } from 'lucide-react';
 
 /** 折叠节点的后代集合（折叠后映射给 React Flow 时剔除）。 */
@@ -307,6 +310,19 @@ function CanvasInner({ api }: { api: EditorApi }) {
     }
   };
 
+  // RF 原生 deleteKeyCode（Delete/Backspace）在用户删边时回调；落库到 store。
+  // 仅在「未选中锚点、未选中块」时走到这里（全局快捷键已先拦截这两种情形）。
+  const onEdgesDelete = (edges: Edge[]) => {
+    for (const e of edges) api.deleteEdge(e.id);
+    setSelectedEdgeIds((prev) => {
+      const next = new Set(prev);
+      for (const e of edges) next.delete(e.id);
+      return next;
+    });
+  };
+
+  // 【P2.1】双击边路径在光标世界坐标处插入弯折点：见下方 wrap dblclick 原生监听。
+
   const mode = snap.mode;
   const selectionOnDrag = mode === 'select';
   const panOnDrag = mode === 'pan' ? true : [1, 2];
@@ -318,6 +334,23 @@ function CanvasInner({ api }: { api: EditorApi }) {
     if (!el) return;
     const onDbl = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
+      // 【P2.1】双击边路径（非锚点）：在光标世界坐标处插入弯折点。
+      // 锚点手柄在 EdgeLabelRenderer HTML 浮层里，不在 .react-flow__edge SVG 组内，天然不冲突。
+      const edgeG = target.closest('.react-flow__edge') as HTMLElement | null;
+      if (edgeG) {
+        const edgeId = edgeG.getAttribute('data-id') ?? edgeG.getAttribute('data-edgeid');
+        const cur = api.getState().doc;
+        const docEdge = edgeId ? cur.edges.find((ed) => ed.id === edgeId) : undefined;
+        if (!docEdge) return;
+        const sNode = cur.nodes.find((n) => n.id === docEdge.source);
+        const tNode = cur.nodes.find((n) => n.id === docEdge.target);
+        if (!sNode || !tNode) return;
+        const pos = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
+        const s: EdgeEnd = { x: sNode.x + sNode.width, y: sNode.y + sNode.height / 2, position: 'right' };
+        const t: EdgeEnd = { x: tNode.x, y: tNode.y + tNode.height / 2, position: 'left' };
+        api.setEdgePoints?.(docEdge.id, insertBendPoint(docEdge.points ?? [], pos, s, t));
+        return;
+      }
       if (!target.closest('.react-flow__pane')) return;
       if (target.closest('.react-flow__node')) return;
       const pos = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
@@ -326,6 +359,8 @@ function CanvasInner({ api }: { api: EditorApi }) {
     };
     const onCtx = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
+      // 边浮层（EdgeLabelRenderer：锚点/中点/菜单/色板）上的右键不触发「在此新建块」。
+      if (target.closest('.react-flow__edgelabel-renderer')) return;
       if (!target.closest('.react-flow__pane')) return;
       e.preventDefault();
       const pos = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
@@ -366,10 +401,18 @@ function CanvasInner({ api }: { api: EditorApi }) {
         edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
+        onEdgesDelete={onEdgesDelete}
         onConnect={onConnect}
         onConnectEnd={onConnectEnd}
         isValidConnection={isValidConnection}
-        onPaneClick={() => {
+        onPaneClick={(event) => {
+          // 点在边浮层（弯折锚点/中点手柄/右键菜单/边色板）上时不清空激活锚点、
+          // 也不清选择——否则锚点 pointerdown 刚登记的激活态会被随后的 pane click 清掉，
+          // 且边被取消选中导致锚点手柄消失。
+          const t = event.target as HTMLElement;
+          const inEdgeOverlay = !!t.closest?.('[data-testid="edge-bend-anchor"], [data-testid="edge-bend-midpoint"], [data-testid="edge-clear-bends"]');
+          if (inEdgeOverlay) return;
+          setActiveBendAnchor(null);
           api.setSelection([]);
           if (snap.editingNodeId) api.setEditingNode(null);
         }}

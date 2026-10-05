@@ -90,6 +90,7 @@ const WHITELIST = new Set([
   'setMeasuredSizes',
   'addNode',
   'addNodes',
+  'moveNode',
   'addEdge',
   'deleteNodes',
   'updateContent',
@@ -110,6 +111,8 @@ const WHITELIST = new Set([
   'reparentNode',
   'reverseEdge',
   'setEdgePoints',
+  // ---- Wave7 edge-bend：多选边一键清除弯折点（一次可撤销宏）----
+  'clearEdgesPoints',
   'applyAISuggestions',
   'setLayoutMode',
   'setTighten',

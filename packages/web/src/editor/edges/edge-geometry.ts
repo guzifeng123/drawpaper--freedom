@@ -147,3 +147,70 @@ export function edgeRectIntersections(
   }
   return hits;
 }
+
+/* ================= P2.1 弯折点编辑纯函数 =================
+ *
+ * 双击边加 / 键盘删单点 / 右键删点 / 多选清空 / 随块平移，全部收敛到这组纯函数，
+ * 便于单测覆盖「增删点后 points 数组与路径几何」。
+ */
+
+/** 点到线段的最短距离（2D 欧氏，垂足在线段外则取端点距离）。 */
+export function distToSegment(
+  p: { x: number; y: number },
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+): number {
+  const vx = b.x - a.x;
+  const vy = b.y - a.y;
+  const len2 = vx * vx + vy * vy;
+  if (len2 < 1e-12) return Math.hypot(p.x - a.x, p.y - a.y);
+  let t = ((p.x - a.x) * vx + (p.y - a.y) * vy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + t * vx), p.y - (a.y + t * vy));
+}
+
+/**
+ * 在折线（source → points → target）上，于「离光标最近的那一段」之间插入一个弯折点。
+ *
+ * 双击边时光标落在可见路径上；把新点插入最近段的两端之间，保证折线不打折、不跳序。
+ * 返回新数组（不突变入参）。points 为空时最近段即 source→target，插入后为单点。
+ */
+export function insertBendPoint(
+  points: ReadonlyArray<{ x: number; y: number }>,
+  cursor: { x: number; y: number },
+  source: { x: number; y: number },
+  target: { x: number; y: number },
+): Array<{ x: number; y: number }> {
+  const verts = [source, ...points, target];
+  let bestSeg = 0;
+  let bestD = Infinity;
+  for (let i = 0; i < verts.length - 1; i++) {
+    const d = distToSegment(cursor, verts[i]!, verts[i + 1]!);
+    if (d < bestD) {
+      bestD = d;
+      bestSeg = i;
+    }
+  }
+  // verts 段 i 连接 verts[i]→verts[i+1]；points 中对应插入下标恰为 i（见文件头注释）。
+  const next = points.map((p) => ({ ...p }));
+  next.splice(bestSeg, 0, { x: cursor.x, y: cursor.y });
+  return next;
+}
+
+/** 删除第 idx 个弯折点（越界则原样返回）。返回新数组。 */
+export function removeBendPoint(
+  points: ReadonlyArray<{ x: number; y: number }>,
+  idx: number,
+): Array<{ x: number; y: number }> {
+  if (idx < 0 || idx >= points.length) return points.map((p) => ({ ...p }));
+  return points.filter((_, i) => i !== idx).map((p) => ({ ...p }));
+}
+
+/** 整体平移弯折点（随连接块位移用）。返回新数组。 */
+export function translateBendPoints(
+  points: ReadonlyArray<{ x: number; y: number }>,
+  dx: number,
+  dy: number,
+): Array<{ x: number; y: number }> {
+  return points.map((p) => ({ x: p.x + dx, y: p.y + dy }));
+}

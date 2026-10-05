@@ -349,6 +349,15 @@ export function createMockEditorApi(initialDoc: KBNoteDoc = createEmptyDoc()): E
       });
     },
 
+    clearEdgesPoints(ids) {
+      const doc = get().doc;
+      const set = new Set(ids);
+      get()._setDoc({
+        ...doc,
+        edges: doc.edges.map((e) => (set.has(e.id) ? { ...e, points: undefined } : e)),
+      });
+    },
+
     reverseEdge(id) {
       const doc = get().doc;
       get()._commit({

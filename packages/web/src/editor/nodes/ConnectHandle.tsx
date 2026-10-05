@@ -137,12 +137,13 @@ export const ConnectHandle = memo(function ConnectHandle({ nodeId, ...rest }: Co
   );
 });
 
-/** 供 BlockShell 使用的便捷封装：source 右/下两点。 */
+/** 供 BlockShell 使用的便捷封装：source 右/下两点。
+ *  P2.1：显式 id 与 position 同名，ReactFlow v12 才能按 edge.sourceHandle 匹配到手柄（否则 error#008 不渲染边）。 */
 export function SourceHandles({ nodeId }: { nodeId: string }) {
   return (
     <>
-      <ConnectHandle nodeId={nodeId} type="source" position={Position.Right} className="!h-2 !w-2 !bg-slate-400" />
-      <ConnectHandle nodeId={nodeId} type="source" position={Position.Bottom} className="!h-2 !w-2 !bg-slate-400" />
+      <ConnectHandle nodeId={nodeId} id="right" type="source" position={Position.Right} className="!h-2 !w-2 !bg-slate-400" />
+      <ConnectHandle nodeId={nodeId} id="bottom" type="source" position={Position.Bottom} className="!h-2 !w-2 !bg-slate-400" />
     </>
   );
 }
@@ -151,8 +152,8 @@ export function SourceHandles({ nodeId }: { nodeId: string }) {
 export function TargetHandles({ nodeId }: { nodeId: string }) {
   return (
     <>
-      <ConnectHandle nodeId={nodeId} type="target" position={Position.Left} className="!h-2 !w-2 !bg-slate-400" />
-      <ConnectHandle nodeId={nodeId} type="target" position={Position.Top} className="!h-2 !w-2 !bg-slate-400" />
+      <ConnectHandle nodeId={nodeId} id="left" type="target" position={Position.Left} className="!h-2 !w-2 !bg-slate-400" />
+      <ConnectHandle nodeId={nodeId} id="top" type="target" position={Position.Top} className="!h-2 !w-2 !bg-slate-400" />
     </>
   );
 }
