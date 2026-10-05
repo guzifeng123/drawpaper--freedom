@@ -116,6 +116,16 @@ export interface EditorApi {
   addNodes(nodes: BlockNode[]): void;
   /** 粘贴/拖拽图片：dataURL 直接进 image 块，返回新块 id。 */
   addImageBlock(dataUrl: string, x: number, y: number): string;
+  /**
+   * 统一图片摄入（Wave7 P2.1）：粘贴 / 拖入 / 斜杠插入三条入口共用。
+   * 压缩 → OPFS 落盘（image.src 存 assetRef）→ 不可用时降级 dataURL 内联。
+   * 返回新建块 id、实际写入的 src、以及走了 opfs 还是 dataurl 降级。
+   */
+  ingestImage(
+    file: Blob,
+    x: number,
+    y: number,
+  ): Promise<{ blockId: string; src: string; via: 'opfs' | 'dataurl' }>;
   deleteNodes(ids: string[]): void;
   /** 块内富文本提交（Tiptap JSON；store 侧做防抖合并）。 */
   updateContent(id: string, data: unknown): void;

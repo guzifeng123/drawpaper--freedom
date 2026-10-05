@@ -4,6 +4,7 @@ import { useEditorApi } from '../canvas/editor-context';
 import { StaticHtml } from '../tiptap/static';
 import { BlockShell } from './BlockShell';
 import type { AppNode } from './types';
+import { useResolvedImageSrc } from './use-resolved-image';
 
 /** 文本块。 */
 export function TextBlock({ data, selected }: NodeProps<AppNode>) {
@@ -96,6 +97,8 @@ export function NoteBlock({ data, selected }: NodeProps<AppNode>) {
 /** 图片块：img + NodeResizer 四角等比缩放。 */
 export function ImageBlock({ data, selected }: NodeProps<AppNode>) {
   const block = data.block;
+  // assetRef → objectURL（OPFS）；data:/blob: 原样。
+  const resolvedSrc = useResolvedImageSrc(block.image?.src);
   return (
     <BlockShell
       block={block}
@@ -103,10 +106,10 @@ export function ImageBlock({ data, selected }: NodeProps<AppNode>) {
       keepAspectRatio
       shellClassName="!p-1"
       renderStatic={() =>
-        block.image?.src ? (
+        resolvedSrc ? (
           <img
-            src={block.image.src}
-            alt={block.image.alt ?? ''}
+            src={resolvedSrc}
+            alt={block.image?.alt ?? ''}
             className="h-full w-full rounded object-contain"
             draggable={false}
           />

@@ -52,6 +52,8 @@ export const BlockShell = memo(function BlockShell({
   const isEditing = editingNodeId === block.id;
   const bodyRef = useRef<HTMLDivElement>(null);
   const [editor, setEditor] = useState<Editor | null>(null);
+  // 斜杠菜单「图片」：隐藏文件选择器，选中后走统一压缩+OPFS 管线。
+  const pickImageRef = useRef<HTMLInputElement>(null);
 
   // 进入编辑：挂载真实 Tiptap Editor（特殊块提供 renderEditor 时跳过）
   useEffect(() => {
@@ -78,11 +80,8 @@ export const BlockShell = memo(function BlockShell({
           ev.stopPropagation();
           const file = item.getAsFile();
           if (file) {
-            const reader = new FileReader();
-            reader.onload = () => {
-              api.addImageBlock(String(reader.result), block.x + block.width + 48, block.y);
-            };
-            reader.readAsDataURL(file);
+            // 统一管线：压缩 → OPFS（src 存 assetRef）→ 不可用降级 dataURL。
+            void api.ingestImage(file, block.x + block.width + 48, block.y);
           }
         }
       };
@@ -142,6 +141,12 @@ export const BlockShell = memo(function BlockShell({
         }
       }
     } else if (cmd.kind === 'block') {
+      if (cmd.blockType === 'image') {
+        // 斜杠插入图片：与粘贴/拖入共用 ingestImage 管线（选文件后压缩→OPFS）。
+        api.setEditingNode(null);
+        pickImageRef.current?.click();
+        return;
+      }
       api.setEditingNode(null);
       api.setBlockType(block.id, cmd.blockType);
     }
@@ -223,6 +228,17 @@ export const BlockShell = memo(function BlockShell({
           renderStatic()
         )}
       </div>
+      <input
+        ref={pickImageRef}
+        type="file"
+        accept="image/*"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) void api.ingestImage(f, block.x, block.y);
+          e.target.value = '';
+        }}
+      />
     </div>
   );
 });

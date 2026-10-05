@@ -17,7 +17,7 @@ import {
   downloadSheetsAsPng,
   runVectorPrint,
 } from './print-pipeline';
-import { buildPagesSvg, downloadSvgPages } from './svg-export';
+import { buildPagesSvgAsync, downloadSvgPages } from './svg-export';
 import { docToMarkdown, downloadTextFile } from './markdown-export';
 import { buildExportFileName } from './filename';
 import { pushToast } from '@/panels/lib/toast';
@@ -185,17 +185,25 @@ export function useExportModel(api: PanelsApi): {
         if (!api.doc) return;
         const r = computeResult();
         if (r.pages.length === 0) return;
-        const svgs = buildPagesSvg(r, api.doc, {
-          orientation: api.page.orientation,
-          gray: api.page.colorMode === 'gray',
-        });
-        const name = buildExportFileName({
-          title: api.doc.title ?? '未命名',
-          date: new Date(),
-          orientation: api.page.orientation,
-          ext: 'svg',
-        });
-        downloadSvgPages(svgs, name);
+        // 异步：先把 OPFS 图片读成 data: URI 内嵌进 SVG（离线可见）。
+        void (async () => {
+          try {
+            const svgs = await buildPagesSvgAsync(r, api.doc!, {
+              orientation: api.page.orientation,
+              gray: api.page.colorMode === 'gray',
+            });
+            const name = buildExportFileName({
+              title: api.doc!.title ?? '未命名',
+              date: new Date(),
+              orientation: api.page.orientation,
+              ext: 'svg',
+            });
+            downloadSvgPages(svgs, name);
+          } catch (err) {
+            console.error(err);
+            pushToast('error', 'SVG 导出失败');
+          }
+        })();
       },
       onExportMarkdown: () => {
         if (!api.doc) return;
