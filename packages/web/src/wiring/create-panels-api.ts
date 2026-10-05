@@ -321,6 +321,22 @@ export function createPanelsApi(store: EditorStoreApi): PanelsApi {
         useWiringUi.getState().bumpTrash();
       });
     },
+
+    // ---- Wave6b 跨文档双向链接 ----
+    openDocRef: (targetDocId, targetNodeId) => {
+      const s = store.getState();
+      if (targetDocId === s.currentDocId) {
+        s.flyToNode(targetNodeId);
+      } else {
+        void s.openDoc(targetDocId).then(() => {
+          store.getState().flyToNode(targetNodeId);
+        });
+      }
+    },
+    get backlinksNodeId() {
+      return useWiringUi.getState().backlinksNodeId;
+    },
+    setBacklinksNodeId: (id) => useWiringUi.getState().setBacklinksNodeId(id),
   };
 
   const refreshSnapshots = async (): Promise<void> => {

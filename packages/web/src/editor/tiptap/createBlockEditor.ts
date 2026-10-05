@@ -16,6 +16,7 @@ import TableHeader from '@tiptap/extension-table-header';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import { ensureHighlighter, lowlight } from './highlight';
 import { buildMarkdownInputRules } from './input-rules';
+import { DocRefMark } from './doc-ref-mark';
 
 /** 内容里是否含 codeBlock 节点（决定是否需要 await 语言语法 chunk）。 */
 function contentHasCodeBlock(content: unknown): boolean {
@@ -94,6 +95,8 @@ export async function createBlockEditor(opts: CreateBlockEditorOptions): Promise
       TaskList,
       TaskItem.configure({ nested: true }),
       MarkdownInputRules,
+      // 块内 [[双向链接]] docRef mark
+      DocRefMark,
       // P1：表格（可编辑，Tab 跳格走 Tiptap 自带 handleTabNext/Prev）
       // allowTableNodeSelection：允许拖选多单元格（CellSelection）以支持合并/拆分。
       Table.configure({
@@ -130,6 +133,7 @@ export function getStaticExtensions(): readonly unknown[] {
     Image,
     TaskList,
     TaskItem.configure({ nested: true }),
+    DocRefMark,
     // P1 静态渲染同样需要 table / codeBlock 扩展，才能输出 <table> 与 hljs class。
     Table.configure({
       resizable: false,

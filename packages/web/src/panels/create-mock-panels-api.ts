@@ -470,6 +470,9 @@ export function createMockPanelsApi(): PanelsApi {
     emptyTrash() {
       trash.length = 0;
     },
+    openDocRef(_targetDocId, _targetNodeId) {},
+    backlinksNodeId: null,
+    setBacklinksNodeId(_id) {},
   };
 
   return api;

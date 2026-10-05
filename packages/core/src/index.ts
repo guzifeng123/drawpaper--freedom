@@ -1,5 +1,6 @@
 // @drawpaper/core 顶层 barrel。
 export * from './model/index.js';
+export * from './links/index.js';
 export * from './graph/index.js';
 export * from './layout/index.js';
 export * from './paginate/index.js';

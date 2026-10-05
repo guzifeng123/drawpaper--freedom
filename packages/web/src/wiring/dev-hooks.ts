@@ -1,7 +1,8 @@
-import type { KBNoteDoc } from '@drawpaper/core';
-import { parseKBNote, KBNoteFileError } from '@drawpaper/core';
+import type { KBNoteDoc, DocRefLink } from '@drawpaper/core';
+import { parseKBNote, KBNoteFileError, serializeKBNote } from '@drawpaper/core';
 import { editorStore } from '@/store/editor-store';
 import { getAsset, isOpfsAvailable } from '@/storage/opfs';
+import { loadBacklinks } from '@/storage/backlinks';
 
 /**
  * DEV-only 测试钩子（window.__drawpaper__）。
@@ -42,6 +43,13 @@ export interface DrawpaperDevHook {
   importKbnoteText(text: string):
     | { ok: true; version: number; migrationNotes: string[] }
     | { ok: false; errorKind: string };
+  // ---- Wave6b 跨文档双向链接：e2e 数据断言 ----
+  /** 当前文档的规范化反链索引（保存时由 flushSave 从正文重建）。 */
+  currentLinks(): DocRefLink[];
+  /** 序列化当前文档为 .kbnote 文本。 */
+  exportCurrent(): string;
+  /** 查询指向 (docId, nodeId?) 的反链条目（来源文档/块标题）。 */
+  backlinksTo(docId: string, nodeId?: string | null): Promise<unknown[]>;
 }
 
 declare global {
@@ -179,6 +187,15 @@ export function installDevHooks(): void {
         if (e instanceof KBNoteFileError) return { ok: false as const, errorKind: e.kind };
         return { ok: false as const, errorKind: 'schema' };
       }
+    },
+    currentLinks() {
+      return [...editorStore.getState().doc.links];
+    },
+    exportCurrent() {
+      return serializeKBNote(editorStore.getState().doc);
+    },
+    async backlinksTo(docId: string, nodeId: string | null = null) {
+      return loadBacklinks(editorStore.getState().doc, docId, nodeId);
     },
   };
 }

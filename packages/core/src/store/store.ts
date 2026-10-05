@@ -30,6 +30,7 @@ import type { CycleIssue, MultiParentIssue } from '../graph/index.js';
 import { layoutTree } from '../layout/index.js';
 import type { LayoutInput, LayoutPosition, MeasuredSize } from '../layout/index.js';
 import { serializeKBNote, parseKBNote } from '../serialize/index.js';
+import { extractDocLinks } from '../links/index.js';
 
 /** 每份文档自动快照保留的最近条数（超出淘汰最旧）。 */
 export const SNAPSHOT_KEEP = 20;
@@ -563,15 +564,24 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
       const flushSave = async () => {
         saveTimer = undefined;
         if (!deps.storage) return;
+        // 保存前从块正文 docRef mark 重建规范化反链索引（纯函数；无 mark 时结果与现状一致）。
+        const cur = get().doc;
+        const prevLinks = cur.links ?? [];
+        const links = extractDocLinks(cur.id, cur.nodes, { existingLinks: prevLinks, now });
+        const doc: KBNoteDoc =
+          links.length === prevLinks.length && links.every((l, i) => l.id === prevLinks[i]?.id)
+            ? cur
+            : { ...cur, links };
+        if (doc !== cur) set((d) => void (d.doc = doc));
         set((d) => {
           d.saveState = 'saving';
         });
         try {
-          await deps.storage.saveDoc(get().doc);
+          await deps.storage.saveDoc(doc);
           // 双写：有活动本地句柄时，同一份 JSON 落盘到 .kbnote 文件（web 内部防抖）。
           if (get().activeFile && deps.fsa) {
             try {
-              await deps.fsa.writeActiveFile(serializeKBNote(get().doc));
+              await deps.fsa.writeActiveFile(serializeKBNote(doc));
             } catch {
               /* 文件写入失败不阻塞 IndexedDB 主保存（下次自动保存重试） */
             }

@@ -26,6 +26,9 @@ export interface WiringUiState {
    */
   migrationAwaitingConfirm: boolean;
 
+  /** BacklinksPanel 当前查看的块维度（null = 文档级反链）。 */
+  backlinksNodeId: string | null;
+
   setExportOpen(open: boolean): void;
   setSearchOpen(open: boolean): void;
   setActiveSearchIndex(i: number): void;
@@ -34,6 +37,7 @@ export interface WiringUiState {
   setAiPanelOpen(open: boolean): void;
   setOutlineOpen(open: boolean): void;
   setMigrationAwaitingConfirm(v: boolean): void;
+  setBacklinksNodeId(id: string | null): void;
 }
 
 export const useWiringUi = create<WiringUiState>((set) => ({
@@ -45,6 +49,7 @@ export const useWiringUi = create<WiringUiState>((set) => ({
   aiPanelOpen: false,
   outlineOpen: false,
   migrationAwaitingConfirm: false,
+  backlinksNodeId: null,
   setExportOpen: (open) => set({ exportOpen: open }),
   setSearchOpen: (open) => set({ searchOpen: open }),
   setActiveSearchIndex: (i) => set({ activeSearchIndex: i }),
@@ -53,6 +58,7 @@ export const useWiringUi = create<WiringUiState>((set) => ({
   setAiPanelOpen: (open) => set({ aiPanelOpen: open }),
   setOutlineOpen: (open) => set({ outlineOpen: open }),
   setMigrationAwaitingConfirm: (v) => set({ migrationAwaitingConfirm: v }),
+  setBacklinksNodeId: (id) => set({ backlinksNodeId: id }),
 }));
 
 /** 非 React 侧（快捷键 / 适配层）直接读最新 UI 态。 */

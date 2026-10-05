@@ -5,6 +5,7 @@ import type { BlockNode } from '@drawpaper/core';
 import { useEditorApi, useEditingNodeId, useChildCount } from '../canvas/editor-context';
 import { createBlockEditor } from '../tiptap/createBlockEditor';
 import { SlashMenu, type SlashCommand } from '../tiptap/slash-menu';
+import { DocRefMention } from '../tiptap/doc-ref-mention';
 import { BlockHoverToolbar } from './block-hover-toolbar';
 import { TableToolbar } from './table-toolbar';
 import { SourceHandles as ConnectHandles } from './ConnectHandle';
@@ -217,6 +218,7 @@ export const BlockShell = memo(function BlockShell({
               <EditorContent editor={editor} />
             </div>
             <SlashMenu editor={editor} onCommand={onSlashCommand} />
+            <DocRefMention editor={editor} />
           </>
         ) : (
           renderStatic()
