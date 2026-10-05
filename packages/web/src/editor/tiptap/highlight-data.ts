@@ -10,15 +10,32 @@ import xml from 'highlight.js/lib/languages/xml';
 import css from 'highlight.js/lib/languages/css';
 import bash from 'highlight.js/lib/languages/bash';
 import yaml from 'highlight.js/lib/languages/yaml';
-import { createLowlight } from 'lowlight';
+import type { lowlight } from './highlight';
+
+type LowlightInstance = typeof lowlight;
 
 /**
  * highlight-data.ts —— 重型语法高亮模块（懒加载 chunk）。
  *
- * 仅注册 P1 常用的 11 种语言。由 highlight.ts 的 ensureHighlighter() 动态 import，
- * 代码块首次渲染/编辑前不进首包。
+ * 只装 P1 常用的 11 种语言语法。由 highlight.ts 的 ensureHighlighter() 动态 import，
+ * 代码块首次渲染/编辑前不进首包。加载后把语言 register 进共享 lowlight 单例。
  */
 
+const GRAMMARS = {
+  js: javascript,
+  ts: typescript,
+  json,
+  python,
+  rust,
+  go,
+  java,
+  html: xml,
+  css,
+  bash,
+  yaml,
+} as const;
+
+// hljs 自身注册（供 codeToHtml 静态 SSR 渲染用）。
 hljs.registerLanguage('js', javascript);
 hljs.registerLanguage('ts', typescript);
 hljs.registerLanguage('json', json);
@@ -31,20 +48,10 @@ hljs.registerLanguage('css', css);
 hljs.registerLanguage('bash', bash);
 hljs.registerLanguage('yaml', yaml);
 
-/** 与 hljs 同一批语言，供 CodeBlockLowlight live 高亮。 */
-export const lowlight = createLowlight({
-  js: javascript,
-  ts: typescript,
-  json,
-  python,
-  rust,
-  go,
-  java,
-  html: xml,
-  css,
-  bash,
-  yaml,
-});
+/** 把 11 种语言注册进共享 lowlight 单例（live 编辑装饰用）。 */
+export function registerGrammars(lowlight: LowlightInstance): void {
+  lowlight.register(GRAMMARS);
+}
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
