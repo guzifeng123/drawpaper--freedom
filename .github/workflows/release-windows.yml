@@ -73,20 +73,29 @@ jobs:
         shell: bash
         run: |
           set +e
+          echo "::group::tauri CLI version"
+          ./node_modules/.bin/tauri --version
+          echo "::endgroup::"
           # Invoke the CLI binary directly: the desktop shell lives outside the
           # pnpm workspace, so `pnpm exec` resolves against the root and fails
-          # to find the local tauri binary.
-          ./node_modules/.bin/tauri build --ci ${{ matrix.extra_args }} 2>&1 | tee /tmp/tauri-build.log
+          # to find the local tauri binary. Normalize CR so cargo progress does
+          # not collapse into one giant line.
+          start_ts=$(date +%s)
+          ./node_modules/.bin/tauri build --ci ${{ matrix.extra_args }} 2>&1 | tr '\r' '\n' | tee /tmp/tauri-build.log
           code=${PIPESTATUS[0]}
+          echo "tauri build exit=$code elapsed=$(( $(date +%s)-start_ts ))s"
           if [ "$code" != "0" ]; then
             echo "::group::tauri build failure tail"
-            tail -n 80 /tmp/tauri-build.log
+            tail -n 20 /tmp/tauri-build.log
             echo "::endgroup::"
-            # Surface the tail as annotations (readable on the run page even
-            # without API access to raw logs).
-            tail -n 40 /tmp/tauri-build.log | while IFS= read -r line; do
-              msg="${line:0:900}"
-              echo "::error title=tauri-build-${{ matrix.arch }}::${msg}"
+            # Annotations are readable on the run page anonymously. GitHub caps
+            # each level at 10 per step, so emit the previous 10 lines as
+            # warnings and the LAST 10 as errors.
+            tail -n 20 /tmp/tauri-build.log | sed -n '1,10p' | while IFS= read -r line; do
+              echo "::warning title=tauri-${{ matrix.arch }}-ctx::${line:0:900}"
+            done
+            tail -n 20 /tmp/tauri-build.log | sed -n '11,20p' | while IFS= read -r line; do
+              echo "::error title=tauri-${{ matrix.arch }}-tail::${line:0:900}"
             done
             exit "$code"
           fi
