@@ -25,7 +25,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com data:; img-src 'self' data: blob: asset: http://asset.localhost; script-src 'self'; connect-src 'self' https://api.openai.com https://*"
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: blob: asset: http://asset.localhost; script-src 'self'; connect-src 'self' https://*"
     }
   },
   "bundle": {
@@ -57,25 +57,22 @@
           "SimpChinese",
           "English"
         ]
-      },
-      "fileAssociations": [
-        {
-          "ext": [
-            "kbnote"
-          ],
-          "description": "drawpaper knowledge-block note",
-          "identifier": "com.drawpaper.app.kbnote",
-          "icon": "icons/icon.ico"
-        }
-      ]
+      }
     },
     "macOS": {
       "frameworks": [],
       "minimumSystemVersion": "10.15"
     },
-    "linux": {
-      "appDependencies": []
-    }
+    "fileAssociations": [
+      {
+        "ext": [
+          "kbnote"
+        ],
+        "name": "drawpaper knowledge-block note",
+        "description": "drawpaper knowledge-block note (.kbnote)",
+        "role": "Editor"
+      }
+    ]
   },
   "plugins": {}
 }
