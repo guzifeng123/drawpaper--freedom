@@ -23,6 +23,7 @@ on:
       - 'chore/windows-ci-smoke'
       - 'feat/desktop-native-gaps'
       - 'chore/nsis-smoke2-guide'
+      - 'fix/desktop-open-zoom'
   workflow_dispatch:
 
 permissions:
