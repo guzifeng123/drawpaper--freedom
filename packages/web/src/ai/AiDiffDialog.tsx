@@ -92,7 +92,11 @@ export function AiDiffDialog({ open, suggestions, warnings, onCancel, onConfirm 
               const involved = involvedIds(s);
               return (
                 <li key={i} className="flex items-start gap-3 rounded-md border p-2.5">
-                  <Checkbox checked={checked.has(i)} onCheckedChange={() => toggle(i)} />
+                  <Checkbox
+                    checked={checked.has(i)}
+                    onCheckedChange={() => toggle(i)}
+                    aria-label={`选择建议 ${i + 1}：${meta.label}`}
+                  />
                   <meta.Icon className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                   <div className="min-w-0 flex-1">
                     <div className="text-xs font-medium text-muted-foreground">{meta.label}</div>
