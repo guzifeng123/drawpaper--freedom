@@ -27,6 +27,16 @@ tauri-plugin-single-instance = "2.0"
 # Native notifications for save success/failure/migration hints. On Windows
 # this posts to the Action Center; the web side falls back to toast in browsers.
 tauri-plugin-notification = "2.0"
+# Wave13: remember window position / size / maximized state across restarts.
+# Pure Rust-side (no JS commands, no extra capabilities). Restored geometry is
+# clamped to tauri.conf minWidth/minHeight (960x600).
+tauri-plugin-window-state = "2.0"
+# Wave13: structured logging to drawpaper.log (app log dir) + stdout + webview
+# forward. Replaces env_logger as the global `log` logger; level=Info.
+tauri-plugin-log = "2.0"
+# Wave13: decode the base64 export bytes (PDF/PNG/SVG/MD) passed by the frontend
+# through the `save_export` command.
+base64 = "0.22"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Dialog commands await the native picker via a oneshot channel. (tokio is
@@ -37,7 +47,6 @@ tokio = { version = "1", features = ["sync"] }
 # the app config dir; no extra KV store dependency.
 dirs = "5"
 log = "0.4"
-env_logger = "0.11"
 
 # NOTE on tauri-plugin-updater: intentionally NOT included.
 # Auto-update requires (1) a TAURI_SIGNING_PRIVATE_KEY at build time and
