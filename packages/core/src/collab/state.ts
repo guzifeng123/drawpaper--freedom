@@ -1,6 +1,6 @@
 import type { KBNoteDoc } from '../model/index.js';
 import type { ClientId } from './identity.js';
-import type { LamportClock, VersionVector } from './clock.js';
+import type { LamportClock, VersionVector, EventMarker } from './clock.js';
 import { createLamportClock } from './clock.js';
 import type { OpEnvelope } from './envelope.js';
 
@@ -34,6 +34,22 @@ export interface EntityMeta {
   fields: Record<string, FieldClock>;
 }
 
+/**
+ * 寄存器型数组字段（tags / edge.points / page.pageBreaks）的并集元数据。
+ *
+ * 与标量字段的「整体 LWW 覆盖」不同：并发往同一寄存器加不同项应取并集（不互相覆盖），
+ * 删除仍以墓碑为准——`removes` 记录每个 itemKey 的删除定位，晚于它的重新 add 才可复活
+ * （标准 LWW-remove / OR-set 语义），早于它的旧 add 不复活，防止「并集导致删不掉」。
+ *
+ * key 形如 `${entity}:${entityId}:${field}`；entityId 对 page 级寄存器固定为 'page'。
+ */
+export interface RegisterMeta {
+  /** itemKey → 最近一次 add 的定位（同 key 重复 add 走 LWW 刷新）。 */
+  adds: Record<string, EventMarker>;
+  /** itemKey → 删除墓碑定位；lamport 较大的 add 可复活。 */
+  removes: Record<string, EventMarker>;
+}
+
 export interface CollabState {
   docId: string;
   doc: KBNoteDoc;
@@ -45,6 +61,8 @@ export interface CollabState {
   docFields: Record<string, FieldClock>;
   /** 分页设置字段时钟。 */
   pageFields: Record<string, FieldClock>;
+  /** 寄存器并集元数据（tags / points / pageBreaks）。 */
+  regMeta: Record<string, RegisterMeta>;
   /** 已应用 opId（去重幂等）；有界，由 pruneAppliedOps 裁剪。 */
   appliedOpIds: string[];
   /** 近期已应用 op 信封（供 snapshot 回给 late-joiner）；有界。 */
@@ -55,6 +73,11 @@ export interface CollabState {
 
 function freshMeta(): EntityMeta {
   return { tombstone: null, fields: {} };
+}
+
+/** 寄存器 key 的统一拼装。 */
+export function regKey(entity: 'node' | 'edge' | 'page', entityId: string, field: string): string {
+  return `${entity}:${entityId}:${field}`;
 }
 
 /**
@@ -75,6 +98,7 @@ export function createCollabState(doc: KBNoteDoc, clock?: LamportClock): CollabS
     edgeMeta,
     docFields: {},
     pageFields: {},
+    regMeta: {},
     appliedOpIds: [],
     log: [],
     clock: clock ?? createLamportClock(0),

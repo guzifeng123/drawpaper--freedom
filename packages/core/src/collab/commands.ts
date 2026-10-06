@@ -82,5 +82,7 @@ export function opKindLabel(kind: CollabOp['kind']): string {
     case 'move-nodes': return '批量移动';
     case 'set-doc-meta': return '文档元信息';
     case 'set-page': return '分页设置';
+    case 'reg-add': return '寄存器并集新增';
+    case 'reg-remove': return '寄存器并集删除';
   }
 }

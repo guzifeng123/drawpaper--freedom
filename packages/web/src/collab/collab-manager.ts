@@ -11,6 +11,8 @@ import {
   COLLAB_PROTOCOL_VERSION,
   CollabProtocolError,
   summarizeConflicts,
+  serializeCollabMeta,
+  hydrateCollabMeta,
   type CollabState,
   type ClientId,
   type TabIdentity,
@@ -27,6 +29,7 @@ import { editorStore } from '@/store/editor-store';
 import type { KBNoteDoc } from '@drawpaper/core';
 import { createTransport, SITE_CHANNEL, docChannel, type CollabTransport } from './transport';
 import { diffDocOps } from './doc-diff';
+import { saveCollabMeta, loadCollabMeta } from './collab-persist';
 import {
   upsertPeer,
   sweepOfflinePeers,
@@ -56,6 +59,7 @@ const IDENTITY_KEY = 'drawpaper-collab:v1:identity';
 const PRE_MERGE_SNAPSHOT_THROTTLE_MS = 2500;
 const COMPACT_INTERVAL_MS = 10_000;
 const KEEP_APPLIED_OPS = 200;
+const PERSIST_DEBOUNCE_MS = 400;
 
 function loadOrCreateIdentity(): TabIdentity {
   try {
@@ -95,6 +99,7 @@ export class CollabManager {
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
   private compactTimer: ReturnType<typeof setInterval> | null = null;
+  private persistTimer: ReturnType<typeof setTimeout> | null = null;
   private lastPreMergeSnapshotAt = 0;
   private installed = false;
   private now: () => number;
@@ -180,6 +185,10 @@ export class CollabManager {
   destroy(): void {
     this.unsubscribe?.();
     this.unsubscribe = null;
+    // 卸载前 flush 协作元数据。
+    if (this.persistTimer) clearTimeout(this.persistTimer);
+    this.persistTimer = null;
+    void this.flushPersistSave();
     this.docTransport?.close();
     this.docTransport = null;
     this.siteTransport.close();
@@ -202,6 +211,8 @@ export class CollabManager {
   }
 
   private setupSession(docId: string): void {
+    // teardown 旧会话：先 flush 旧文档的协作元数据持久化，再切。
+    void this.flushPersistSave();
     this.docTransport?.close();
     this.docTransport = null;
     this.state = null;
@@ -209,28 +220,49 @@ export class CollabManager {
     this.alignedForDoc.delete(docId);
 
     const doc = editorStore.getState().doc;
-    this.state = createCollabState(doc, this.clock);
 
-    this.docTransport = createTransport(docChannel(docId));
-    this.docTransport.onMessage((env) => {
-      if (env.kind === 'op') this.onRemoteOp(env);
-    });
+    // 异步恢复持久化的协作元数据（reload 后字段时钟/寄存器墓碑/时钟水位不回退）。
+    // 恢复期间 state=null：onRemoteOp 直接丢弃（我们正处于换文档/重新对齐窗口），
+    // 之后发 snapshot-request 由持有方补齐。
+    void (async () => {
+      let restored: CollabState;
+      try {
+        const persisted = await loadCollabMeta(docId);
+        const hyd = persisted ? hydrateCollabMeta(doc, persisted) : null;
+        if (hyd) {
+          this.clock = createLamportClock(hyd.clockValue);
+          restored = hyd.state;
+        } else {
+          restored = createCollabState(doc, this.clock);
+        }
+      } catch {
+        restored = createCollabState(doc, this.clock);
+      }
+      // 期间用户已切走别的文档：丢弃本次恢复。
+      if (this.docId !== docId) return;
+      this.state = restored;
 
-    this.publishPeers();
-
-    // late-joiner：请求对齐（已落盘 doc 为基线，快照只补未落盘增量）。
-    if (this.transportKind !== 'disabled') {
-      const lamport = this.clock.tick();
-      const req = buildSnapshotRequest({
-        docId,
-        clientId: this.identity.clientId,
-        tabName: this.identity.name,
-        tabColor: this.identity.color,
-        lamport,
-        requestVv: { ...this.state.vv },
+      this.docTransport = createTransport(docChannel(docId));
+      this.docTransport.onMessage((env) => {
+        if (env.kind === 'op') this.onRemoteOp(env);
       });
-      this.siteTransport.send(req);
-    }
+
+      this.publishPeers();
+
+      // late-joiner：请求对齐（已落盘 doc 为基线，快照只补未落盘增量）。
+      if (this.transportKind !== 'disabled') {
+        const lamport = this.clock.tick();
+        const req = buildSnapshotRequest({
+          docId,
+          clientId: this.identity.clientId,
+          tabName: this.identity.name,
+          tabColor: this.identity.color,
+          lamport,
+          requestVv: { ...this.state.vv },
+        });
+        this.siteTransport.send(req);
+      }
+    })();
   }
 
   // ---------------- 本地变更 → op 广播 ----------------
@@ -251,6 +283,7 @@ export class CollabManager {
       const res = applyOp(this.state, env);
       this.state = { ...res.state, doc: next };
     }
+    this.schedulePersistSave();
   }
 
   // ---------------- 远端消息路由 ----------------
@@ -317,6 +350,7 @@ export class CollabManager {
       if (res.conflicts.length > 0) {
         useCollabUi.getState().pushConflicts(res.conflicts);
       }
+      this.schedulePersistSave();
     } catch (e) {
       if (e instanceof CollabProtocolError) return; // 坏基线丢弃
       throw e;
@@ -339,6 +373,7 @@ export class CollabManager {
       if (res.conflicts.length > 0) {
         useCollabUi.getState().pushConflicts(res.conflicts);
       }
+      this.schedulePersistSave();
     }
   }
 
@@ -396,6 +431,25 @@ export class CollabManager {
       tombstoneWatermark: watermark,
       keepAppliedOps: KEEP_APPLIED_OPS,
     });
+    this.schedulePersistSave();
+  }
+
+  // ---------------- 协作元数据持久化（reload 恢复） ----------------
+
+  /** 防抖落盘协作元数据（字段时钟/版本向量/寄存器墓碑/op 水位/时钟水位）。 */
+  private schedulePersistSave(): void {
+    if (this.persistTimer) clearTimeout(this.persistTimer);
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      void this.flushPersistSave();
+    }, PERSIST_DEBOUNCE_MS);
+  }
+
+  /** 立即落盘（换文档 / 卸载前调用）。 */
+  private async flushPersistSave(): Promise<void> {
+    if (!this.state || !this.docId) return;
+    const row = serializeCollabMeta(this.state, this.clock.value);
+    await saveCollabMeta(row);
   }
 
   /** 冲突中文摘要（UI 横幅用；dev-hooks 也可调用）。 */

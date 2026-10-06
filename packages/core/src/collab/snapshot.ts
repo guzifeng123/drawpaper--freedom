@@ -6,7 +6,8 @@ import type {
   SnapshotEnvelope,
   SnapshotRequestEnvelope,
 } from './envelope.js';
-import type { CollabState } from './state.js';
+import type { CollabState, RegisterMeta } from './state.js';
+import { regKey } from './state.js';
 import type { VersionVector } from './clock.js';
 import { compareEvents, mergeVersions } from './clock.js';
 import { applyOp } from './merge.js';
@@ -123,6 +124,7 @@ export function applySnapshot(
     edgeMeta: {},
     docFields: {},
     pageFields: {},
+    regMeta: {},
     appliedOpIds: [],
     log: [],
     vv: mergeVersions(env.snapshot.baseVv, current.vv),
@@ -135,6 +137,8 @@ export function applySnapshot(
   for (const e of next.doc.edges) {
     next.edgeMeta[e.id] = { tombstone: null, fields: seedBaselineEdgeFields(e, baseLamport, env.clientId) };
   }
+  // 寄存器并集元数据：基线数组里已有的项视为 baseLamport 时刻加入（晚到的旧 remove 不复活）。
+  next.regMeta = seedBaselineRegMeta(next, baseLamport, env.clientId);
 
   // 按确定性全序重放（lamport 升序；同 lamport clientId 小者排后=后写胜）。
   const ops = (env.snapshot.ops as OpEnvelope[])
@@ -170,6 +174,48 @@ function seedBaselineEdgeFields(e: { id: string }, lamport: number, clientId: st
   return fields;
 }
 
+/** 为基线 doc 的 tags / points / pageBreaks 播种 adds 墓碑基准。 */
+function seedBaselineRegMeta(
+  state: CollabState,
+  lamport: number,
+  clientId: string,
+): Record<string, RegisterMeta> {
+  const out: Record<string, RegisterMeta> = {};
+  const stamp = { lamport, clientId };
+  const seedArr = (key: string, arr: unknown[] | undefined) => {
+    if (!arr || arr.length === 0) return;
+    const meta: RegisterMeta = { adds: {}, removes: {} };
+    for (const item of arr) {
+      const k = regItemKeyForBaseline(key, item);
+      if (k) meta.adds[k] = stamp;
+    }
+    out[key] = meta;
+  };
+  for (const n of state.doc.nodes) {
+    seedArr(regKey('node', n.id, 'tags'), n.tags as unknown[] | undefined);
+  }
+  for (const e of state.doc.edges) {
+    seedArr(regKey('edge', e.id, 'points'), e.points as unknown[] | undefined);
+  }
+  seedArr(regKey('page', 'page', 'pageBreaks'), state.doc.page.pageBreaks as unknown[] | undefined);
+  return out;
+}
+
+function regItemKeyForBaseline(key: string, item: unknown): string | null {
+  // key 形如 entity:entityId:field；按 field 取身份。
+  const field = key.split(':')[2];
+  if (field === 'tags') return `t:${String(item)}`;
+  if (field === 'pageBreaks') {
+    const b = item as { id?: string; at?: number };
+    return b.id ? `b:${b.id}` : b.at != null ? `b:${b.at}` : null;
+  }
+  if (field === 'points') {
+    const p = item as { x: number; y: number };
+    return `p:${Math.round(p.x)},${Math.round(p.y)}`;
+  }
+  return null;
+}
+
 // ---- 压缩 ----
 
 /**
@@ -180,7 +226,21 @@ function seedBaselineEdgeFields(e: { id: string }, lamport: number, clientId: st
 export function pruneTombstones(state: CollabState, watermark: number): CollabState {
   const nodeMeta = pruneMap(state.nodeMeta, watermark);
   const edgeMeta = pruneMap(state.edgeMeta, watermark);
-  return { ...state, nodeMeta, edgeMeta };
+  // 寄存器删除墓碑同水位裁剪：lamport ≤ watermark 的 remove 已无人会再收到其之前的 add。
+  const regMeta: Record<string, RegisterMeta> = {};
+  for (const [key, meta] of Object.entries(state.regMeta)) {
+    const removes: Record<string, RegisterMeta['removes'][string]> = {};
+    let kept = 0;
+    for (const [k, mark] of Object.entries(meta.removes)) {
+      if (mark.lamport <= watermark) continue;
+      removes[k] = mark;
+      kept++;
+    }
+    if (Object.keys(meta.adds).length > 0 || kept > 0) {
+      regMeta[key] = { adds: meta.adds, removes };
+    }
+  }
+  return { ...state, nodeMeta, edgeMeta, regMeta };
 }
 
 function pruneMap(

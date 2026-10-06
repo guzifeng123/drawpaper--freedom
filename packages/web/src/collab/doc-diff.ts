@@ -10,6 +10,9 @@ import type { CollabOp, NodeFieldPatch, EdgeFieldPatch, PagePatch } from '@drawp
  *
  * 只差量 CollabOp 协议覆盖的字段；doc.layout / viewport / board.updatedAt / links /
  * assetRefs / doc.tags 字典 不广播（属既有边界，见 docs/wave9/collab-multitab.md）。
+ *
+ * Wave14：tags / edge.points / page.pageBreaks 是「寄存器型数组」——不再整体 LWW 覆盖，
+ * 而是按元素身份差量成 reg-add / reg-remove（并发加不同项取并集，删除走墓碑）。
  */
 
 function eq(a: unknown, b: unknown): boolean {
@@ -20,13 +23,51 @@ function eq(a: unknown, b: unknown): boolean {
   }
 }
 
-/** 节点可差量字段（与 merge 引擎 seedNodeFields 对齐）。 */
+/** 节点可差量标量字段（tags 除外——走寄存器并集差量）。 */
 const NODE_SCALAR_FIELDS = [
-  'x', 'y', 'width', 'height', 'parentId', 'pinned', 'locked', 'collapsed', 'tags', 'type',
+  'x', 'y', 'width', 'height', 'parentId', 'pinned', 'locked', 'collapsed', 'type',
 ] as const;
 
 /** 节点块特有可选字段（存在即差量；消失即 patch:null）。 */
 const NODE_OPTIONAL_FIELDS = ['todo', 'image', 'heading', 'bookmark', 'attachment', 'reminder'] as const;
+
+// ---- 寄存器元素身份 key（与 core merge.ts 的 regItemKey 对齐）----
+function tagKey(t: unknown): string {
+  return `t:${String(t)}`;
+}
+function pointKey(p: unknown): string {
+  const pt = p as { x: number; y: number };
+  return `p:${Math.round(pt.x)},${Math.round(pt.y)}`;
+}
+function pageBreakKey(b: unknown): string {
+  const pb = b as { id?: string; at?: number };
+  return pb.id ? `b:${pb.id}` : `b:${pb.at}`;
+}
+
+/** 计算 prev→next 的并集差量，产出 reg-add / reg-remove op。 */
+function regDeltaOps(
+  entity: 'node' | 'edge' | 'page',
+  entityId: string,
+  field: 'tags' | 'points' | 'pageBreaks',
+  prevArr: unknown[] | undefined,
+  nextArr: unknown[] | undefined,
+  keyOf: (item: unknown) => string,
+): CollabOp[] {
+  const before = prevArr ?? [];
+  const after = nextArr ?? [];
+  const beforeKeys = new Set(before.map(keyOf));
+  const afterKeys = new Set(after.map(keyOf));
+  const added = after.filter((it) => !beforeKeys.has(keyOf(it)));
+  const removedKeys = before.filter((it) => !afterKeys.has(keyOf(it))).map(keyOf);
+  const ops: CollabOp[] = [];
+  if (added.length > 0) {
+    ops.push({ kind: 'reg-add', entity, entityId, field, items: added });
+  }
+  if (removedKeys.length > 0) {
+    ops.push({ kind: 'reg-remove', entity, entityId, field, keys: removedKeys });
+  }
+  return ops;
+}
 
 function diffNodePatch(prev: BlockNode, next: BlockNode): NodeFieldPatch | null {
   const patch: Record<string, unknown> = {};
@@ -55,16 +96,14 @@ function diffEdgePatch(prev: Edge, next: Edge): EdgeFieldPatch | null {
     if (prev[f] !== next[f]) patch[f] = next[f];
   }
   if (prev.style.color !== next.style.color) patch.color = next.style.color;
-  const pPoints = prev.points;
-  const nPoints = next.points;
-  if (!eq(pPoints, nPoints)) patch.points = nPoints === undefined ? null : nPoints;
+  // points 走寄存器并集差量，不在此整体 diff。
   return Object.keys(patch).length > 0 ? (patch as EdgeFieldPatch) : null;
 }
 
-/** 分页设置可差量字段（与 PagePatchSchema 对齐）。 */
+/** 分页设置可差量字段（pageBreaks 除外——走寄存器并集差量）。 */
 const PAGE_FIELDS = [
   'orientation', 'marginMm', 'mode', 'showPageBreak', 'colorMode', 'header',
-  'footer', 'showPageNumbers', 'edgeLabels', 'pageBreaks', 'pageOrigin',
+  'footer', 'showPageNumbers', 'edgeLabels', 'pageOrigin',
 ] as const;
 
 function diffPagePatch(prev: KBNoteDoc['page'], next: KBNoteDoc['page']): PagePatch | null {
@@ -100,6 +139,10 @@ export function diffDocOps(prev: KBNoteDoc, next: KBNoteDoc): CollabOp[] {
     }
     const patch = diffNodePatch(prevNode, nextNode);
     if (patch) ops.push({ kind: 'update-node', nodeId: id, patch });
+    // tags 寄存器并集差量。
+    if (!eq(prevNode.tags, nextNode.tags)) {
+      ops.push(...regDeltaOps('node', id, 'tags', prevNode.tags as unknown[], nextNode.tags as unknown[], tagKey));
+    }
   }
 
   // ---- 边 ----
@@ -117,6 +160,10 @@ export function diffDocOps(prev: KBNoteDoc, next: KBNoteDoc): CollabOp[] {
     }
     const patch = diffEdgePatch(prevEdge, nextEdge);
     if (patch) ops.push({ kind: 'update-edge', edgeId: id, patch });
+    // points 寄存器并集差量。
+    if (!eq(prevEdge.points, nextEdge.points)) {
+      ops.push(...regDeltaOps('edge', id, 'points', prevEdge.points as unknown[] | undefined, nextEdge.points as unknown[] | undefined, pointKey));
+    }
   }
 
   // ---- 文档标题 ----
@@ -127,6 +174,10 @@ export function diffDocOps(prev: KBNoteDoc, next: KBNoteDoc): CollabOp[] {
   // ---- 分页设置 ----
   const pagePatch = diffPagePatch(prev.page, next.page);
   if (pagePatch) ops.push({ kind: 'set-page', patch: pagePatch });
+  // pageBreaks 寄存器并集差量。
+  if (!eq(prev.page.pageBreaks, next.page.pageBreaks)) {
+    ops.push(...regDeltaOps('page', 'page', 'pageBreaks', prev.page.pageBreaks as unknown[], next.page.pageBreaks as unknown[], pageBreakKey));
+  }
 
   return ops;
 }
