@@ -1,8 +1,10 @@
-import { memo, useEffect, useRef, useState, type ReactNode } from 'react';
+import { memo, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Position, NodeResizer, NodeToolbar, type NodeProps } from '@xyflow/react';
 import { EditorContent, type Editor } from '@tiptap/react';
 import type { BlockNode } from '@drawpaper/core';
+import { extractPlainText } from '@drawpaper/core';
 import { useEditorApi, useEditingNodeId, useChildCount } from '../canvas/editor-context';
+import { useIsHydrated } from '../canvas/hydration-store';
 import { createBlockEditor } from '../tiptap/createBlockEditor';
 import { SlashMenu, type SlashCommand } from '../tiptap/slash-menu';
 import { DocRefMention } from '../tiptap/doc-ref-mention';
@@ -37,7 +39,44 @@ interface BlockShellProps {
   renderEditor?: () => ReactNode;
 }
 
-export const BlockShell = memo(function BlockShell({
+/**
+ * BlockShellSkeleton —— 离屏块的轻量占位壳（Wave8 渐进水化）。
+ *
+ * 首 commit 时 ReactFlow 会把全部节点挂载（视口尺寸未测得前不裁剪），若每个都挂
+ * 完整 chrome（4 个 Handle / NodeResizer / ResizeObserver / 工具条 / generateHTML），
+ * 10000 块就是十几秒长任务。未水合的离屏块只渲染这个零 hook（除纯 memo）的占位壳：
+ * 同色外壳 + 纯文本摘要，保留外壳高度（h-full），不实例化 Tiptap、不跑 generateHTML。
+ */
+const BlockShellSkeleton = memo(function BlockShellSkeleton({ block }: { block: BlockNode }) {
+  const text = useMemo(() => extractPlainText(block.content.data, 120), [block.content.data]);
+  return (
+    <div
+      className="flex h-full w-full flex-col rounded-lg border text-sm shadow-sm"
+      style={{
+        background: block.style.bg ?? 'hsl(var(--node-bg))',
+        borderColor: block.style.border ?? 'hsl(var(--node-border))',
+      }}
+    >
+      <div className="min-h-6 flex-1 overflow-hidden px-3 py-3 leading-5 text-slate-400">
+        <span className="line-clamp-2">{text || '…'}</span>
+      </div>
+    </div>
+  );
+});
+
+/**
+ * BlockShell —— ReactFlow 节点外壳入口。
+ * 仅订阅「水合态 + 编辑态」两个细粒度切片；未水合且未编辑时直接渲染轻量骨架，
+ * 视口邻近升级后才挂载完整 BlockShellFull（Handles/缩放/RO/工具条/完整静态 HTML）。
+ */
+export const BlockShell = memo(function BlockShell(props: BlockShellProps) {
+  const hydrated = useIsHydrated(props.block.id);
+  const editingNodeId = useEditingNodeId();
+  const isEditing = editingNodeId === props.block.id;
+  if (!hydrated && !isEditing) return <BlockShellSkeleton block={props.block} />;
+  return <BlockShellFull {...props} />;});
+
+const BlockShellFull = memo(function BlockShellFull({
   block,
   selected,
   renderStatic,
