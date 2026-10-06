@@ -46,7 +46,7 @@
     ],
     "windows": {
       "nsis": {
-        "installMode": "currentUser",
+        "installMode": "both",
         "displayLanguageSelector": true,
         "languages": [
           "SimpChinese",

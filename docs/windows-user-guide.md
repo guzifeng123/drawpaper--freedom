@@ -25,11 +25,13 @@
 - 这是未签名免费开源 Windows 软件的常态，不是病毒；安装包本身在 Releases 页公开、可 anyone 审。
 - 装一次之后，SmartScreen 通常不会再拦同一个文件。
 
-### 1.2 安装模式（currentUser / both）
+### 1.2 安装模式（installMode: both）
 
-- 默认（`installMode: currentUser`）：**不需要管理员权限**，装到 `%LOCALAPPDATA%\Programs\drawpaper`，只对当前 Windows 账号生效。
-- 高级（`installMode: both`，Wave13 起）：安装时可选「为所有用户安装」，会弹 UAC，装到 `%ProgramFiles%\drawpaper`，所有账号共用一份。
-- 两种模式都**不会**改系统环境变量、不动 `PATH`。
+Wave13 起安装器配置为 `both`：安装向导里**默认按当前用户安装**（不需要管理员权限，不弹 UAC），装到 `%LOCALAPPDATA%\Programs\drawpaper`，只对当前 Windows 账号生效。
+
+高级选项里可勾选「为所有用户安装」：这一步会弹 UAC，装到 `%ProgramFiles%\drawpaper`，所有本机账号共用一份。两者选其一即可；之后想换模式，先卸载再重装。
+
+两种模式都**不会**改系统环境变量、不动 `PATH`。
 
 ### 1.3 卸载
 
@@ -47,7 +49,7 @@ Tauri 2 按 identifier `com.drawpaper.app` 决定目录名，Windows 上对应�
 |---|---|
 | 配置 / 最近文件 / 自动保存元数据 | `%APPDATA%\com.drawpaper.app\` |
 | 文档时间戳备份（`backups\*.kbnote`） | `%APPDATA%\com.drawpaper.app\backups\` |
-| 日志 | `%LOCALAPPDATA%\com.drawpaper.app\logs\` |
+| 日志（`drawpaper.log`） | `%APPDATA%\com.drawpaper.app\logs\` |
 | 程序本体（currentUser 模式） | `%LOCALAPPDATA%\Programs\drawpaper\` |
 | 程序本体（整机模式） | `%ProgramFiles%\drawpaper\` |
 
@@ -102,10 +104,10 @@ drawpaper 官方不提供任何云服务，同步通道完全由你自己选，�
 
 ## 7. 日志与反馈
 
-- 日志文件位置：`%LOCALAPPDATA%\com.drawpaper.app\logs\`（文件名形如 `drawpaper.log`，按启动追加）。
+- 日志文件位置：`%APPDATA%\com.drawpaper.app\logs\drawpaper.log`（按启动追加，由 tauri-plugin-log 写入）。
 - 出 bug（崩溃、白屏、同步报错、快捷键失灵）时：
   1. 先把 app 关掉再重开一次，看是否复现。
-  2. 复现后把 `%LOCALAPPDATA%\com.drawpaper.app\logs\drawpaper.log` 最近几百行截出来（里面不含文档正文，只有启动 / 错误栈）。
+  2. 复现后把 `%APPDATA%\com.drawpaper.app\logs\drawpaper.log` 最近几百行截出来（里面不含文档正文，只有启动 / 错误栈）。
   3. 到仓库 Issues 页提一条：附上 Windows 版本（Win10/11、x64/ARM64）、drawpaper 版本号（菜单「帮助 → 关于」）、复现步骤、日志尾部。
 - 反馈时**不要**把 `%APPDATA%\com.drawpaper.app\` 下的备份 `.kbnote` 直接贴出来——那是你的私有文档。
 
