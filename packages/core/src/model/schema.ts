@@ -4,6 +4,7 @@ import { DOC_FORMAT, CURRENT_DOC_VERSION } from './constants.js';
 import { DEFAULT_EDGE_COLOR } from './edge-colors.js';
 import type { BlockNode } from './node.js';
 import type { Edge } from './edge.js';
+import { SyncBlockSchema } from '../sync/types.js';
 
 /**
  * Zod 校验。
@@ -161,6 +162,8 @@ export const KBNoteDocSchema = z.object({
   page: PageSettingsSchema.default({}),
   assetRefs: z.array(z.string()).default([]),
   links: z.array(DocRefLinkSchema).default([]),
+  // v3：跨设备同步元数据（版本向量/字段时钟/墓碑）。旧档经迁移补齐；缺省为空块。
+  sync: SyncBlockSchema.default(() => ({ vv: {} })),
 });
 
 // ---- 类型化解析错误 ----

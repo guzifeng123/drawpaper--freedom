@@ -82,7 +82,7 @@ test('AI：mock 返回 add-edge 建议 → 合入后边新增', async ({ page })
   );
   await page.evaluate(() => {
     window.__drawpaper__!.loadFixture({
-      format: 'knowledge-block-notes', version: 2, id: 'doc1', title: 't',
+      format: 'knowledge-block-notes', version: 3, id: 'doc1', title: 't',
       board: { createdAt: 0, updatedAt: 0 },
       nodes: [
         { id: 'n_1', type: 'text', x: 200, y: 200, width: 200, height: 60, content: { format: 'tiptap-json', data: { type: 'doc', content: [] } }, parentId: null, pinned: false, locked: false, collapsed: false, tags: [], style: {} },
@@ -91,7 +91,7 @@ test('AI：mock 返回 add-edge 建议 → 合入后边新增', async ({ page })
       edges: [], tags: [], layout: { mode: 'mindmap-right', rankSpacing: 90, nodeSpacing: 28 },
       viewport: { x: 0, y: 0, zoom: 1 },
       page: { size: 'A4', orientation: 'portrait', marginMm: 15, mode: 'fit', showPageBreak: false, colorMode: 'color', header: false, footer: false, showPageNumbers: false, edgeLabels: true, pageBreaks: [] },
-      assetRefs: [], links: [],
+      assetRefs: [], links: [], sync: { vv: {} },
     });
   });
   await page.waitForTimeout(300);

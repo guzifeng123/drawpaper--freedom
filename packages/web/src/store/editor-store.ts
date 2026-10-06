@@ -40,6 +40,7 @@ function blankInitialDoc(): KBNoteDoc {
     },
     assetRefs: [],
     links: [],
+    sync: { vv: {} },
   };
 }
 

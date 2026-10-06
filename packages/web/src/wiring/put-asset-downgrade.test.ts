@@ -45,6 +45,7 @@ function blankDoc(): KBNoteDoc {
     },
     assetRefs: [],
     links: [],
+    sync: { vv: {} },
   };
 }
 

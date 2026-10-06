@@ -1,6 +1,7 @@
 import type { KBNoteDoc } from '../model/index.js';
 import { CURRENT_DOC_VERSION, DOC_FORMAT } from '../model/index.js';
 import { safeParseKBNoteDoc } from '../model/index.js';
+import { migrateV2ToV3 } from '../sync/migrate.js';
 
 /**
  * serialize 模块：.kbnote 序列化 / 解析 / 版本迁移。
@@ -40,6 +41,7 @@ export function serializeKBNote(doc: KBNoteDoc): string {
     page: doc.page,
     assetRefs: doc.assetRefs,
     links: doc.links,
+    sync: doc.sync ?? { vv: {} },
   };
   return JSON.stringify(ordered, null, 2);
 }
@@ -70,11 +72,13 @@ export type MigrationStep = (raw: unknown) => unknown;
 /** version n -> 升级到 n+1 的 step 注册表。 */
 export const MIGRATION_REGISTRY: Record<number, MigrationStep> = {
   1: migrateV1ToV2,
+  2: migrateV2ToV3,
 };
 
 /** 每个迁移步的人类可读说明（migrationNotes 展示给用户）。 */
 export const MIGRATION_NOTES: Record<number, string> = {
   1: 'v1→v2：新增 links/points 字段',
+  2: 'v2→v3：注入同步元数据（版本向量/字段时钟/墓碑集），开启跨设备合并',
 };
 
 export interface ParseKBNoteResult {

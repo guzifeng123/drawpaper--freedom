@@ -79,7 +79,7 @@ describe('serialize / parse round-trip', () => {
     const text = serializeKBNote(doc);
     const { doc: back, migrationNotes } = parseKBNote(text);
     expect(back.id).toBe(doc.id);
-    expect(back.version).toBe(2);
+    expect(back.version).toBe(3);
     expect(back.nodes).toHaveLength(2);
     expect(back.edges[0]!.label).toBe('父子');
     expect(back.edges[0]!.points).toEqual([{ x: 100, y: 20 }]);
@@ -96,15 +96,18 @@ describe('serialize / parse round-trip', () => {
   });
 });
 
-describe('v1 -> v2 migration', () => {
-  it('upgrades a v1 doc: version=2, links=[], edges preserved, notes recorded', () => {
+describe('v1 -> v2 -> v3 migration', () => {
+  it('upgrades a v1 doc: version=3, links=[], edges preserved, sync meta injected, notes recorded', () => {
     const { doc, migrationNotes } = parseKBNote(JSON.stringify(v1Doc()));
-    expect(doc.version).toBe(2);
+    expect(doc.version).toBe(3);
     expect(doc.links).toEqual([]);
     expect(doc.edges).toHaveLength(1);
     // 旧边无 points，缺省即默认贝塞尔（undefined）
     expect(doc.edges[0]!.points).toBeUndefined();
-    expect(migrationNotes).toEqual([MIGRATION_NOTES[1]]);
+    // v2→v3 注入确定性同步元数据
+    expect(doc.sync.vv['seed:doc_v1']).toBe(1);
+    expect(Object.keys(doc.sync.nodes ?? {})).toContain('n_1');
+    expect(migrationNotes).toEqual([MIGRATION_NOTES[1], MIGRATION_NOTES[2]]);
   });
 
   it('v1 doc without links cannot pass v2 schema directly (must migrate)', () => {
@@ -135,7 +138,7 @@ describe('parseKBNote rejection', () => {
   });
 
   it('rejects a version higher than current with unsupported-version', () => {
-    expect(CURRENT_DOC_VERSION).toBe(2);
+    expect(CURRENT_DOC_VERSION).toBe(3);
     const future = JSON.stringify({ format: DOC_FORMAT, version: 99, id: 'x' });
     expect(() => parseKBNote(future)).toThrow(KBNoteFileError);
     try {
@@ -171,7 +174,8 @@ describe('migrate registry', () => {
 
   it('runs registered steps in order across multiple versions (chainable)', () => {
     const calls: string[] = [];
-    // current=2。注册假的 v0->1 与 v1->2（覆盖真实 v1->2），从 v0 迁移观察链式顺序。
+    // current=3。注册假的 v0->1 与 v1->2（覆盖真实 v1->2），从 v0 迁移观察链式顺序；
+    // v2->v3 真实步仍会执行（不入 calls）。
     MIGRATION_REGISTRY[0] = (raw) => {
       calls.push('step0');
       return { ...(raw as object), v0: true };
@@ -182,14 +186,15 @@ describe('migrate registry', () => {
     };
     const res = migrate({ hello: 1, version: 0 }, 0);
     expect(calls).toEqual(['step0', 'step1']);
-    expect(res.notes).toHaveLength(2);
+    // step0 + step1 + 真实 v2->v3 = 3 步
+    expect(res.notes).toHaveLength(3);
     expect((res.value as Record<string, unknown>)['v0']).toBe(true);
     expect((res.value as Record<string, unknown>)['v1']).toBe(true);
   });
 
   it('is identity when fromVersion equals current', () => {
     const raw = { a: 1 };
-    const res = migrate(raw, 2);
+    const res = migrate(raw, 3);
     expect(res.value).toBe(raw);
     expect(res.notes).toEqual([]);
   });

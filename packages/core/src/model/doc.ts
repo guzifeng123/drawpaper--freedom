@@ -6,6 +6,7 @@ import type { Viewport } from './viewport.js';
 import type { PageSettings } from './page.js';
 import type { DocRefLink } from './links.js';
 import type { DOC_FORMAT, CURRENT_DOC_VERSION } from './constants.js';
+import type { SyncBlock } from '../sync/types.js';
 
 /** 文档级时间戳元信息。 */
 export interface BoardMeta {
@@ -20,7 +21,7 @@ export interface BoardMeta {
 export interface KBNoteDoc {
   /** 固定为 'knowledge-block-notes'。 */
   format: typeof DOC_FORMAT;
-  /** schema 版本，当前 2。 */
+  /** schema 版本，当前 3。 */
   version: typeof CURRENT_DOC_VERSION;
 
   id: string;
@@ -44,4 +45,10 @@ export interface KBNoteDoc {
    * 与 assetRefs 同级；后续由 web 从 Tiptap docRef mark 内容重建。
    */
   links: DocRefLink[];
+
+  /**
+   * v3：跨设备同步元数据（版本向量 / 字段时钟 / 墓碑集）。
+   * 随 .kbnote 落盘；parse 后必存在（缺省为空块）。同步合并内核只读它。
+   */
+  sync: SyncBlock;
 }
