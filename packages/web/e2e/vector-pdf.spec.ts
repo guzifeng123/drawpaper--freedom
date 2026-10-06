@@ -69,6 +69,7 @@ test.describe('Wave14 矢量 PDF 直下载', () => {
   test.beforeAll(() => fs.mkdirSync(OUT, { recursive: true }));
 
   test('下载矢量 PDF：字体已嵌入、中英文正文可抽取、页数与预览一致、图片可见', async ({ page }) => {
+    test.setTimeout(120_000); // CI 2 核：vite dev 首次按需编译 jspdf/svg2pdf + 2.18MB 字体 + 9 页 svg2pdf
     await waitForApp(page);
     const { doc } = buildVectorDoc();
     await loadVectorDoc(page, doc);
@@ -128,6 +129,7 @@ test.describe('Wave14 矢量 PDF 直下载', () => {
   });
 
   test('矢量失败自动回退位图：toast 出现且仍产出 PDF', async ({ page }) => {
+    test.setTimeout(90_000);
     await waitForApp(page);
     const { doc } = buildVectorDoc();
     await loadVectorDoc(page, doc);
@@ -163,6 +165,7 @@ test.describe('Wave14 矢量 PDF 直下载', () => {
   });
 
   test('含生僻字（龘）文档：缺字形预检命中，回退位图并 toast 专门提示', async ({ page }) => {
+    test.setTimeout(90_000);
     await waitForApp(page);
     const { doc } = buildStandardFixture('矢量PDF验收');
     // 追加一个孤块，正文含字体未覆盖的生僻字「龘」（U+9F98，GB2312 二级/扩展）。

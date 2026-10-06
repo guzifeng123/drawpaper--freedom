@@ -146,12 +146,35 @@ async function dataUriToCanvas(dataUri: string): Promise<HTMLCanvasElement> {
  * 矢量直下载 PDF：与 .svg 导出同源（buildPagesSvgAsync）逐页产出 SVG，
  * 再用 svg2pdf.js（jsPDF 渲染后端）逐页画成真正的矢量 PDF：
  *  - 节点/边/续接标记/页眉页脚为矢量路径与文本对象（可选、可搜索、可复制）；
- *  - 图片块以 <image data:...> 由 svg2pdf 光栅嵌入（embedImage）；
+ *  - 图片块以剥离后 jsPDF addImage 光栅嵌入；
  *  - 中文经嵌入的 glyf CJK 字体成为可抽取文本（ToUnicode CMap）。
  *
- * 失败由调用方捕获并回退位图链路（不在此处静默）。
+ * 失败（含 hang 超时）由调用方捕获并回退位图链路（不在此处静默）。
  */
 export async function renderVectorPdf(
+  result: PaginateResult,
+  doc: KBNoteDoc,
+  opts: VectorPdfOptions,
+): Promise<VectorPdfResult> {
+  // 真挂起守卫：svg2pdf / addImage 历史上会在异常 SVG 上永不 resolve。
+  // 超过该时长即放弃矢量、抛错，由 useExportModel 回退位图（不等用户/playwright 超时）。
+  // 正常矢量渲染远快于此（数秒~30s）；60s 仅捕获真正 hang，不误伤慢 runner。
+  const HANG_TIMEOUT_MS = 60_000;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const hangGuard = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error('vector pdf hang timeout (>60s), falling back')),
+      HANG_TIMEOUT_MS,
+    );
+  });
+  try {
+    return await Promise.race([renderVectorPdfInner(result, doc, opts), hangGuard]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function renderVectorPdfInner(
   result: PaginateResult,
   doc: KBNoteDoc,
   opts: VectorPdfOptions,
