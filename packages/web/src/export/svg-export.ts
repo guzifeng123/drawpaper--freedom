@@ -177,20 +177,14 @@ export function buildPagesSvg(
 }
 
 /** 逐页下载 .svg（不打 zip）。 */
-export function downloadSvgPages(svgPages: string[], baseFileName: string): void {
+/** 把多页 SVG 字符串渲染成 (blob, fileName) 列表（不在此处触发下载）。 */
+export function renderSvgPages(svgPages: string[], baseFileName: string): { blob: Blob; fileName: string }[] {
   const dot = baseFileName.lastIndexOf('.');
   const stem = dot > 0 ? baseFileName.slice(0, dot) : baseFileName;
-  svgPages.forEach((svg, i) => {
-    const blob = new Blob([svg], { type: 'image/svg+xml;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `${stem}_p${i + 1}.svg`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
-  });
+  return svgPages.map((svg, i) => ({
+    blob: new Blob([svg], { type: 'image/svg+xml;charset=utf-8' }),
+    fileName: `${stem}_p${i + 1}.svg`,
+  }));
 }
 
 /**

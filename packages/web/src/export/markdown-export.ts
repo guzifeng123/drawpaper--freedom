@@ -54,15 +54,7 @@ export function docToMarkdown(doc: KBNoteDoc): string {
   return out.join('\n').replace(/\n{3,}/g, '\n\n').trim() + '\n';
 }
 
-/** 触发浏览器下载一个文本文件。 */
-export function downloadTextFile(filename: string, text: string, mime = 'text/markdown'): void {
-  const blob = new Blob([text], { type: `${mime};charset=utf-8` });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
+/** 把 Markdown 文本包成 Blob（UTF-8）。不在此处触发下载，由 deliver sink 落盘。 */
+export function markdownBlob(text: string, mime = 'text/markdown'): Blob {
+  return new Blob([text], { type: `${mime};charset=utf-8` });
 }

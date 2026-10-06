@@ -13,13 +13,14 @@ import type { PanelsApi } from '@/panels/panels-api';
 import { type ExportDialogActions, type ExportScope } from './ExportDialog';
 import {
   collectSheetElements,
-  downloadSheetsAsPdf,
-  downloadSheetsAsPng,
+  renderSheetsAsPdf,
+  renderSheetsAsPng,
   runVectorPrint,
 } from './print-pipeline';
-import { buildPagesSvgAsync, downloadSvgPages } from './svg-export';
-import { docToMarkdown, downloadTextFile } from './markdown-export';
+import { buildPagesSvgAsync, renderSvgPages } from './svg-export';
+import { docToMarkdown, markdownBlob } from './markdown-export';
 import { buildExportFileName } from './filename';
+import { deliverExportFile } from './deliver';
 import { pushToast } from '@/panels/lib/toast';
 
 const EMPTY_RESULT: PaginateResult = { pages: [], orphans: [], totalPages: 0, notes: [] };
@@ -151,7 +152,8 @@ export function useExportModel(api: PanelsApi): {
               orientation: api.page.orientation,
               ext: 'png',
             });
-            await downloadSheetsAsPng(sheets, name);
+            const pages = await renderSheetsAsPng(sheets, name);
+            for (const p of pages) await deliverExportFile(p.fileName, 'png', p.blob);
           } catch (err) {
             console.error(err);
             pushToast('error', 'PNG 导出失败（图形库加载或渲染出错）');
@@ -172,7 +174,8 @@ export function useExportModel(api: PanelsApi): {
               orientation: api.page.orientation,
               ext: 'pdf',
             });
-            await downloadSheetsAsPdf(sheets, name, api.page.orientation);
+            const { blob, fileName } = await renderSheetsAsPdf(sheets, name, api.page.orientation);
+            await deliverExportFile(fileName, 'pdf', blob);
           } catch (err) {
             console.error(err);
             pushToast('error', 'PDF 合成失败（pdf-lib 加载或渲染出错）');
@@ -198,7 +201,7 @@ export function useExportModel(api: PanelsApi): {
               orientation: api.page.orientation,
               ext: 'svg',
             });
-            downloadSvgPages(svgs, name);
+            for (const p of renderSvgPages(svgs, name)) await deliverExportFile(p.fileName, 'svg', p.blob);
           } catch (err) {
             console.error(err);
             pushToast('error', 'SVG 导出失败');
@@ -214,7 +217,7 @@ export function useExportModel(api: PanelsApi): {
           orientation: api.page.orientation,
           ext: 'md',
         });
-        downloadTextFile(name, md);
+        void deliverExportFile(name, 'md', markdownBlob(md));
       },
     }),
     [api, afterSheetsRender, computeResult],

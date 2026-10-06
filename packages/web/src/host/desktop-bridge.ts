@@ -1,5 +1,5 @@
 import { parseKBNote } from '@drawpaper/core';
-import { TauriHostAdapter, TauriUnavailableError } from './tauri-host';
+import { TauriHostAdapter, TauriUnavailableError, type OpenFilePayload } from './tauri-host';
 import { editorStore } from '@/store/editor-store';
 import { getWiringUi } from '@/wiring/ui-store';
 import { useThemeStore } from '@/panels/lib/theme';
@@ -19,7 +19,9 @@ import { runExportAction } from '@/export/export-actions-bridge';
  *   export:print / export:pdf / export:png / export:svg / export:md
  *   view:dark-mode / view:outline / view:search
  *   sync:settings
- * （help:home 在 Rust 侧直接 opener 打开，不经前端）
+ * （help:home / help:check-update / help:open-data-dir 由 Rust 直接 opener 处理，不经前端；
+ *   file:open-recent / file:clear-recent 旧死分支已移除，并入动态「打开最近」子菜单，
+ *   点击 recent:<n> 由 Rust 读盘后 emit 富 app:open-file，前端见 routeOpenFile。）
  */
 
 /** 纯函数：窗口标题格式。导出供单测。
@@ -112,8 +114,27 @@ async function routeMenu(id: string): Promise<void> {
       getWiringUi().setSyncOpen(true);
       break;
     default:
-      /* file:open-recent / file:clear-recent / view:fit / view:zoom-* 暂不接线 */
+      /* help:check-update / help:open-data-dir / recent:* / view:fit / view:zoom-* 由 Rust 自取，前端不绑定 */
       break;
+  }
+}
+
+/**
+ * Wave13：最近文件菜单点击后 Rust 读盘 emit 的富 app:open-file。
+ *  - text 存在（最近文件子菜单）：走与 file:open 成功分支相同的
+ *    parseKBNote → loadDoc → bindNativeFile；文件缺失由 Rust 侧剔除，前端不 toast。
+ *  - text 缺失（双击关联 / 单实例转发兼容路径）：webview 无任意路径读权限，
+ *    按既有降级处理（不打开、不 toast）。
+ */
+async function routeOpenFile(payload: OpenFilePayload): Promise<void> {
+  if (typeof payload.text !== 'string' || payload.text.length === 0) return;
+  try {
+    const { doc } = parseKBNote(payload.text);
+    pendingNativePath = payload.path;
+    editorStore.getState().loadDoc(doc);
+    await adapter?.bindNativeFile(payload.path);
+  } catch (err) {
+    pushToast('error', `打开失败：${err instanceof Error ? err.message : '文件格式错误'}`);
   }
 }
 
@@ -156,15 +177,19 @@ export function initDesktopBridge(): () => void {
 
   let unlistenMenu: (() => void) | undefined;
   let unlistenClose: (() => void) | undefined;
+  let unlistenOpenFile: (() => void) | undefined;
   void a.onMenuEvent((id) => void routeMenu(id)).then((u) => { unlistenMenu = u; });
   void a.onCloseRequested(() => {
     getWiringUi().setCloseGuardOpen(true);
   }).then((u) => { unlistenClose = u; });
+  // Wave13：动态「打开最近」子菜单点击 → Rust 读盘后 emit 富 app:open-file。
+  void a.onOpenFileEvent((p) => void routeOpenFile(p)).then((u) => { unlistenOpenFile = u; });
 
   return () => {
     unsubStore();
     unlistenMenu?.();
     unlistenClose?.();
+    unlistenOpenFile?.();
     started = false;
     adapter = null;
   };
