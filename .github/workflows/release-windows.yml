@@ -19,6 +19,8 @@ on:
     branches:
       - 'develop'
       - 'feat/p2-tauri-ci'
+      - 'feat/desktop-shell-polish'
+      - 'chore/windows-ci-smoke'
   workflow_dispatch:
 
 permissions:
