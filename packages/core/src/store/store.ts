@@ -522,6 +522,7 @@ function blankDoc(now: number): KBNoteDoc {
     },
     assetRefs: [],
     links: [],
+    sync: { vv: {} },
   };
 }
 

@@ -1,18 +1,19 @@
 import { test, expect } from '@playwright/test';
 
 /**
- * Wave6a：schema v2 迁移 e2e。
- *  - 导入 v1 .kbnote → 自动升到 v2，migrationNotes 非空；
- *  - 导入伪造 v9 .kbnote → 拒绝（unsupported-version），当前文档不被替换。
+ * Wave10：v2 → v3 迁移 + 跨设备合并 e2e。
+ *  - 导入 v2 .kbnote → 自动升 v3，sync 元数据落盘；
+ *  - 同一份 v2 档「两台设备」各升级一次 → 结果 deep-equal、合并 0 假冲突；
+ *  - v9 高版本仍被拒绝，当前文档不被污染。
  */
 
-function v1Doc(): string {
+function v2Doc(): string {
   return JSON.stringify({
     format: 'knowledge-block-notes',
-    version: 1,
-    id: 'doc_v1_e2e',
-    title: 'v1 旧文件',
-    board: { createdAt: 0, updatedAt: 0 },
+    version: 2,
+    id: 'doc_v2_e2e',
+    title: 'v2 旧文件',
+    board: { createdAt: 1000, updatedAt: 1696000000000 },
     nodes: [
       {
         id: 'n_1',
@@ -23,8 +24,18 @@ function v1Doc(): string {
         height: 80,
         content: { format: 'tiptap-json', data: { type: 'doc', content: [] } },
       },
+      {
+        id: 'n_2',
+        type: 'todo',
+        x: 400,
+        y: 100,
+        width: 260,
+        height: 60,
+        content: { format: 'tiptap-json', data: { type: 'doc', content: [] } },
+        todo: { checked: true },
+      },
     ],
-    edges: [],
+    edges: [{ id: 'e_1', source: 'n_1', target: 'n_2', sourceHandle: 'right', targetHandle: 'left', label: '', directed: true, style: { color: '#86EFAC' } }],
     tags: [],
     layout: { mode: 'mindmap-right', rankSpacing: 90, nodeSpacing: 28 },
     viewport: { x: 0, y: 0, zoom: 1 },
@@ -42,6 +53,7 @@ function v1Doc(): string {
       pageBreaks: [],
     },
     assetRefs: [],
+    links: [],
   });
 }
 
@@ -57,37 +69,42 @@ function v9Doc(): string {
 test.beforeEach(async ({ page }) => {
   await page.goto('/');
   await expect(page.locator('.react-flow')).toBeVisible();
-  // 等待异步 bootstrap（listDocs/openRecent/newDoc）落定，避免与后续 import 竞态。
   await page.waitForTimeout(800);
 });
 
-test('importing a v1 doc auto-migrates to v3 with notes', async ({ page }) => {
-  const res = await page.evaluate((text) => window.__drawpaper__!.importKbnoteText(text), v1Doc());
+test('importing a v2 doc auto-migrates to v3 with sync metadata', async ({ page }) => {
+  const res = await page.evaluate((text) => window.__drawpaper__!.importKbnoteText(text), v2Doc());
   expect(res.ok).toBe(true);
   if (res.ok) {
     expect(res.version).toBe(3);
     expect(res.migrationNotes.length).toBeGreaterThan(0);
   }
-  // 当前文档已切换为迁移后的 v1 doc
   const state = await page.evaluate(() => window.__drawpaper__!.getState());
-  expect(state.doc.id).toBe('doc_v1_e2e');
+  expect(state.doc.id).toBe('doc_v2_e2e');
   expect(state.doc.version).toBe(3);
-  expect(state.doc.links).toEqual([]);
+  // 确定性迁移戳：clientId 由 docId 派生，lamport 取自 board.updatedAt
+  // @ts-expect-error 运行时存在
+  expect(state.doc.sync.nodes.n_1.f.content).toEqual([1696000000000, 'seed:doc_v2_e2e']);
+});
+
+test('two devices migrating the same v2 file converge without false conflicts', async ({ page }) => {
+  const check = await page.evaluate((text) => window.__drawpaper__!.v3MigrationCheck(text), v2Doc());
+  expect(check.ok).toBe(true);
+  expect(check.version).toBe(3);
+  expect(check.migratedDeepEqual).toBe(true);
+  expect(check.mergedConflictCount).toBe(0);
 });
 
 test('importing a v9 doc is rejected and leaves the current doc intact', async ({ page }) => {
-  // 先载入 v1 文档（迁移成功），记录其 id
-  await page.evaluate((text) => window.__drawpaper__!.importKbnoteText(text), v1Doc());
+  await page.evaluate((text) => window.__drawpaper__!.importKbnoteText(text), v2Doc());
   const before = await page.evaluate(() => window.__drawpaper__!.getState());
-  expect(before.doc.id).toBe('doc_v1_e2e');
+  expect(before.doc.id).toBe('doc_v2_e2e');
 
-  // 再导入 v9 文件 → 拒绝，不替换
   const res = await page.evaluate((text) => window.__drawpaper__!.importKbnoteText(text), v9Doc());
   expect(res.ok).toBe(false);
   if (!res.ok) expect(res.errorKind).toBe('unsupported-version');
 
-  // 当前文档仍是迁移后的 v1 doc，未被污染
   const after = await page.evaluate(() => window.__drawpaper__!.getState());
-  expect(after.doc.id).toBe('doc_v1_e2e');
+  expect(after.doc.id).toBe('doc_v2_e2e');
   expect(after.doc.version).toBe(3);
 });

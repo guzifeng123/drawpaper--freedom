@@ -6,6 +6,7 @@ import type { BlockNode } from './node.js';
 import type { Edge } from './edge.js';
 import type { Tag } from './tag.js';
 import type { KBNoteDoc } from './doc.js';
+import { emptySyncBlock } from '../sync/types.js';
 
 /**
  * 工厂函数：构造「合法、可直接落库」的模型对象。
@@ -79,6 +80,7 @@ export function createDoc(title: string = '未命名画布'): KBNoteDoc {
     },
     assetRefs: [],
     links: [],
+    sync: emptySyncBlock(),
   };
 }
 

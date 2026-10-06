@@ -1,5 +1,5 @@
 import type { KBNoteDoc, DocRefLink, PaginateResult } from '@drawpaper/core';
-import { parseKBNote, KBNoteFileError, serializeKBNote } from '@drawpaper/core';
+import { parseKBNote, KBNoteFileError, serializeKBNote, mergeSnapshots } from '@drawpaper/core';
 import { editorStore } from '@/store/editor-store';
 import { getAsset, isOpfsAvailable } from '@/storage/opfs';
 import { loadBacklinks } from '@/storage/backlinks';
@@ -73,6 +73,18 @@ export interface DrawpaperDevHook {
   collab(): ReturnType<typeof collabManager.inspect>;
   /** 当前冲突的中文摘要（summarizeConflicts）。 */
   collabConflicts(): string[];
+  // ---- Wave10 v2→v3 迁移 + 跨设备合并：e2e 走真实 core 路径 ----
+  /**
+   * 同一份 v2 .kbnote 文本「在两台设备」各升级一次：
+   *  - 两份 v3 结果必须 deep-equal（确定性迁移）；
+   *  - 合并两份 v3 必须 0 假冲突。
+   */
+  v3MigrationCheck(text: string): {
+    ok: boolean;
+    version: number;
+    migratedDeepEqual: boolean;
+    mergedConflictCount: number;
+  };
 }
 
 declare global {
@@ -265,6 +277,19 @@ export function installDevHooks(): void {
     },
     collabConflicts() {
       return collabManager.conflictSummary();
+    },
+    v3MigrationCheck(text: string) {
+      // 模拟两台设备从同一份 v2 档各自升级
+      const a = parseKBNote(text).doc;
+      const b = parseKBNote(text).doc;
+      const migratedDeepEqual = JSON.stringify(a) === JSON.stringify(b);
+      const merged = mergeSnapshots(a, b);
+      return {
+        ok: true,
+        version: a.version,
+        migratedDeepEqual,
+        mergedConflictCount: merged.conflicts.length,
+      };
     },
   };
 }
