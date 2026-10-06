@@ -112,3 +112,51 @@ git push origin v0.1.0-rc.4
 ## 8. 发布前文档核对清单
 
 - [ ] 发布前确认 `docs/sync.md` 的截图 / 操作步骤与最终 UI 文案一致（跨设备同步文档先行编写，同步设置项的按钮名 / 弹窗标题可能在开发阶段微调，见该文 §2.5 注）。
+
+## 9. 代码签名（Code Signing）—— 当前未启用
+
+> 本节只描述现状与接入路径，**本期不实现、不提交任何证书或私钥**。
+
+### 9.1 现状
+
+本仓库的 NSIS 安装包（`drawpaper_*_*-setup.exe`）**当前未做 Authenticode 代码签名**。后果：
+
+- 首次在 Windows 10/11 上双击安装时，SmartScreen 会弹出「Windows 已保护你的电脑」蓝色提示（因为该发布者没有信誉），用户需要点「更多信息 → 仍要运行」才能继续。
+- 杀毒软件对未签名、从 GitHub Release 下载的未知 exe 可能产生额外启发式告警。
+- 这是 RC 阶段的已知现状，不是 CI 失败。
+
+### 9.2 接入代码签名需要什么
+
+1. **一张代码签名证书（PFX）**
+   - 从受信任 CA（DigiCert / Sectigo / SSL.com 等）购买；EV 证书可立即获得 SmartScreen 信誉，OV 证书需要积累下载量后才会被 SmartScreen 信任。
+   - 证书以 `.pfx`（PKCS#12）文件形式拿到，含私钥与证书链。
+2. **GitHub Secrets（在仓库 Settings → Secrets and variables → Actions 配置，不要入库）**
+   - `CERTIFICATE_BASE64`：`.pfx` 文件 base64 编码后的字符串（`base64 -w0 cert.pfx`）。
+   - `CERTIFICATE_PASSWORD`：导出 PFX 时设置的口令。
+3. **CI 集成（在 `release-windows.yml` 的 build job 里，`tauri build` 之前/之后做）**
+   - 用官方 `tauri-apps/tauri-action`（它原生支持读 `TAURI_SIGNING_IDENTITY` 等环境变量并在打包后调用 signtool）；或在 NSIS 产物出来后用 Windows SDK 自带的 `signtool sign /f cert.pfx /p $env:CERTIFICATE_PASSWORD /fd sha256 /tr <timestamp-url> /td sha256 <installer.exe>`。
+   - 注意：Tauri 的 `TAURI_SIGNING_PRIVATE_KEY*` 这一组 secret 是给 **updater 签名**（见 §10）用的，和 Authenticode 代码签名（`CERTIFICATE_BASE64` / `CERTIFICATE_PASSWORD`）是**两套不同的密钥**，不要混用。
+4. **签名后**：安装包在 Release 页面附 `SHA256SUMS.txt`（见 §4.1，由 publish job 生成），用户校验完整性；SmartScreen 提示会随证书信誉积累而消失。
+
+> 在拿到证书之前，不要在 CI 里留任何占位 secret 引用；未签名就保持现状并在 Release 正文说明「未签名，首次运行需点仍要运行」。
+
+## 10. 自动更新启用清单（Tauri Updater）—— 未来接入用
+
+> §6 解释了为什么本期故意不启用。本节是**完整的接入 checklist**，纯文档，执行时再按此操作。
+
+1. **生成 updater 签名密钥对（一次性）**
+   ```bash
+   pnpm tauri signer generate -w ~/.tauri/drawpaper.key
+   ```
+   产物：`drawpaper.key`（私钥）+ 终端打印的公钥字符串。**私钥离线保存好，丢失则所有已发版用户永远收不到更新。**
+2. **公钥填入 `tauri.conf.json`**：在 `plugins.updater.pubkey` 填第 1 步打印的公钥字符串；同时在 `plugins.updater.endpoints` 填更新检查地址（指向 GitHub Releases 上的 `latest.json` 静态 URL，例如 `https://github.com/<org>/drawpaper--freedom/releases/latest/download/latest.json`）。
+3. **引入 updater 插件**：`apps/desktop-tauri/src-tauri/Cargo.toml` 加入 `tauri-plugin-updater`，并在 `lib.rs` 注册插件（当前刻意未加，见 §6）。
+4. **私钥存 GitHub Secrets**：
+   - `TAURI_SIGNING_PRIVATE_KEY`：`drawpaper.key` 文件内容（多行，原样）。
+   - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：生成时设置的口令（无口令则留空）。
+5. **CI 产出入 `.sig`**：用 `tauri-apps/tauri-action`（而非直接调 `tauri` CLI）打包，它会自动用上述 secret 给每个 NSIS 产物生成同名 `.sig` 文件；publish job 把 `.sig` 一并上传到 Release。
+6. **产出 `latest.json`**：publish job 在创建 Release 后，按 Tauri updater 格式生成 `latest.json`（含 `version`、`notes`、`pub_date`、`platforms.windows-x86_64.url` / `platforms.windows-aarch64.url` 与对应签名），作为 Release asset 上传；它是用户端 `Updater.check()` 拉取的清单。
+7. **前端调用**：在设置页加「检查更新」按钮，调用 `tauri-plugin-updater` 的 `check()` → 发现新版本 → `downloadAndInstall()` → 重启。
+8. **验证**：先发一个 RC tag，确认 Release 上有两个 `.exe` + 两个 `.sig` + `latest.json` + `SHA256SUMS.txt`，旧版应用能在 20s 内检测到新版本。
+
+> 再次强调：`TAURI_SIGNING_PRIVATE_KEY*`（updater 签名）与 §9 的 `CERTIFICATE_BASE64`（Authenticode 代码签名）是两套密钥，前者用于「更新包是否被篡改」，后者用于「安装包是否被 Windows 信任」。
