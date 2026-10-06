@@ -99,6 +99,20 @@ export const PagePatchSchema = z
   .refine((p) => Object.keys(p).length > 0, 'set-page patch 不能为空');
 export type PagePatch = z.infer<typeof PagePatchSchema>;
 
+// ---- 寄存器型数组字段的并集 op（tags / edge.points / page.pageBreaks）----
+// 与「整体值 LWW」不同：并发加不同项取并集，删除走墓碑（regMeta.removes）。
+// items 携带完整元素（tags 为 string；pageBreaks 为 {at,id,x,y}；points 为 {x,y}），
+// 合并引擎按元素身份 key 去重 / 复活判定；keys 为 reg-remove 要删的身份 key。
+export const RegOpSchema = z.object({
+  kind: z.enum(['reg-add', 'reg-remove']),
+  entity: z.enum(['node', 'edge', 'page']),
+  // page 级寄存器（pageBreaks）固定为 'page'。
+  entityId: z.string(),
+  field: z.enum(['tags', 'points', 'pageBreaks']),
+  items: z.array(z.unknown()).optional(),
+  keys: z.array(z.string()).optional(),
+});
+
 // ---- 操作判别联合 ----
 export const CollabOpSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('add-node'), node: BlockNodeSchema }),
@@ -116,6 +130,7 @@ export const CollabOpSchema = z.discriminatedUnion('kind', [
   }),
   z.object({ kind: z.literal('set-doc-meta'), patch: DocMetaPatchSchema }),
   z.object({ kind: z.literal('set-page'), patch: PagePatchSchema }),
+  RegOpSchema,
 ]);
 
 export type CollabOp = z.infer<typeof CollabOpSchema>;

@@ -218,6 +218,9 @@ const WHITELIST = new Set([
   'emptyTrash',
   'addManualPageBreak',
   'removePageBreak',
+  // Wave14 D：寄存器并集 e2e 直接驱动打标签。
+  'addTagToNode',
+  'removeTagFromNode',
 ]);
 
 export function installDevHooks(): void {

@@ -1,5 +1,6 @@
 import type { BlockNode, Edge } from '../model/index.js';
-import type { CollabState, EntityMeta } from './state.js';
+import type { CollabState, EntityMeta, RegisterMeta } from './state.js';
+import { regKey } from './state.js';
 import type { OpEnvelope } from './envelope.js';
 import type { ClientId } from './identity.js';
 import type { EventMarker } from './clock.js';
@@ -201,6 +202,152 @@ function canRevive(marker: EventMarker, tomb: { lamport: number }): boolean {
   return marker.lamport > tomb.lamport;
 }
 
+// ---------------- 寄存器并集（tags / points / pageBreaks）----------------
+
+type RegField = 'tags' | 'points' | 'pageBreaks';
+
+/** 寄存器元素的身份 key（同 key 视为同一元素）。 */
+function regItemKey(field: RegField, item: unknown): string {
+  if (field === 'tags') return `t:${String(item)}`;
+  if (field === 'pageBreaks') {
+    const b = item as { id?: string; at?: number };
+    return b.id ? `b:${b.id}` : `b:${b.at}`;
+  }
+  const p = item as { x: number; y: number };
+  return `p:${Math.round(p.x)},${Math.round(p.y)}`;
+}
+
+/** 读取 doc 上某寄存器当前数组（只读）。 */
+function readRegArray(
+  doc: CollabState['doc'],
+  entity: 'node' | 'edge' | 'page',
+  entityId: string,
+  field: RegField,
+): unknown[] | undefined {
+  if (entity === 'node') {
+    const n = doc.nodes.find((x) => x.id === entityId);
+    if (!n) return undefined;
+    return field === 'tags' ? (n.tags as unknown[]) : undefined;
+  }
+  if (entity === 'edge') {
+    const e = doc.edges.find((x) => x.id === entityId);
+    if (!e) return undefined;
+    return field === 'points' ? (e.points as unknown[] | undefined) : undefined;
+  }
+  return field === 'pageBreaks' ? (doc.page.pageBreaks as unknown[]) : undefined;
+}
+
+/** 把新数组写回 doc（不可变更新）。返回新 doc。 */
+function writeRegArray(
+  doc: CollabState['doc'],
+  entity: 'node' | 'edge' | 'page',
+  entityId: string,
+  arr: unknown[],
+): CollabState['doc'] {
+  if (entity === 'node') {
+    return {
+      ...doc,
+      nodes: doc.nodes.map((n) =>
+        n.id === entityId ? ({ ...n, tags: arr as string[] } as BlockNode) : n,
+      ),
+    };
+  }
+  if (entity === 'edge') {
+    return {
+      ...doc,
+      edges: doc.edges.map((e) =>
+        e.id === entityId ? ({ ...e, points: arr as Edge['points'] }) : e,
+      ),
+    };
+  }
+  return { ...doc, page: { ...doc.page, pageBreaks: arr as typeof doc.page.pageBreaks } };
+}
+
+function emptyRegMeta(): RegisterMeta {
+  return { adds: {}, removes: {} };
+}
+
+/**
+ * 应用 reg-add：把 items 并入 doc 数组；被墓碑压住的旧 add 不复活。
+ * 返回 { doc, regMeta, changed }。
+ */
+function applyRegAdd(
+  doc: CollabState['doc'],
+  regMeta: Record<string, RegisterMeta>,
+  entity: 'node' | 'edge' | 'page',
+  entityId: string,
+  field: RegField,
+  items: unknown[],
+  marker: EventMarker,
+): { doc: CollabState['doc']; regMeta: Record<string, RegisterMeta>; changed: boolean } {
+  const key = regKey(entity, entityId, field);
+  const meta: RegisterMeta = regMeta[key]
+    ? { adds: { ...regMeta[key]!.adds }, removes: { ...regMeta[key]!.removes } }
+    : emptyRegMeta();
+  // 复制一份再改：doc 经 zustand immer 中间件冻结，不能 push 原数组。
+  const cur = [...(readRegArray(doc, entity, entityId, field) ?? [])];
+  const present = new Set(cur.map((it) => regItemKey(field, it)));
+  let changed = false;
+  for (const item of items) {
+    const k = regItemKey(field, item);
+    const tomb = meta.removes[k];
+    if (tomb && !canRevive(marker, tomb)) continue; // 删除优先：旧 add 不复活
+    meta.adds[k] = { lamport: marker.lamport, clientId: marker.clientId };
+    delete meta.removes[k];
+    if (!present.has(k)) {
+      cur.push(item);
+      present.add(k);
+      changed = true;
+    }
+  }
+  const nextReg = { ...regMeta, [key]: meta };
+  return { doc: changed ? writeRegArray(doc, entity, entityId, cur) : doc, regMeta: nextReg, changed };
+}
+
+/**
+ * 应用 reg-remove：按身份 key 删除数组元素并打墓碑。
+ */
+function applyRegRemove(
+  doc: CollabState['doc'],
+  regMeta: Record<string, RegisterMeta>,
+  entity: 'node' | 'edge' | 'page',
+  entityId: string,
+  field: RegField,
+  keys: string[],
+  marker: EventMarker,
+): { doc: CollabState['doc']; regMeta: Record<string, RegisterMeta>; changed: boolean } {
+  const key = regKey(entity, entityId, field);
+  const meta: RegisterMeta = regMeta[key]
+    ? { adds: { ...regMeta[key]!.adds }, removes: { ...regMeta[key]!.removes } }
+    : emptyRegMeta();
+  const removeSet = new Set(keys);
+  for (const k of keys) meta.removes[k] = { lamport: marker.lamport, clientId: marker.clientId };
+  const cur = readRegArray(doc, entity, entityId, field) ?? [];
+  const kept = cur.filter((it) => !removeSet.has(regItemKey(field, it)));
+  const changed = kept.length !== cur.length;
+  const nextReg = { ...regMeta, [key]: meta };
+  return { doc: changed ? writeRegArray(doc, entity, entityId, kept) : doc, regMeta: nextReg, changed };
+}
+
+/** 为新建实体播种寄存器 adds（add-node/add-edge 用）：当前数组元素视为 marker 时刻加入。 */
+function seedRegAdds(
+  regMeta: Record<string, RegisterMeta>,
+  doc: CollabState['doc'],
+  entity: 'node' | 'edge' | 'page',
+  entityId: string,
+  field: RegField,
+  marker: EventMarker,
+): Record<string, RegisterMeta> {
+  const arr = readRegArray(doc, entity, entityId, field);
+  if (!arr || arr.length === 0) return regMeta;
+  const key = regKey(entity, entityId, field);
+  const meta: RegisterMeta = regMeta[key] ? { ...regMeta[key]!, adds: { ...regMeta[key]!.adds }, removes: { ...regMeta[key]!.removes } } : emptyRegMeta();
+  for (const item of arr) {
+    meta.adds[regItemKey(field, item)] = { lamport: marker.lamport, clientId: marker.clientId };
+  }
+  return { ...regMeta, [key]: meta };
+}
+
 /**
  * 主入口：应用一条 op 信封。纯函数，返回新状态与冲突列表。
  * @throws 仅当 env.docId 与 state.docId 不一致（路由 bug，B 端应在分发前拦截）。
@@ -225,6 +372,7 @@ export function applyOp(state: CollabState, env: OpEnvelope): ApplyResult {
   const edgeMeta = { ...state.edgeMeta };
   const docFields = { ...state.docFields };
   const pageFields = { ...state.pageFields };
+  let regMeta = { ...state.regMeta };
   const conflicts: CollabConflict[] = [];
   let changed = true;
 
@@ -238,7 +386,7 @@ export function applyOp(state: CollabState, env: OpEnvelope): ApplyResult {
       const meta = nodeMeta[node.id] ? { ...nodeMeta[node.id]! } : freshMeta();
       if (existing) {
         if (meta.tombstone && !canRevive(marker, meta.tombstone)) {
-          return { state: withBookkeeping(state, vv, doc, nodeMeta, edgeMeta, docFields, pageFields, env), outcome: 'suppressed-tombstone', conflicts: [] };
+          return { state: withBookkeeping(state, vv, doc, nodeMeta, edgeMeta, docFields, pageFields, regMeta, env), outcome: 'suppressed-tombstone', conflicts: [] };
         }
         // 复活或已存在：替换节点本体 + 重置字段时钟
         meta.tombstone = null;
@@ -249,13 +397,14 @@ export function applyOp(state: CollabState, env: OpEnvelope): ApplyResult {
       } else {
         // 节点已被移除：仍要检查墓碑——同/旧 lamport 的重建不复活（删除优先）。
         if (meta.tombstone && !canRevive(marker, meta.tombstone)) {
-          return { state: withBookkeeping(state, vv, doc, nodeMeta, edgeMeta, docFields, pageFields, env), outcome: 'suppressed-tombstone', conflicts: [] };
+          return { state: withBookkeeping(state, vv, doc, nodeMeta, edgeMeta, docFields, pageFields, regMeta, env), outcome: 'suppressed-tombstone', conflicts: [] };
         }
         meta.tombstone = null;
         seedNodeFields(meta, node, marker);
         nodeMeta[node.id] = meta;
         doc = { ...doc, nodes: [...doc.nodes, node] };
       }
+      regMeta = seedRegAdds(regMeta, doc, 'node', node.id, 'tags', marker);
       break;
     }
 
@@ -286,14 +435,14 @@ export function applyOp(state: CollabState, env: OpEnvelope): ApplyResult {
       if (!node) {
         const meta = nodeMeta[op.nodeId];
         if (meta?.tombstone) {
-          return { state: withBookkeeping(state, vv, doc, nodeMeta, edgeMeta, docFields, pageFields, env), outcome: 'suppressed-tombstone', conflicts: [] };
+          return { state: withBookkeeping(state, vv, doc, nodeMeta, edgeMeta, docFields, pageFields, regMeta, env), outcome: 'suppressed-tombstone', conflicts: [] };
         }
         changed = false; // 未知节点：记 opId 防重放，doc 不变
         break;
       }
       const meta = nodeMeta[node.id] ? { ...nodeMeta[node.id]! } : freshMeta();
       if (meta.tombstone) {
-        return { state: withBookkeeping(state, vv, doc, nodeMeta, edgeMeta, docFields, pageFields, env), outcome: 'suppressed-tombstone', conflicts: [] };
+        return { state: withBookkeeping(state, vv, doc, nodeMeta, edgeMeta, docFields, pageFields, regMeta, env), outcome: 'suppressed-tombstone', conflicts: [] };
       }
       const next = applyNodeFields(node, op.patch, marker, meta, conflicts);
       nodeMeta[node.id] = meta;
@@ -307,7 +456,7 @@ export function applyOp(state: CollabState, env: OpEnvelope): ApplyResult {
       const meta = edgeMeta[edge.id] ? { ...edgeMeta[edge.id]! } : freshMeta();
       if (existing) {
         if (meta.tombstone && !canRevive(marker, meta.tombstone)) {
-          return { state: withBookkeeping(state, vv, doc, nodeMeta, edgeMeta, docFields, pageFields, env), outcome: 'suppressed-tombstone', conflicts: [] };
+          return { state: withBookkeeping(state, vv, doc, nodeMeta, edgeMeta, docFields, pageFields, regMeta, env), outcome: 'suppressed-tombstone', conflicts: [] };
         }
         meta.tombstone = null;
         meta.fields = {};
@@ -316,12 +465,13 @@ export function applyOp(state: CollabState, env: OpEnvelope): ApplyResult {
         doc = { ...doc, edges: doc.edges.map((e) => (e.id === edge.id ? edge : e)) };
       } else {
         if (meta.tombstone && !canRevive(marker, meta.tombstone)) {
-          return { state: withBookkeeping(state, vv, doc, nodeMeta, edgeMeta, docFields, pageFields, env), outcome: 'suppressed-tombstone', conflicts: [] };
+          return { state: withBookkeeping(state, vv, doc, nodeMeta, edgeMeta, docFields, pageFields, regMeta, env), outcome: 'suppressed-tombstone', conflicts: [] };
         }
         seedEdgeFields(meta, edge, marker);
         edgeMeta[edge.id] = meta;
         doc = { ...doc, edges: [...doc.edges, edge] };
       }
+      regMeta = seedRegAdds(regMeta, doc, 'edge', edge.id, 'points', marker);
       break;
     }
 
@@ -338,14 +488,14 @@ export function applyOp(state: CollabState, env: OpEnvelope): ApplyResult {
       if (!edge) {
         const meta = edgeMeta[op.edgeId];
         if (meta?.tombstone) {
-          return { state: withBookkeeping(state, vv, doc, nodeMeta, edgeMeta, docFields, pageFields, env), outcome: 'suppressed-tombstone', conflicts: [] };
+          return { state: withBookkeeping(state, vv, doc, nodeMeta, edgeMeta, docFields, pageFields, regMeta, env), outcome: 'suppressed-tombstone', conflicts: [] };
         }
         changed = false;
         break;
       }
       const meta = edgeMeta[edge.id] ? { ...edgeMeta[edge.id]! } : freshMeta();
       if (meta.tombstone) {
-        return { state: withBookkeeping(state, vv, doc, nodeMeta, edgeMeta, docFields, pageFields, env), outcome: 'suppressed-tombstone', conflicts: [] };
+        return { state: withBookkeeping(state, vv, doc, nodeMeta, edgeMeta, docFields, pageFields, regMeta, env), outcome: 'suppressed-tombstone', conflicts: [] };
       }
       const next = applyEdgeFields(edge, op.patch, marker, meta, conflicts);
       edgeMeta[edge.id] = meta;
@@ -427,9 +577,29 @@ export function applyOp(state: CollabState, env: OpEnvelope): ApplyResult {
       changed = any;
       break;
     }
+
+    case 'reg-add': {
+      const res = applyRegAdd(
+        doc, regMeta, op.entity, op.entityId, op.field as RegField, op.items ?? [], marker,
+      );
+      doc = res.doc;
+      regMeta = res.regMeta;
+      changed = res.changed;
+      break;
+    }
+
+    case 'reg-remove': {
+      const res = applyRegRemove(
+        doc, regMeta, op.entity, op.entityId, op.field as RegField, op.keys ?? [], marker,
+      );
+      doc = res.doc;
+      regMeta = res.regMeta;
+      changed = res.changed;
+      break;
+    }
   }
 
-  const nextState = withBookkeeping(state, vv, doc, nodeMeta, edgeMeta, docFields, pageFields, env);
+  const nextState = withBookkeeping(state, vv, doc, nodeMeta, edgeMeta, docFields, pageFields, regMeta, env);
   return { state: nextState, outcome: changed ? 'applied' : 'no-op', conflicts };
 }
 
@@ -442,6 +612,7 @@ function withBookkeeping(
   edgeMeta: CollabState['edgeMeta'],
   docFields: CollabState['docFields'],
   pageFields: CollabState['pageFields'],
+  regMeta: CollabState['regMeta'],
   env: OpEnvelope,
 ): CollabState {
   return {
@@ -452,6 +623,7 @@ function withBookkeeping(
     edgeMeta,
     docFields,
     pageFields,
+    regMeta,
     appliedOpIds: [...state.appliedOpIds, env.opId],
     log: [...state.log, env],
   };

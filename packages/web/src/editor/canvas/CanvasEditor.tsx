@@ -33,6 +33,7 @@ import { insertBendPoint, type EdgeEnd } from '../edges/edge-geometry';
 import { ConflictDialog } from '../ui/ConflictDialog';
 import { toast } from '../ui/toast';
 import { setActiveBendAnchor } from '../edges/bend-active';
+import { PaneContextMenu, type PaneContextMenuProps } from './PaneContextMenu';
 import { MousePointer2, Spline, Hand } from 'lucide-react';
 
 /** 折叠节点的后代集合（折叠后映射给 React Flow 时剔除）。 */
@@ -80,6 +81,8 @@ function CanvasInner({ api }: { api: EditorApi }) {
   const rafRef = useRef<number>(0);
   const coarse = useCoarsePointer();
   const [dragOver, setDragOver] = useState(false);
+  // 【Wave14 D】空白处上下文菜单：鼠标右键 / 触屏长按共用这一个受控菜单。
+  const [menu, setMenu] = useState<{ x: number; y: number; flowX: number; flowY: number } | null>(null);
 
   // 桌面端文件拖入画布建块（§P2）
   const onDrop = async (e: React.DragEvent) => {
@@ -392,30 +395,107 @@ function CanvasInner({ api }: { api: EditorApi }) {
       const id = api.addNode('text', pos.x - 110, pos.y - 30);
       api.setEditingNode(id);
     };
-    const onCtx = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      // 边浮层（EdgeLabelRenderer：锚点/中点/菜单/色板）上的右键不触发「在此新建块」。
-      if (target.closest('.react-flow__edgelabel-renderer')) return;
-      if (!target.closest('.react-flow__pane')) return;
-      e.preventDefault();
-      const pos = rf.screenToFlowPosition({ x: e.clientX, y: e.clientY });
-      // 分页预览模式下右键 = 在此插入手动分页符。
-      if (snap.doc.page.showPageBreak) {
-        api.addManualPageBreak('pb_' + Math.random().toString(36).slice(2, 8), pos.x, pos.y);
-        return;
-      }
-      if (window.confirm('在此新建块？确定 = 新建文本块，取消 = 不操作')) {
-        const id = api.addNode('text', pos.x - 110, pos.y - 30);
-        api.setEditingNode(id);
-      }
-    };
     el.addEventListener('dblclick', onDbl, true);
+
+    // 【Wave14 D】空白处上下文菜单：鼠标 contextmenu 与触屏 longpress 共用同一菜单。
+    // target 判定与原 onCtx 一致：边浮层 / 节点 / 非 pane 不弹空白菜单。
+    const isBlankPaneTarget = (target: EventTarget | null): boolean => {
+      const t = target as HTMLElement | null;
+      if (!t || !t.closest) return false;
+      if (t.closest('.react-flow__node')) return false;
+      if (t.closest('.react-flow__edgelabel-renderer')) return false;
+      if (t.closest('.react-flow__edge')) return false;
+      if (t.closest('[data-testid^="edge-bend"]')) return false;
+      if (!t.closest('.react-flow__pane')) return false;
+      return true;
+    };
+
+    const openPaneMenuAt = (clientX: number, clientY: number) => {
+      const pos = rf.screenToFlowPosition({ x: clientX, y: clientY });
+      setMenu({ x: clientX, y: clientY, flowX: pos.x, flowY: pos.y });
+    };
+
+    const onCtx = (e: MouseEvent) => {
+      if (!isBlankPaneTarget(e.target)) return;
+      e.preventDefault();
+      openPaneMenuAt(e.clientX, e.clientY);
+    };
     el.addEventListener('contextmenu', onCtx, true);
+
+    // ---- 触屏长按空白 → 同一菜单（粗指针 PointerType=touch）----
+    // 自包含手势：pointerdown(touch) 起 500ms 定时器；移动 >8px 取消（退化为平移）；
+    // 静止到点且 target 为空白 pane → vibrate(15) + 弹菜单。与 ConnectHandle 同时序/同反馈。
+    let lpTimer: ReturnType<typeof setTimeout> | null = null;
+    let lpStart: { x: number; y: number; cx: number; cy: number } | null = null;
+    let lpFired = false;
+    const LONGPRESS_MS = 500;
+    const MOVE_SLOP = 8;
+
+    const cancelLongPress = () => {
+      if (lpTimer) clearTimeout(lpTimer);
+      lpTimer = null;
+      lpStart = null;
+    };
+
+    const onLpDown = (e: PointerEvent) => {
+      if (e.pointerType !== 'touch') return;
+      if (!isBlankPaneTarget(e.target)) return; // 块/连接点/边/浮层长按不归这里
+      lpFired = false;
+      lpStart = { x: e.clientX, y: e.clientY, cx: e.clientX, cy: e.clientY };
+      lpTimer = setTimeout(() => {
+        lpTimer = null;
+        lpFired = true;
+        if (typeof navigator !== 'undefined' && navigator.vibrate) navigator.vibrate(15);
+        openPaneMenuAt(lpStart!.cx, lpStart!.cy);
+      }, LONGPRESS_MS);
+    };
+    const onLpMove = (e: PointerEvent) => {
+      if (!lpStart || lpFired) return;
+      if (Math.hypot(e.clientX - lpStart.x, e.clientY - lpStart.y) > MOVE_SLOP) cancelLongPress();
+    };
+    const onLpUp = () => {
+      // 长按后抬起：不触发平移/点击（菜单已开；RF 无位移不 pan）。
+      cancelLongPress();
+    };
+    el.addEventListener('pointerdown', onLpDown, true);
+    window.addEventListener('pointermove', onLpMove, { passive: true });
+    window.addEventListener('pointerup', onLpUp, true);
+    window.addEventListener('pointercancel', onLpUp, true);
+
     return () => {
       el.removeEventListener('dblclick', onDbl, true);
       el.removeEventListener('contextmenu', onCtx, true);
+      cancelLongPress();
+      el.removeEventListener('pointerdown', onLpDown, true);
+      window.removeEventListener('pointermove', onLpMove);
+      window.removeEventListener('pointerup', onLpUp, true);
+      window.removeEventListener('pointercancel', onLpUp, true);
     };
   }, [api, rf, snap.doc.page.showPageBreak]);
+
+  // 菜单项动作（鼠标右键 / 触屏长按共用）。
+  const menuActions: Omit<PaneContextMenuProps, 'x' | 'y' | 'pageBreakMode'> | null = menu
+    ? {
+        onNewBlock: () => {
+          const id = api.addNode('text', menu.flowX - 110, menu.flowY - 30);
+          api.setEditingNode(id);
+          setMenu(null);
+        },
+        onPaste: () => {
+          api.paste();
+          setMenu(null);
+        },
+        onFit: () => {
+          rf.fitView({ duration: 200 });
+          setMenu(null);
+        },
+        onInsertPageBreak: () => {
+          api.addManualPageBreak('pb_' + Math.random().toString(36).slice(2, 8), menu.flowX, menu.flowY);
+          setMenu(null);
+        },
+        onClose: () => setMenu(null),
+      }
+    : null;
 
   return (
     <div
@@ -549,6 +629,15 @@ function CanvasInner({ api }: { api: EditorApi }) {
       </ReactFlow>
 
       <ConflictDialog />
+
+      {menu && menuActions && (
+        <PaneContextMenu
+          x={menu.x}
+          y={menu.y}
+          pageBreakMode={snap.doc.page.showPageBreak}
+          {...menuActions}
+        />
+      )}
     </div>
   );
 }

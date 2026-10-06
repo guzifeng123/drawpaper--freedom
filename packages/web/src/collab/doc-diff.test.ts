@@ -111,16 +111,18 @@ describe('diffDocOps 本地差量 → CollabOp', () => {
     expect(parentOp.patch.parentId).toBe('p2');
   });
 
-  it('边改 label/color/points → update-edge', () => {
+  it('边改 label/color → update-edge；points 走寄存器并集 reg-add', () => {
     const prev = doc([], [edge({ id: 'e1', source: 'a', target: 'b' })]);
     const next = doc([], [edge({ id: 'e1', source: 'a', target: 'b', label: '父子', style: { color: '#ef4444' }, points: [{ x: 1, y: 2 }] })]);
     const ops = diffDocOps(prev, next);
-    expect(ops).toHaveLength(1);
-    expect(ops[0]).toMatchObject({
+    const update = ops.find((o) => o.kind === 'update-edge');
+    expect(update).toMatchObject({
       kind: 'update-edge',
       edgeId: 'e1',
-      patch: { label: '父子', color: '#ef4444', points: [{ x: 1, y: 2 }] },
+      patch: { label: '父子', color: '#ef4444' },
     });
+    const regAdd = ops.find((o) => o.kind === 'reg-add' && o.field === 'points');
+    expect(regAdd).toMatchObject({ kind: 'reg-add', entity: 'edge', entityId: 'e1', field: 'points', items: [{ x: 1, y: 2 }] });
   });
 
   it('改标题 → set-doc-meta；改页面方向 → set-page', () => {

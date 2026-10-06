@@ -8,3 +8,4 @@ export * from './merge.js';
 export * from './conflicts.js';
 export * from './snapshot.js';
 export * from './commands.js';
+export * from './persist.js';
