@@ -20,6 +20,9 @@ import { AiPanel } from '@/ai/AiPanel';
 import { setDocRefClickHandler, installDocRefClickDelegate, setDanglingTargets, applyDanglingClasses, docRefTargetKey } from '@/editor/tiptap/doc-ref-mark';
 import { OverviewCanvas } from '@/overview/OverviewCanvas';
 import { DexieOverviewProvider } from '@/overview/DexieOverviewProvider';
+import { CollabBanner } from '@/collab/CollabBanner';
+import { PresenceAvatars } from '@/collab/PresenceAvatars';
+import { RemoteSelectionOverlay } from '@/collab/RemoteSelectionOverlay';
 import { db } from '@/storage/db';
 import { findDanglingLinks } from '@drawpaper/core';
 import { syncBacklinkTitles } from '@/storage/link-writes';
@@ -209,6 +212,10 @@ export default function App() {
       )}
 
       {/* 面板层 */}
+      {/* 同浏览器多标签协作：冲突横幅 / 在线点 / 远端选区装饰 */}
+      <CollabBanner />
+      <PresenceAvatars />
+      <RemoteSelectionOverlay />
       <TopToolbar api={panelsApi} />
       <DocsListPanel api={panelsApi} />
       <SearchPanel api={panelsApi} />

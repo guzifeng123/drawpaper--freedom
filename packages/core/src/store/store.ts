@@ -393,6 +393,13 @@ export interface EditorActions {
   importKBNoteText(json: string): void;
   /** 触发一次立即落盘（不等防抖窗口）。 */
   requestSave(): void;
+  /**
+   * Wave9 协作：把「远端合并后的 doc」作为新基线直接落库。
+   * 不进 undo 栈——重置命令栈基线为新 doc（远端 op 不可撤销，本地 undo 基线随之重置，
+   * 这是同浏览器多标签协作的有意取舍：远端合并后本地撤销栈整体作废，见 collab-multitab.md）。
+   * 供 web CollabManager 在 applyOp/applySnapshot 收敛后调用。
+   */
+  applyRemoteDoc(doc: KBNoteDoc): void;
   /** flyTo：仅记录 viewport 目标，web 动画消费。 */
   flyToNode(nodeId: string): void;
 
@@ -1740,6 +1747,17 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
         },
         requestSave: () => {
           void flushSave();
+        },
+        applyRemoteDoc: (doc) => {
+          // 远端合并结果作为新基线：重置命令栈（远端 op 不进 undo），落盘。
+          stack = createCommandStack(doc, { now, coalesceWindowMs: 800 });
+          snapshotDirty = true;
+          set((d) => {
+            d.doc = doc;
+            d.dirty = true;
+          });
+          syncUndoFlags();
+          scheduleAutosave();
         },
         flyToNode: (nodeId) => {
           focusNonce += 1;

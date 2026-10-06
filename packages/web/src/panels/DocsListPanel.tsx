@@ -6,6 +6,7 @@ import { ConfirmDialog } from '@/components/ui/alert-dialog';
 import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import type { PanelsApi, DocMeta } from './panels-api';
+import { useCollabUi } from '@/collab/collab-ui-store';
 
 /** 友好相对时间（"刚刚 / n 分钟前 / n 小时前 / MM-DD"）。 */
 function friendlyTime(ts: number): string {
@@ -33,6 +34,8 @@ function DocRow({
   const [confirmOpen, setConfirmOpen] = React.useState(false);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const [impact, setImpact] = React.useState<{ count: number; samples: string[] } | null>(null);
+  const openedMap = useCollabUi((s) => s.docsOpenedElsewhere);
+  const openedElsewhere = openedMap[doc.id] ?? [];
 
   React.useEffect(() => {
     if (editing) requestAnimationFrame(() => inputRef.current?.select());
@@ -76,9 +79,29 @@ function DocRow({
           className="flex-1 truncate text-left"
           onClick={() => api.openDoc(doc.id)}
           onDoubleClick={() => setEditing(true)}
-          title={`${doc.title} · ${friendlyTime(doc.updatedAt)}更新`}
+          title={
+            openedElsewhere.length > 0
+              ? `${doc.title} · 已在其他 ${openedElsewhere.length} 个标签打开（协作中，无强制锁）`
+              : `${doc.title} · ${friendlyTime(doc.updatedAt)}更新`
+          }
         >
-          <span className="block truncate">{doc.title}</span>
+          <span className="flex items-center gap-1 truncate">
+            {doc.title}
+            {openedElsewhere.length > 0 ? (
+              <span
+                data-testid="doc-open-elsewhere"
+                title={`已在其他标签打开：${openedElsewhere.map((p) => p.name).join('、')}`}
+                className="inline-flex items-center gap-0.5 rounded-full px-1 text-[9px] text-muted-foreground"
+                style={{ boxShadow: `inset 0 0 0 1px ${openedElsewhere[0]!.color}` }}
+              >
+                <span
+                  className="h-1.5 w-1.5 rounded-full"
+                  style={{ background: openedElsewhere[0]!.color }}
+                />
+                他标签打开
+              </span>
+            ) : null}
+          </span>
           <span className="block text-[10px] text-muted-foreground">{friendlyTime(doc.updatedAt)}</span>
         </button>
       )}
