@@ -117,14 +117,31 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $targetRoot = 'apps/desktop-tauri/src-tauri/target'
-          Write-Host "::group::Scan $targetRoot for index-*.js"
-          $files = Get-ChildItem -Path $targetRoot -Recurse -Filter 'index-*.js' -File -ErrorAction SilentlyContinue
+          # Search both the raw frontend build output (packages/web/dist,
+          # produced by `pnpm -r build` in the previous step) and the Tauri
+          # target tree (where tauri copies the bundle for packaging). The
+          # actual copy location differs between the default x64 target dir
+          # and the aarch64-pc-windows-msvc cross target, so cast a wide net.
+          $roots = @(
+            'packages/web/dist',
+            'apps/desktop-tauri/src-tauri/target'
+          )
+          Write-Host "::group::Scanning roots for index-*.js"
+          $files = @()
+          foreach ($r in $roots) {
+            if (Test-Path $r) {
+              $found = Get-ChildItem -Path $r -Recurse -Filter 'index-*.js' -File -ErrorAction SilentlyContinue
+              if ($found) { $files += $found }
+              Write-Host "  scanned: $r"
+            } else {
+              Write-Host "  (missing root, skipped): $r"
+            }
+          }
           if (-not $files) {
-            Write-Error "Smoke FAIL: no index-*.js found under $targetRoot (packaged web bundle may be missing)"
+            Write-Error "Smoke FAIL: no index-*.js found under any of: $($roots -join ', ') (packaged web bundle may be missing)"
           }
           $newest = $files | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-          Write-Host ("Found {0} index-*.js file(s); newest:" -f $files.Count)
+          Write-Host ("Found {0} index-*.js file(s):" -f $files.Count)
           $files | ForEach-Object { Write-Host ("  - {0}  ({1:o})" -f $_.FullName, $_.LastWriteTimeUtc) }
           $ageMin = (New-TimeSpan -Start $newest.LastWriteTimeUtc -End (Get-Date).ToUniversalTime()).TotalMinutes
           Write-Host ("Newest index-*.js age = {0:N1} min" -f $ageMin)
@@ -159,14 +176,31 @@ jobs:
           Write-Host "Installer exit code = $($p.ExitCode)"
           if ($p.ExitCode -ne 0) { Write-Error "Smoke FAIL: silent installer exited $($p.ExitCode)" }
 
-          # 4) Discover install dir (expected %LOCALAPPDATA%\drawpaper).
-          $installDir = Get-ChildItem $env:LOCALAPPDATA -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-          if (-not $installDir) {
-            Write-Error 'Smoke FAIL: install dir %LOCALAPPDATA%\drawpaper not found after silent install'
+          # 4) Discover install dir. Tauri 2 NSIS currentUser installs by
+          #    default to %LOCALAPPDATA%\Programs\<productName>; tolerate the
+          #    older %LOCALAPPDATA%\drawpaper layout as a fallback, and do a
+          #    generic Programs\ child-dir discovery as a last resort.
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'drawpaper')
+          )
+          $installDir = $null
+          foreach ($c in $candidates) {
+            Write-Host "  candidate: $c => exists=$(Test-Path $c)"
+            if (Test-Path $c) { $installDir = $c; break }
           }
-          $installDir = $installDir.FullName
-          Write-Host "Install dir = $installDir"
+          if (-not $installDir) {
+            $hit = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($hit) { $installDir = $hit.FullName }
+          }
+          if (-not $installDir) {
+            Write-Host "::group::Leftover dirs under %LOCALAPPDATA% (drawpaper* / Programs)"
+            Get-ChildItem $env:LOCALAPPDATA -Filter 'drawpaper*' -Directory -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
+            Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Filter 'drawpaper*' -Directory -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
+            Write-Host "::endgroup::"
+            Write-Error 'Smoke FAIL: install dir not found after silent install (tried Programs\drawpaper and %LOCALAPPDATA%\drawpaper)'
+          }
+          Write-Host "Install dir (matched) = $installDir"
 
           # 5) Locate drawpaper.exe.
           $exe = Join-Path $installDir 'drawpaper.exe'
@@ -210,63 +244,100 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $installDir = Get-ChildItem $env:LOCALAPPDATA -Filter 'drawpaper' -Directory |
-            Select-Object -First 1 -ExpandProperty FullName
+          # Resolve install dir the same way the install step does.
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'drawpaper')
+          )
+          $installDir = $null
+          foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
+          if (-not $installDir) {
+            $hit = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($hit) { $installDir = $hit.FullName }
+          }
+          if (-not $installDir) { Write-Error 'Smoke FAIL: install dir not found at launch time' }
           $exe = Join-Path $installDir 'drawpaper.exe'
           if (-not (Test-Path $exe)) { $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName }
           Write-Host "Launching $exe"
           $proc = Start-Process -FilePath $exe -PassThru
           Write-Host ("Start-Process returned pid={0}" -f $proc.Id)
           $ok = $false
+          # WebView2 main window title can lag several seconds behind process
+          # start; poll up to 20s, Refresh() each sample so MainWindowTitle is
+          # re-read live, and accept ANY sample whose title contains drawpaper.
           for ($i = 1; $i -le 20; $i++) {
             Start-Sleep -Seconds 1
             $p = Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Select-Object -First 1
             if ($p) {
-              $title = $p.MainWindowTitle
-              Write-Host ("t={0,2}s pid={1} MainWindowTitle='{2}'" -f $i, $p.Id, $title)
-              if ($title -and ($title.ToLower().Contains('drawpaper'))) {
-                $ok = $true
-                Write-Host "Smoke OK: process alive and main window title contains 'drawpaper'"
-                Stop-Process -Id $p.Id -Force
-                break
+              for ($s = 1; $s -le 3; $s++) {
+                $p.Refresh()
+                $title = $p.MainWindowTitle
+                Write-Host ("t={0,2}s sample={1} pid={2} MainWindowTitle='{3}'" -f $i, $s, $p.Id, $title)
+                if ($title -and ($title.ToLower().Contains('drawpaper'))) {
+                  $ok = $true
+                  break
+                }
+                Start-Sleep -Milliseconds 300
               }
             } else {
               Write-Host ("t={0,2}s: drawpaper process not found yet" -f $i)
             }
+            if ($ok) { break }
           }
           # Best-effort cleanup of any leftover drawpaper processes.
           Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
           if (-not $ok) {
             Write-Error 'Smoke FAIL: drawpaper process did not present a main window whose title contains "drawpaper" within 20s'
           }
+          Write-Host "Smoke OK: process alive and main window title contains 'drawpaper'"
 
       - name: 'Smoke (x64): silent uninstall, install dir removed'
         if: matrix.arch == 'x64'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $installDir = Get-ChildItem $env:LOCALAPPDATA -Filter 'drawpaper' -Directory |
-            Select-Object -First 1 -ExpandProperty FullName
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'drawpaper')
+          )
+          $installDir = $null
+          foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
+          if (-not $installDir) {
+            $hit = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($hit) { $installDir = $hit.FullName }
+          }
           if (-not $installDir) {
             Write-Host "Install dir already absent; nothing to uninstall"
             exit 0
           }
           Write-Host "Install dir = $installDir"
-          $uninst = Get-ChildItem $installDir -Filter 'Uninstall*.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $uninst) { $uninst = Get-ChildItem $installDir -Filter 'uninstall*.exe' -File | Select-Object -First 1 }
-          if (-not $uninst) { Write-Error "Smoke FAIL: uninstaller exe (Uninstall*.exe) not found in $installDir" }
+          # Tauri NSIS currentUser uninstaller is unins000.exe in the install dir.
+          $uninst = Get-ChildItem $installDir -Filter 'unins*.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $uninst) { $uninst = Get-ChildItem $installDir -Filter 'Uninstall*.exe' -File | Select-Object -First 1 }
+          if (-not $uninst) {
+            Write-Host "Entries under $installDir :"
+            Get-ChildItem $installDir -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
+            Write-Error "Smoke FAIL: uninstaller exe (unins*.exe / Uninstall*.exe) not found in $installDir"
+          }
           Write-Host "Uninstaller = $($uninst.FullName)"
-          $p = Start-Process -FilePath $uninst.FullName -ArgumentList '/S' -Wait -PassThru
-          Write-Host "Uninstaller exit code = $($p.ExitCode)"
+          # NSIS uninstaller accepts /S; some Tauri builds expect /SILENT.
+          # Try /SILENT first, fall back to /S, polling after each.
           $removed = $false
-          for ($i = 1; $i -le 20; $i++) {
-            Start-Sleep -Seconds 1
-            if (-not (Test-Path $installDir)) { $removed = $true; break }
+          foreach ($arg in @('/SILENT', '/S')) {
+            Write-Host "Running uninstaller with arg '$arg'"
+            $u = Start-Process -FilePath $uninst.FullName -ArgumentList $arg -Wait -PassThru
+            Write-Host "Uninstaller ($arg) exit code = $($u.ExitCode)"
+            for ($i = 1; $i -le 20; $i++) {
+              Start-Sleep -Seconds 1
+              if (-not (Test-Path $installDir)) { $removed = $true; break }
+            }
+            if ($removed) { break }
+            Write-Host "  dir still present after '$arg'; trying next arg..."
           }
           if (-not $removed) {
             Write-Host "Remaining files under $installDir :"
             Get-ChildItem $installDir -Recurse -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
-            Write-Error "Smoke FAIL: install dir still present 20s after silent uninstall"
+            Write-Error "Smoke FAIL: install dir still present 20s after silent uninstall (tried /SILENT and /S)"
           }
           Write-Host "Smoke OK: install dir removed after silent uninstall"
 

@@ -30,14 +30,19 @@
 
 ### 3.1 资源新鲜度断言（step 1，双架构都跑）
 
-- 路径：`apps/desktop-tauri/src-tauri/target` 下 `Get-ChildItem -Recurse -Filter 'index-*.js'`。
-- 为什么只查文件系统不跑 exe：这一步是架构无关的「打包资源里有没有最新前端产物」校验，arm64 交叉编译也会把前端 hash 化 JS 打进 bundle，所以两架构都能跑。
-- 新鲜度阈值 15 分钟：刚 `pnpm -r build` + `tauri build` 完，最新 `index-*.js` 应该就是这一轮产物；超过 15 分钟说明可能打到了缓存里的旧前端，直接判失败。
+- 搜索根：`packages/web/dist`（上一步 `pnpm -r build` 刚产出的前端 bundle）**和** `apps/desktop-tauri/src-tauri/target`（tauri 打包时拷贝资源的地方）。
+- 为什么两个根都搜：默认 x64 target 与 `aarch64-pc-windows-msvc` 交叉 target 把资源落在不同子目录；只搜 `target/` 在 arm64 job 上会找不到（首轮实跑 arm64 就在这步红了）。
+- 为什么只查文件系统不跑 exe：这一步是架构无关的「打包资源里有没有最新前端产物」校验，arm64 交叉编译也会产出 `index-*.js`，所以两架构都能跑。
+- 新鲜度阈值 15 分钟：刚 `pnpm -r build` + `tauri build` 完，最新 `index-*.js` 应该就是这一轮产物；超过 15 分钟说明可能打到了缓存里的旧前端，直接判失败。所有命中路径完整打进日志。
 
 ### 3.2 静默安装路径（step 2）
 
 - 安装命令：`Start-Process -FilePath $installer -ArgumentList '/S' -Wait -PassThru`，断言 `ExitCode -eq 0`。
-- `nsis.installMode` 由 A 路设为 `currentUser`，所以安装目录预期 `$env:LOCALAPPDATA\drawpaper`。脚本里再做一次目录发现兜底：`Get-ChildItem $env:LOCALAPPDATA -Filter drawpaper -Directory`，避免未来 installMode 微调导致硬编码路径失配。
+- `nsis.installMode` 由 A 路设为 `currentUser`，Tauri 2 NSIS currentUser **默认装到 `%LOCALAPPDATA%\Programs\drawpaper`**（首轮实跑误写成 `%LOCALAPPDATA%\drawpaper`，x64 job 在这步红了）。脚本对候选路径数组做探测：
+  1. `%LOCALAPPDATA%\Programs\drawpaper`
+  2. `%LOCALAPPDATA%\drawpaper`（旧布局兜底）
+  3. 再在 `%LOCALAPPDATA%\Programs` 下按 `drawpaper*` 泛发现一次。
+  命中哪条路径完整打进日志；都没命中则把 `%LOCALAPPDATA%` 下所有 `drawpaper*` 目录列出来辅助定位。
 - exe 名固定 `drawpaper.exe`；先直拼安装目录，找不到再递归一次兜底。
 
 ### 3.3 版本归一化比较（step 2，核心）
@@ -75,16 +80,15 @@ while ($got.Count -lt $max) { $got += 0 }
 
 ### 3.4 窗口存活断言（step 3）
 
-- `Start-Process $exe -PassThru` 后轮询最多 20 秒，每秒一次：
-  - `Get-Process -Name 'drawpaper'` 必须存在；
-  - 其 `MainWindowTitle`（转小写后）必须 `.Contains('drawpaper')`。
-- 命中即 `Stop-Process -Force`，并 best-effort 清掉残留 `drawpaper` 进程，避免污染同 job 后续步骤。
+- `Start-Process $exe -PassThru` 后轮询最多 20 秒，每秒一轮，每轮内对进程对象 `$p.Refresh()` 后采样 3 次（间隔 300ms）再读 `MainWindowTitle`——WebView2 首窗标题可能比进程晚数秒才出来。
+- 任一次采样 `MainWindowTitle`（小写后）`.Contains('drawpaper')` 即通过，随后 `Stop-Process -Force`，并 best-effort 清掉残留 `drawpaper` 进程，避免污染同 job 后续步骤。
 - windows-latest runner 带交互式桌面会话，Tauri/WebView2 窗口能起来；如果 20s 内窗口标题始终为空（启动崩溃 / WebView2 运行时缺失），step 失败。
 
 ### 3.5 卸载断言（step 4）
 
-- NSIS currentUser 卸载器在安装目录下，命名通常是 `Uninstall drawpaper.exe`。脚本用 `Uninstall*.exe` / `uninstall*.exe` 通配发现，避免空格命名写死。
-- `Start-Process -Wait -ArgumentList '/S'` 静默卸载，再轮询 20s 断言安装目录 `Test-Path` 为假。残留文件会列出来进日志，方便定位是哪个文件没被 NSIS 规则清理。
+- NSIS currentUser 卸载器在安装目录下，Tauri 生成的是 `unins000.exe`。脚本用 `unins*.exe` 通配发现（再兜底 `Uninstall*.exe`），避免空格命名写死。
+- 静默参数先试 `/SILENT`，轮询 20s 目录未删则换 `/S` 再试一轮（NSIS 原生 `/S`，部分 Tauri 构建吃 `/SILENT`）。
+- 卸载后轮询 20s 断言安装目录 `Test-Path` 为假。残留文件会列出来进日志，方便定位是哪个文件没被 NSIS 规则清理。
 
 ## 4. x64 / arm64 门控结论
 
