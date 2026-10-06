@@ -47,6 +47,10 @@ export function TodoBlock({ data, selected }: NodeProps<AppNode>) {
       renderStatic={() => (
         <div className="flex items-start gap-2 py-2.5">
           <button
+            type="button"
+            role="checkbox"
+            aria-checked={checked}
+            aria-label={checked ? '标记为未完成' : '标记为完成'}
             className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
               checked ? 'border-blue-500 bg-blue-500 text-white' : 'border-slate-300'
             }`}

@@ -10,7 +10,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
 import { Separator } from '@/components/ui/separator';
@@ -140,15 +139,25 @@ export function ExportDialog({
             ))}
           </div>
 
-          {/* 排版模式 tabs */}
+          {/* 排版模式：radio 组（不用 Radix Tabs——后者 aria-controls 指向未渲染的 TabsContent，axe 报错） */}
           <div>
-            <Tabs value={mode} onValueChange={(v) => setMode(v as PageMode)}>
-              <TabsList className="grid w-full grid-cols-3">
-                <TabsTrigger value="fit">Fit 一页</TabsTrigger>
-                <TabsTrigger value="tiles">Tiles 分页</TabsTrigger>
-                <TabsTrigger value="flow">Flow 重排</TabsTrigger>
-              </TabsList>
-            </Tabs>
+            <div role="radiogroup" aria-label="排版模式" className="grid w-full grid-cols-3 gap-1 rounded-md bg-muted p-1 text-muted-foreground">
+              {(['fit', 'tiles', 'flow'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  role="radio"
+                  aria-checked={mode === m}
+                  onClick={() => setMode(m)}
+                  className={cn(
+                    'inline-flex items-center justify-center rounded-sm px-3 py-1.5 text-sm transition-colors',
+                    mode === m ? 'bg-card text-card-foreground shadow' : 'hover:bg-accent/60',
+                  )}
+                >
+                  {m === 'fit' ? 'Fit 一页' : m === 'tiles' ? 'Tiles 分页' : 'Flow 重排'}
+                </button>
+              ))}
+            </div>
             <p className="mt-1.5 text-xs text-muted-foreground">{MODE_DESC[mode]}</p>
           </div>
 
@@ -173,6 +182,7 @@ export function ExportDialog({
           <Row label="页眉（文档标题）">
             <Switch
               checked={header}
+              aria-label="页眉（文档标题）"
               onCheckedChange={(v) => {
                 setHeaderState(v);
                 api.setPageSettings({ header: v });
@@ -182,6 +192,7 @@ export function ExportDialog({
           <Row label="页脚">
             <Switch
               checked={footer}
+              aria-label="页脚"
               onCheckedChange={(v) => {
                 setFooterState(v);
                 api.setPageSettings({ footer: v });
@@ -191,6 +202,7 @@ export function ExportDialog({
           <Row label="页码">
             <Switch
               checked={showPageNumbers}
+              aria-label="页码"
               onCheckedChange={(v) => {
                 setPageNumbersState(v);
                 api.setPageSettings({ showPageNumbers: v });
@@ -200,6 +212,7 @@ export function ExportDialog({
           <Row label="边（连线）标签">
             <Switch
               checked={edgeLabels}
+              aria-label="边（连线）标签"
               onCheckedChange={(v) => {
                 setEdgeLabelsState(v);
                 api.setPageSettings({ edgeLabels: v });
@@ -209,6 +222,7 @@ export function ExportDialog({
           <Row label="彩色 / 黑白">
             <Switch
               checked={colorMode === 'color'}
+              aria-label="彩色 / 黑白"
               onCheckedChange={(v) => {
                 const c = v ? 'color' : 'gray';
                 setColorModeState(c);
@@ -247,6 +261,7 @@ export function ExportDialog({
           <Row label="显示分页预览">
             <Switch
               checked={src.showPageBreak}
+              aria-label="显示分页预览"
               onCheckedChange={(v) => api.setPageSettings({ showPageBreak: v })}
             />
           </Row>
