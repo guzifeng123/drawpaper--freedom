@@ -127,10 +127,20 @@ Rust `build_menu()` 补项，菜单事件除「帮助→项目主页」外全部
 （set_window_title/bind_native_file/set_native_dirty/force_quit）——
 Tauri 2 里自定义命令天然允许、不进 capabilities。事件侧只 listen
 `app:menu` / `app:close-requested` / `app:open-file`，`core:event:allow-listen`
-基线已有。`help:home` 的 opener 调用发生在 Rust 侧（不经 webview IPC），
-不需要 `opener:allow-open-url` 等任何前端权限。
+基线已有。
 
-结论：capabilities/default.json **零新增权限**，与基线一致。
+`help:home` 的 opener 调用发生在 Rust 侧（`Opener::open_url` 方法本身不做
+scope 校验，不经 webview IPC），但按最小权限复核仍显式补一行
+`opener:allow-open-url` 进 capabilities——意图显式、防御未来把外链打开挪到
+前端 invoke 时不会静默失败。
+
+```diff
+  "opener:default",
+  "opener:allow-open-path",
++ "opener:allow-open-url",
+```
+
+仅新增这一条；其余权限与基线一致。
 
 ## 验收
 
