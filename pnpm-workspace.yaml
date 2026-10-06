@@ -6,6 +6,8 @@ packages:
 # 二进制，必须放行（allowBuilds 是 pnpm 11.7 的批准表，onlyBuiltDependencies
 # 保留以兼容旧版/工具链）。
 allowBuilds:
+  # svg2pdf.js/jspdf 传递拉入 core-js；其 postinstall 仅为 funding 提示，无需构建。
+  core-js: false
   esbuild: true
 
 onlyBuiltDependencies:

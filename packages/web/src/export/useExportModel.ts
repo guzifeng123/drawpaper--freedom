@@ -18,6 +18,7 @@ import {
   runVectorPrint,
 } from './print-pipeline';
 import { buildPagesSvgAsync, renderSvgPages } from './svg-export';
+import { renderVectorPdf } from './vector-pdf-export';
 import { docToMarkdown, markdownBlob } from './markdown-export';
 import { buildExportFileName } from './filename';
 import { deliverExportFile } from './deliver';
@@ -163,19 +164,34 @@ export function useExportModel(api: PanelsApi): {
         });
       },
       onExportPdf: () => {
-        setResult(computeResult());
+        const r = computeResult();
+        setResult(r);
         void afterSheetsRender(async () => {
           setBusy('pdf');
           try {
-            const sheets = collectSheetElements();
             const name = buildExportFileName({
               title: api.doc?.title ?? '未命名',
               date: new Date(),
               orientation: api.page.orientation,
               ext: 'pdf',
             });
-            const { blob, fileName } = await renderSheetsAsPdf(sheets, name, api.page.orientation);
-            await deliverExportFile(fileName, 'pdf', blob);
+            // 矢量主线：SVG（与 .svg 导出同源）→ svg2pdf → 多页矢量 PDF，文本可选可搜索。
+            // 任何矢量失败（chunk 加载 / 字体 / 单页渲染）都明确 toast 后自动回退位图链路。
+            try {
+              if (!api.doc) throw new Error('no doc');
+              const { blob, fileName } = await renderVectorPdf(r, api.doc, {
+                orientation: api.page.orientation,
+                gray: api.page.colorMode === 'gray',
+                baseFileName: name,
+              });
+              await deliverExportFile(fileName, 'pdf', blob);
+            } catch (vecErr) {
+              console.error('vector pdf failed, falling back to bitmap:', vecErr);
+              pushToast('error', '矢量导出失败，已回退位图模式');
+              const sheets = collectSheetElements();
+              const { blob, fileName } = await renderSheetsAsPdf(sheets, name, api.page.orientation);
+              await deliverExportFile(fileName, 'pdf', blob);
+            }
           } catch (err) {
             console.error(err);
             pushToast('error', 'PDF 合成失败（pdf-lib 加载或渲染出错）');

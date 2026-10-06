@@ -54,6 +54,7 @@
     "highlight.js": "^11.12.0",
     "html-to-image": "^1.11.13",
     "immer": "^10.1.1",
+    "jspdf": "2.5.2",
     "katex": "^0.19.0",
     "lowlight": "^3.3.0",
     "lucide-react": "^0.460.0",
@@ -62,6 +63,7 @@
     "pdf-lib": "^1.17.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "svg2pdf.js": "2.8.1",
     "tailwind-merge": "^2.5.4",
     "zod": "^3.23.8",
     "zustand": "^5.0.1"
