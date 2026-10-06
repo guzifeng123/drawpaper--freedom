@@ -161,4 +161,41 @@ test.describe('Wave14 矢量 PDF 直下载', () => {
         .__drawpaper__.__forceVectorPdfFail__ = false;
     });
   });
+
+  test('含生僻字（龘）文档：缺字形预检命中，回退位图并 toast 专门提示', async ({ page }) => {
+    await waitForApp(page);
+    const { doc } = buildStandardFixture('矢量PDF验收');
+    // 追加一个孤块，正文含字体未覆盖的生僻字「龘」（U+9F98，GB2312 二级/扩展）。
+    const rareNode = {
+      id: 'v_rare_probe',
+      type: 'note',
+      x: 2600, y: 900,
+      width: 240, height: 72,
+      content: tipDoc('龘字测试 rare'),
+      parentId: null, pinned: false, locked: false, collapsed: false, tags: [], style: {},
+    } as unknown as BlockNode;
+    doc.nodes.push(rareNode);
+    await loadVectorDoc(page, doc);
+    await invoke(page, 'setPageSettings', { mode: 'tiles', orientation: 'portrait' });
+    await invoke(page, 'setSelection', []);
+
+    const pdfPromise = page.waitForEvent('download', {
+      timeout: 60_000,
+      predicate: (d) => d.suggestedFilename().endsWith('.pdf'),
+    });
+    await page.keyboard.press('Control+p');
+    await page.waitForSelector('text=导出 / 打印', { timeout: 5000 });
+    await page.getByRole('button', { name: /直接下载 PDF/ }).click();
+
+    // 缺字形预检 → 专门文案（区别于一般矢量失败）。
+    await expect(
+      page.locator('div[role="status"]', { hasText: '含字体不支持的文字，已回退位图模式' }),
+    ).toBeVisible({ timeout: 15_000 });
+
+    // 仍产出位图 PDF。
+    const download = await pdfPromise;
+    const pdfPath = path.join(OUT, 'vector-missing-glyph.pdf');
+    await download.saveAs(pdfPath);
+    expect(fs.statSync(pdfPath).size).toBeGreaterThan(5_000);
+  });
 });

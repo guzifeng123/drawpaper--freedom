@@ -18,7 +18,7 @@ import {
   runVectorPrint,
 } from './print-pipeline';
 import { buildPagesSvgAsync, renderSvgPages } from './svg-export';
-import { renderVectorPdf } from './vector-pdf-export';
+import { renderVectorPdf, MISSING_GLYPH_MARKER } from './vector-pdf-export';
 import { docToMarkdown, markdownBlob } from './markdown-export';
 import { buildExportFileName } from './filename';
 import { deliverExportFile } from './deliver';
@@ -187,7 +187,14 @@ export function useExportModel(api: PanelsApi): {
               await deliverExportFile(fileName, 'pdf', blob);
             } catch (vecErr) {
               console.error('vector pdf failed, falling back to bitmap:', vecErr);
-              pushToast('error', '矢量导出失败，已回退位图模式');
+              const msg = vecErr instanceof Error ? vecErr.message : String(vecErr);
+              // 缺字形预检命中（生僻字）用专门文案，区别于一般矢量失败。
+              pushToast(
+                'error',
+                msg.includes(MISSING_GLYPH_MARKER)
+                  ? '含字体不支持的文字，已回退位图模式'
+                  : '矢量导出失败，已回退位图模式',
+              );
               const sheets = collectSheetElements();
               const { blob, fileName } = await renderSheetsAsPdf(sheets, name, api.page.orientation);
               await deliverExportFile(fileName, 'pdf', blob);

@@ -1,15 +1,20 @@
 import type { KBNoteDoc, PageOrientation, PaginateResult } from '@drawpaper/core';
 import { buildPagesSvgAsync } from './svg-export';
 import { A4_PT } from './print-pipeline';
-// 矢量 PDF 专用 CJK 字体（AR PL UMing CN 子集，glyf 轮廓）：
+// 矢量 PDF 专用 CJK 字体（Noto Sans CJK SC 子集，OFL-1.1，CFF→glyf 经 cu2qu 转换）：
 // jsPDF 标准 14 字体（Helvetica/Times/Courier）用 WinAnsi 编码，无法内嵌中文；
 // 该 TTF 子集随 Vite 打到 dist/assets 并被 Service Worker 预缓存，离线可用。
 // `?url` 让 Vite 产出带 hash 的静态资源，运行时 fetch 成 base64 交给 jsPDF。
 import vectorFontUrl from './assets/vector-cjk.ttf?url';
+// 字体覆盖的字符区间（构建期由字体 cmap 导出），用于缺字形预检。
+import vectorCjkCmap from './assets/vector-cjk-cmap.json';
 
 /** 注册进 jsPDF 后使用的字体族名（与 SVG <text font-family> 对应）。 */
 const FONT_FAMILY = 'VecCJK';
 const FONT_VFS_NAME = 'vec-cjk.ttf';
+
+/** 缺字形预检抛出的错误标记；调用方据此切换专门的回退提示文案。 */
+export const MISSING_GLYPH_MARKER = '__MISSING_GLYPH__';
 
 export interface VectorPdfOptions {
   orientation: PageOrientation;
@@ -44,6 +49,51 @@ async function loadVectorFontBase64(): Promise<string> {
  */
 function injectFontFamily(svg: string): string {
   return svg.replace(/<text(?=[\s>])/g, `<text font-family="${FONT_FAMILY}"`);
+}
+
+let coverageSet: Set<number> | null = null;
+
+/** 由构建期导出的 cmap 区间表展开成 codepoint 集合（仅算一次）。 */
+function getCoverageSet(): Set<number> {
+  if (coverageSet) return coverageSet;
+  const set = new Set<number>();
+  const ranges = (vectorCjkCmap as unknown as { ranges: number[][] }).ranges;
+  for (const r of ranges) {
+    const a = r[0]!;
+    const b = r[1]!;
+    for (let c = a; c <= b; c += 1) set.add(c);
+  }
+  coverageSet = set;
+  return set;
+}
+
+/** 收集单页 SVG 里所有 <text> 的可见文本。 */
+function collectSvgText(svgMarkup: string): string {
+  const el = new DOMParser().parseFromString(svgMarkup, 'image/svg+xml').documentElement;
+  let out = '';
+  el.querySelectorAll('text').forEach((t) => { out += t.textContent ?? ''; });
+  return out;
+}
+
+/**
+ * 缺字形预检：内嵌字体仅覆盖 GB2312 一级常用字（+ASCII/全角标点）。
+ * 正文若含二级生僻字，矢量 PDF 会静默出现空白缺字。这里在渲染前扫描所有导出文本，
+ * 发现字体不支持的字符（非 ASCII 且不在 cmap）就抛带标记错误，由调用方整体回退位图，
+ * 避免交付缺字 PDF。
+ */
+function assertNoMissingGlyphs(svgPages: string[]): void {
+  const coverage = getCoverageSet();
+  const missing = new Set<string>();
+  for (const markup of svgPages) {
+    const text = collectSvgText(markup);
+    for (const ch of text) {
+      const cp = ch.codePointAt(0) ?? 0;
+      if (cp > 0x7e && !coverage.has(cp)) missing.add(ch);
+    }
+  }
+  if (missing.size > 0) {
+    throw new Error(`${MISSING_GLYPH_MARKER}: ${[...missing].join(' ')}`);
+  }
 }
 
 interface ExtractedImage {
@@ -117,6 +167,9 @@ export async function renderVectorPdf(
     gray: opts.gray,
   });
   if (svgPages.length === 0) throw new Error('vector pdf: no pages');
+
+  // 缺字形预检：含字体不支持的生僻字 → 整体回退位图（见 assertNoMissingGlyphs）。
+  assertNoMissingGlyphs(svgPages);
 
   // 懒加载：jspdf + svg2pdf + CJK 字体仅在用户点「直接下载 PDF（矢量）」时拉取，不进首包。
   const [{ jsPDF }, { svg2pdf }, fontBase64] = await Promise.all([
