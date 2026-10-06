@@ -6,6 +6,7 @@ import { loadBacklinks } from '@/storage/backlinks';
 import { mountOverviewDev, unmountOverviewDev } from '@/overview/dev-mount';
 import { requestDeleteNodes } from './block-delete-guard';
 import { buildPagesSvgAsync } from '@/export/svg-export';
+import { collabManager } from '@/collab/collab-manager';
 
 /**
  * DEV-only 测试钩子（window.__drawpaper__）。
@@ -67,6 +68,11 @@ export interface DrawpaperDevHook {
    * OPFS 图片已被读成 data: URI 内嵌。供 e2e 断言「导出 SVG 含该图片」。
    */
   buildSvgPagesDev(): Promise<string[]>;
+  // ---- Wave9 同浏览器多标签协作：e2e 检视钩子 ----
+  /** 协作管理器检视（clientId/transport/peers/ Lamport /对齐状态）。 */
+  collab(): ReturnType<typeof collabManager.inspect>;
+  /** 当前冲突的中文摘要（summarizeConflicts）。 */
+  collabConflicts(): string[];
 }
 
 declare global {
@@ -92,6 +98,7 @@ const WHITELIST = new Set([
   'addNodes',
   'moveNode',
   'addEdge',
+  'deleteEdge',
   'deleteNodes',
   'updateContent',
   'undo',
@@ -252,6 +259,12 @@ export function installDevHooks(): void {
         notes: [],
       };
       return buildPagesSvgAsync(result, doc, { orientation: 'landscape' });
+    },
+    collab() {
+      return collabManager.inspect();
+    },
+    collabConflicts() {
+      return collabManager.conflictSummary();
     },
   };
 }

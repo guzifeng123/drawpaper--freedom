@@ -331,3 +331,24 @@ describe('P2.1 弯折点随块移动 / 多选清空宏', () => {
     expect(store.getState().doc.edges.find((e) => e.id === 'e2')!.points).toEqual([{ x: 400, y: 50 }]);
   });
 });
+
+describe('applyRemoteDoc（Wave9 协作：远端合并落库）', () => {
+  beforeEach(() => {
+    store = createEditorStore(baseDoc([mkNode('a')], []), { analyzer: noopAnalyzer() });
+  });
+
+  it('把远端 doc 作为新基线落库，且不进 undo 栈', () => {
+    // 本地先做一次可撤销编辑。
+    store.getState().moveNode('a', 50, 50);
+    expect(store.getState().canUndo).toBe(true);
+
+    // 远端合并：换一份含远端节点 b 的 doc。
+    const remote = baseDoc([mkNode('a'), mkNode('b', 300, 0)], []);
+    store.getState().applyRemoteDoc(remote);
+
+    expect(store.getState().doc.nodes.map((n) => n.id)).toEqual(['a', 'b']);
+    expect(store.getState().doc.nodes.find((n) => n.id === 'b')!.x).toBe(300);
+    // 远端 op 不进 undo：撤销栈基线已重置，不能再撤销到本地 move。
+    expect(store.getState().canUndo).toBe(false);
+  });
+});

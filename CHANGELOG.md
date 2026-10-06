@@ -76,6 +76,6 @@
 
 - **自动更新默认关闭**：本仓库当前没有 `TAURI_SIGNING_PRIVATE_KEY`，也没有静态托管 `latest.json` 的更新服务器；`tauri-plugin-updater` 在无公钥时会令 `tauri build` 直接失败，故本期不启用。升级方式为手动下载新版 NSIS 安装包覆盖安装。接入步骤见 `docs/p2-tauri-ci.md` §3。
 - **iOS 不提供**：需要 Apple Developer 账号（$99/年）+ 签名证书 + macOS runner，本期无此条件；Capacitor iOS 配置骨架已保留，未来开通账号后 `npx cap add ios` 即可。
-- **实时协作仅预留**：Yjs / CRDT 多人实时协作未实现，core 仅预留 `CollabAdapter` 空接口，不引入 yjs。
+- **同浏览器多标签实时协作已实现**：同一浏览器内打开同一文档的多个标签页实时同步（零服务器 / 零外网，`BroadcastChannel` 传输，`storage` 事件兜底，皆不可用则单标签静默降级）。基于 Lamport 时钟 + 字段级 LWW + 删除优先墓碑 + late-joiner 快照对齐；并发冲突不静默丢弃，顶部横幅汇总并可一键回滚到合并前快照；其他标签在线点 / 选区高亮、心跳超时自动离线。**跨设备 / 云端多人协作仍不做**（不引入 yjs / 任何网络或 CRDT 库）。
 - **手绘墨迹未做**：手写笔压感 / 倾斜输入需硬件预研，本期不做墨迹块。
 - **性能口径**：2000 块文档冷启动到可交互约 6s（e2e 断言 ≤15s）；万级（10k）块基准压测待另一路数据，本版暂不给出具体数字。
