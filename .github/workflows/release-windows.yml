@@ -21,6 +21,8 @@ on:
       - 'feat/p2-tauri-ci'
       - 'feat/desktop-shell-polish'
       - 'chore/windows-ci-smoke'
+      - 'feat/desktop-native-gaps'
+      - 'chore/nsis-smoke2-guide'
   workflow_dispatch:
 
 permissions:
