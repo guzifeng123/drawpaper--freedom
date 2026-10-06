@@ -113,6 +113,16 @@ export function useKeyboardShortcuts(api: EditorApi): void {
             e.preventDefault();
             rf.fitView({ duration: 200 });
             return;
+          case '=':
+            // Wave14：与原生菜单「视图→放大 Ctrl+=」同一入口（复用 rf.zoomIn）。
+            e.preventDefault();
+            void rf.zoomIn();
+            return;
+          case '-':
+            // Wave14：与原生菜单「视图→缩小 Ctrl+-」同一入口（复用 rf.zoomOut）。
+            e.preventDefault();
+            void rf.zoomOut();
+            return;
           case '1':
             e.preventDefault();
             rf.setViewport({ x: snap.viewport.x, y: snap.viewport.y, zoom: 1 }, { duration: 200 });

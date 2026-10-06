@@ -144,6 +144,20 @@ export class TauriHostAdapter implements HostAdapter {
   }
 
   /**
+   * Wave14：Rust 读盘失败（文件被删/移动/不可读）时 emit 的轻量错误。
+   * 外壳不 panic、不弹窗，前端据此 toast 一句友好提示。
+   */
+  onOpenFileErrorEvent(handler: (err: { path: string; message: string }) => void): Promise<() => void> {
+    if (!this.tauri.event) return Promise.resolve(() => undefined);
+    return this.tauri.event.listen('app:open-file-error', (e) => {
+      const payload = e.payload as { path?: string; message?: string };
+      if (payload && typeof payload.message === 'string') {
+        handler({ path: payload.path ?? '', message: payload.message });
+      }
+    });
+  }
+
+  /**
    * 原生系统通知（Windows Action Center）。
    * 浏览器端不调用本方法，走现有 in-app toast。集成期在保存成功/失败/
    * 迁移提示处判断 `host instanceof TauriHostAdapter` 后调用。

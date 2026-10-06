@@ -23,6 +23,7 @@ import { applyHydrationDelta } from './hydration-store';
 import { nodeTypes, resolveNodeType } from '../nodes';
 import { edgeTypes } from '../edges';
 import { useKeyboardShortcuts } from '../state/useKeyboardShortcuts';
+import { registerViewActionHandler } from '../state/view-bus';
 import { useCoarsePointer } from '../state/use-coarse-pointer';
 import { computeSnap } from '../lib/geometry';
 import { collectFocusSet, collectConnectedSet, collectEdgeChain, applyManualFixed } from '../lib/graph-trace';
@@ -250,6 +251,17 @@ function CanvasInner({ api }: { api: EditorApi }) {
     return undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [snap.historyEvent]);
+
+  // Wave14：原生「视图」菜单（适应屏幕/放大/缩小）转发到同一批 rf 动作——
+  // 与工具栏按钮、Ctrl+0/Ctrl+=/Ctrl+- 快捷键同一个入口，不新写缩放算法。
+  useEffect(() => {
+    registerViewActionHandler((action) => {
+      if (action === 'fit') rf.fitView({ duration: 200 });
+      else if (action === 'zoom-in') void rf.zoomIn();
+      else void rf.zoomOut();
+    });
+    return () => registerViewActionHandler(null);
+  }, [rf]);
 
   // ---- 连接校验 ----
   const isValidConnection: IsValidConnection = (conn) => {

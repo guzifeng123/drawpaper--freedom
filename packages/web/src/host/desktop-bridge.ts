@@ -5,6 +5,7 @@ import { getWiringUi } from '@/wiring/ui-store';
 import { useThemeStore } from '@/panels/lib/theme';
 import { pushToast } from '@/panels/lib/toast';
 import { runExportAction } from '@/export/export-actions-bridge';
+import { requestViewAction } from '@/editor/state/view-bus';
 
 /**
  * Wave12 桌面桥：把 Rust 原生外壳（菜单 / 窗口标题 / 关闭守卫）接到前端 store。
@@ -17,6 +18,7 @@ import { runExportAction } from '@/export/export-actions-bridge';
  *   file:new / file:open / file:save / file:save-as
  *   edit:undo / edit:redo           （cut/copy/paste/select-all 是 PredefinedMenuItem，WebView2 原生处理）
  *   export:print / export:pdf / export:png / export:svg / export:md
+ *   view:fit / view:zoom-in / view:zoom-out   （Wave14：转发到画布 rf.fitView/zoomIn/zoomOut）
  *   view:dark-mode / view:outline / view:search
  *   sync:settings
  * （help:home / help:check-update / help:open-data-dir 由 Rust 直接 opener 处理，不经前端；
@@ -99,6 +101,18 @@ async function routeMenu(id: string): Promise<void> {
     case 'export:md':
       runExportAction(id.slice('export:'.length) as 'print' | 'pdf' | 'png' | 'svg' | 'md');
       break;
+    case 'view:fit':
+      // Wave14：转发到画布 rf.fitView（与 Ctrl+0 同一入口）。
+      requestViewAction('fit');
+      break;
+    case 'view:zoom-in':
+      // Wave14：转发到画布 rf.zoomIn（与 Ctrl+= 同一入口）。
+      requestViewAction('zoom-in');
+      break;
+    case 'view:zoom-out':
+      // Wave14：转发到画布 rf.zoomOut（与 Ctrl+- 同一入口）。
+      requestViewAction('zoom-out');
+      break;
     case 'view:dark-mode': {
       const theme = useThemeStore.getState();
       theme.setMode(theme.resolved === 'dark' ? 'light' : 'dark');
@@ -114,17 +128,20 @@ async function routeMenu(id: string): Promise<void> {
       getWiringUi().setSyncOpen(true);
       break;
     default:
-      /* help:check-update / help:open-data-dir / recent:* / view:fit / view:zoom-* 由 Rust 自取，前端不绑定 */
+      /* help:* / recent:* 由 Rust 自取或已在上方分支处理；未知 id 静默忽略 */
       break;
   }
 }
 
 /**
- * Wave13：最近文件菜单点击后 Rust 读盘 emit 的富 app:open-file。
- *  - text 存在（最近文件子菜单）：走与 file:open 成功分支相同的
- *    parseKBNote → loadDoc → bindNativeFile；文件缺失由 Rust 侧剔除，前端不 toast。
- *  - text 缺失（双击关联 / 单实例转发兼容路径）：webview 无任意路径读权限，
- *    按既有降级处理（不打开、不 toast）。
+ * Wave13/14：「打开最近」菜单点击、文件关联双击（冷启动）、单实例第二实例转发
+ * （热启动）三条路径，现在都由 Rust 读盘后 emit 富 app:open-file
+ * `{path,name,text,external:true}`。走与 file:open 成功分支相同的
+ * parseKBNote → loadDoc → bindNativeFile；文件缺失由 Rust 侧剔除并发
+ * app:open-file-error（见下），前端不在这里 toast。
+ *
+ * 防御：text 缺失（极旧客户端/异常载荷）时 webview 无任意路径读权限，
+ * 按既有降级处理（不打开、不 toast）。
  */
 async function routeOpenFile(payload: OpenFilePayload): Promise<void> {
   if (typeof payload.text !== 'string' || payload.text.length === 0) return;
@@ -178,18 +195,24 @@ export function initDesktopBridge(): () => void {
   let unlistenMenu: (() => void) | undefined;
   let unlistenClose: (() => void) | undefined;
   let unlistenOpenFile: (() => void) | undefined;
+  let unlistenOpenFileError: (() => void) | undefined;
   void a.onMenuEvent((id) => void routeMenu(id)).then((u) => { unlistenMenu = u; });
   void a.onCloseRequested(() => {
     getWiringUi().setCloseGuardOpen(true);
   }).then((u) => { unlistenClose = u; });
   // Wave13：动态「打开最近」子菜单点击 → Rust 读盘后 emit 富 app:open-file。
   void a.onOpenFileEvent((p) => void routeOpenFile(p)).then((u) => { unlistenOpenFile = u; });
+  // Wave14：Rust 读盘失败（文件被删/移动）→ 轻量 toast。
+  void a.onOpenFileErrorEvent(({ message }) => {
+    pushToast('error', message);
+  }).then((u) => { unlistenOpenFileError = u; });
 
   return () => {
     unsubStore();
     unlistenMenu?.();
     unlistenClose?.();
     unlistenOpenFile?.();
+    unlistenOpenFileError?.();
     started = false;
     adapter = null;
   };
