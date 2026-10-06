@@ -251,6 +251,103 @@ jobs:
           }
           Write-Host "Smoke OK: installed exe present and numeric version tokens match"
 
+      - name: 'Smoke (x64): .kbnote registry association registered (HKCU/HKLM)'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Wave13 C: Tauri fileAssociations (bundle.fileAssociations[].ext =
+          # ["kbnote"]) makes the NSIS installer write a per-ext registration.
+          # For installMode=currentUser the hive is HKCU:\Software\Classes;
+          # for a per-machine (elevated) install it lands in HKLM. Probe BOTH
+          # hives and accept whichever exists with a non-empty default value
+          # (the default value is the ProgID). This way the step stays green
+          # whether the runner installed per-user (currentUser) or per-machine
+          # (both + UAC).
+          $hives = @(
+            'HKCU:\Software\Classes\.kbnote',
+            'HKLM:\Software\Classes\.kbnote'
+          )
+          $hit = $null
+          foreach ($h in $hives) {
+            $exists = Test-Path $h
+            $default = ''
+            if ($exists) {
+              try {
+                $item = Get-Item -Path $h -ErrorAction Stop
+                $default = [string]$item.GetValue('')
+              } catch {
+                $default = ''
+              }
+            }
+            Write-Host ("  probe {0} => exists={1} default='{2}'" -f $h, $exists, $default)
+            if ($exists -and $default.Trim() -ne '') { $hit = $h; break }
+          }
+          if (-not $hit) {
+            Write-Host "::group::HKCU/HKLM Classes\.kbnote dump"
+            foreach ($h in $hives) {
+              if (Test-Path $h) {
+                Write-Host "  $h :"
+                Get-ItemProperty -Path $h -ErrorAction SilentlyContinue | Format-List | Out-String | Write-Host
+              } else {
+                Write-Host "  $h : (missing)"
+              }
+            }
+            Write-Host "::endgroup::"
+            Write-Error 'Smoke FAIL: .kbnote registry association not found (HKCU or HKLM) with non-empty default value'
+          }
+          Write-Host "Smoke OK: .kbnote file association registered at $hit (ProgID default non-empty)"
+
+      - name: 'Smoke (x64): desktop + start-menu shortcuts present (user/public)'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Wave13 C: NSIS installer should drop a drawpaper.lnk on the desktop
+          # and an entry under Start Menu. installMode=currentUser writes to the
+          # per-user desktop ([Environment]::GetFolderPath('Desktop') resolves
+          # localized "桌面" correctly) and per-user Start Menu Programs.
+          # installMode=both with elevation additionally writes to public/common
+          # desktop and common Start Menu. Probe BOTH user and public locations;
+          # at least one desktop lnk and at least one start-menu lnk must exist.
+          $desktopUser = [Environment]::GetFolderPath('Desktop')
+          $desktopCommon = [Environment]::GetFolderPath('CommonDesktopDirectory')
+          Write-Host ("  user desktop   = '{0}'" -f $desktopUser)
+          Write-Host ("  public desktop = '{0}'" -f $desktopCommon)
+          $desktopHits = @()
+          foreach ($d in @($desktopUser, $desktopCommon)) {
+            if ($d -and (Test-Path $d)) {
+              $lnk = Join-Path $d 'drawpaper.lnk'
+              Write-Host ("    probe {0} => exists={1}" -f $lnk, (Test-Path $lnk))
+              if (Test-Path $lnk) { $desktopHits += $lnk }
+            }
+          }
+          $smRoots = @(
+            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'),
+            (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs')
+          )
+          $smHits = @()
+          foreach ($r in $smRoots) {
+            Write-Host ("  start menu root: {0} => exists={1}" -f $r, (Test-Path $r))
+            if (Test-Path $r) {
+              $found = Get-ChildItem -Path $r -Recurse -Filter 'drawpaper*.lnk' -File -ErrorAction SilentlyContinue
+              if ($found) { $smHits += $found.FullName }
+            }
+          }
+          Write-Host ("Desktop shortcut hits ({0}):" -f $desktopHits.Count)
+          $desktopHits | ForEach-Object { Write-Host "  - $_" }
+          Write-Host ("Start-menu shortcut hits ({0}):" -f $smHits.Count)
+          $smHits | ForEach-Object { Write-Host "  - $_" }
+          if ($desktopHits.Count -lt 1) {
+            Write-Error 'Smoke FAIL: no drawpaper.lnk found on user or public desktop'
+          }
+          if ($smHits.Count -lt 1) {
+            Write-Error 'Smoke FAIL: no drawpaper*.lnk found under user or common Start Menu Programs'
+          }
+          Write-Host "Smoke OK: desktop and start-menu shortcuts present"
+
       - name: 'Smoke (x64): launch exe, main window title contains drawpaper, then kill'
         if: matrix.arch == 'x64'
         shell: pwsh
@@ -307,6 +404,89 @@ jobs:
             Write-Error 'Smoke FAIL: drawpaper process did not present a main window whose title contains "drawpaper" within 20s'
           }
           Write-Host "Smoke OK: process alive and main window title contains 'drawpaper'"
+
+      - name: 'Smoke (x64): second launch absorbed by running instance (single-instance)'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Wave13 C: tauri-plugin-single-instance is registered first in
+          # Builder::default() (see apps/desktop-tauri/src-tauri/src/lib.rs).
+          # Launching drawpaper.exe a second time while one instance is already
+          # running must NOT spawn a second drawpaper.exe process — the plugin
+          # forwards the argv (the .kbnote path, if any) to the running window
+          # via the `second-instance` event and exits the second process. We
+          # assert that after two Start-Process calls, the count of
+          # "drawpaper" processes is exactly 1. WebView2 child processes are
+          # named msedgewebview2.exe, so they do not inflate this count.
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'drawpaper')
+          )
+          $installDir = $null
+          foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
+          if (-not $installDir) {
+            $hit = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($hit) { $installDir = $hit.FullName }
+          }
+          if (-not $installDir) { Write-Error 'Smoke FAIL: install dir not found at single-instance check' }
+          $exe = Join-Path $installDir 'drawpaper.exe'
+          if (-not (Test-Path $exe)) { $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName }
+          Write-Host "App exe = $exe"
+
+          # Clean slate: any leftover from the window-title step should already
+          # be dead, but be explicit so the count assertion below is not
+          # polluted by a previous run.
+          Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$installDir*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+
+          # First launch. Poll up to 20s for the process to be alive.
+          Write-Host "First launch"
+          $null = Start-Process -FilePath $exe -WorkingDirectory $installDir -PassThru
+          $firstAlive = $false
+          for ($i = 1; $i -le 20; $i++) {
+            Start-Sleep -Seconds 1
+            $alive = Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue
+            if ($alive) {
+              Write-Host ("t={0,2}s first instance alive, count={1}" -f $i, ($alive | Measure-Object).Count)
+              $firstAlive = $true
+              break
+            }
+            Write-Host ("t={0,2}s waiting for first instance..." -f $i)
+          }
+          if (-not $firstAlive) {
+            Write-Error 'Smoke FAIL: first drawpaper instance did not stay alive'
+          }
+
+          # Second launch — same exe, same working directory. The single-
+          # instance plugin should make this second process exit itself after
+          # forwarding argv to the running instance.
+          Write-Host "Second launch (must be absorbed by the running instance)"
+          $p2 = Start-Process -FilePath $exe -WorkingDirectory $installDir -PassThru
+          Write-Host ("Second Start-Process returned pid={0}" -f $p2.Id)
+
+          # Poll up to 15s for the drawpaper process count to settle at 1.
+          # Pass as soon as we see count==1; fail if it stays >1.
+          $count = 0
+          for ($i = 1; $i -le 15; $i++) {
+            Start-Sleep -Seconds 1
+            $procs = Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue
+            $count = ($procs | Measure-Object).Count
+            Write-Host ("t=+{0,2}s after second launch, drawpaper count = {1}" -f $i, $count)
+            if ($count -eq 1) { break }
+          }
+
+          # Cleanup all drawpaper + its WebView2 children before uninstall step.
+          Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$installDir*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+
+          if ($count -ne 1) {
+            Write-Error ("Smoke FAIL: expected exactly 1 drawpaper process after second launch, observed {0} (single-instance not holding?)" -f $count)
+          }
+          Write-Host "Smoke OK: second launch absorbed by running instance (process count = 1)"
 
       - name: 'Smoke (x64): silent uninstall, install dir removed'
         if: matrix.arch == 'x64'
