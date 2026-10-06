@@ -3,6 +3,16 @@ import { useReactFlow } from '@xyflow/react';
 import type { EditorApi } from '../editor-api';
 import { toast } from '../ui/toast';
 import { getActiveBendAnchor, setActiveBendAnchor } from '../edges/bend-active';
+import { navigateFocus, type FocusNavDirection } from '../lib/focus-nav';
+
+/**
+ * Wave9：把焦点移到指定块——选中 + 飞块（CanvasEditor lastFocus effect 负责
+ * 强制水合、相机居中、DOM focus）。离屏 Skeleton 块由 lastFocus effect 先升级。
+ */
+function focusBlock(api: EditorApi, id: string): void {
+  api.setSelection([id]);
+  api.focusNode?.(id);
+}
 
 /**
  * useKeyboardShortcuts —— 画布级快捷键（§4.6）。
@@ -30,7 +40,11 @@ export function useKeyboardShortcuts(api: EditorApi): void {
       const mod = e.metaKey || e.ctrlKey;
 
       // Esc 分层退出交给状态机（editing → 仍选中；select → 清空选择）。
+      // Wave9：弹层（Dialog/Popover/Dropdown）打开时 Esc 交给 Radix 自己关，
+      // 不拦截（否则 preventDefault 会吃掉 Radix 的关闭，焦点也回不到触发元素）。
       if (e.key === 'Escape') {
+        const overlayOpen = !!document.querySelector('[role="dialog"][data-state="open"], [data-radix-popper-content-wrapper]');
+        if (overlayOpen) return;
         if (editing) {
           e.preventDefault();
           api.setEditingNode(null);
@@ -120,6 +134,14 @@ export function useKeyboardShortcuts(api: EditorApi): void {
           if (snap.selection.size === 1) {
             e.preventDefault();
             api.enterAddSibling();
+            return;
+          }
+          // Wave9 无障碍：无选中时 Enter 在视口中心建根块并进入编辑（纯键盘建块入口）。
+          if (snap.selection.size === 0 && !snap.editingNodeId) {
+            e.preventDefault();
+            const pos = rf.screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+            const id = api.addNode('text', pos.x - 110, pos.y - 30);
+            api.setEditingNode(id);
           }
           return;
         }
@@ -162,6 +184,22 @@ export function useKeyboardShortcuts(api: EditorApi): void {
         case 'ArrowDown':
         case 'ArrowLeft':
         case 'ArrowRight': {
+          // Wave9：Alt+方向键 = 块间焦点导航（父子树/兄弟），不挪动块位置。
+          if (e.altKey) {
+            e.preventDefault();
+            const dir: FocusNavDirection =
+              e.key === 'ArrowRight'
+                ? 'firstChild'
+                : e.key === 'ArrowLeft'
+                  ? 'parent'
+                  : e.key === 'ArrowDown'
+                    ? 'nextSibling'
+                    : 'prevSibling';
+            const current = snap.selection.size === 1 ? [...snap.selection][0]! : null;
+            const target = navigateFocus(snap.doc, current, dir);
+            if (target) focusBlock(api, target);
+            return;
+          }
           if (!snap.selection.size) return;
           e.preventDefault();
           const step = e.shiftKey ? 10 : 1;

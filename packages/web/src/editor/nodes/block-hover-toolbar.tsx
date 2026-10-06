@@ -1,7 +1,14 @@
 import { useState } from 'react';
-import { Pin, ChevronDown, Copy, Trash2, Shapes } from 'lucide-react';
+import { Pin, ChevronDown, Copy, Trash2, Shapes, Waypoints } from 'lucide-react';
 import { P0_BLOCK_TYPES, type BlockNode, type BlockType } from '@drawpaper/core';
 import { useEditorApi } from '../canvas/editor-context';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import { findParentId, findChildIds } from '../lib/focus-nav';
 
 /** P1 新块型（块类型切换器与 P0 并列）。 */
 const P1_BLOCK_TYPES: readonly BlockType[] = ['table', 'code', 'equation', 'bookmark', 'attachment', 'reminder'];
@@ -107,6 +114,7 @@ export function BlockHoverToolbar({ block, childCount }: BlockHoverToolbarProps)
       )}
       <button
         title="复制"
+        aria-label="复制块"
         className="rounded p-0.5 text-slate-500 hover:bg-slate-100"
         onClick={() => {
           api.setSelection([block.id]);
@@ -117,11 +125,53 @@ export function BlockHoverToolbar({ block, childCount }: BlockHoverToolbarProps)
       </button>
       <button
         title="删除"
+        aria-label="删除块"
         className="rounded p-0.5 text-slate-500 hover:bg-slate-100 hover:text-red-500"
         onClick={() => api.deleteNodes([block.id])}
       >
         <Trash2 size={12} />
       </button>
+
+      {/* Wave9 无障碍：父子关系键盘替代路径（屏幕阅读器/键盘用户不必拖 Handle） */}
+      <RelationshipMenu block={block} />
     </div>
+  );
+}
+
+/** 父子关系菜单：跳到父块 / 跳到第一个子块 / 新建子块。键盘可达（Radix Dropdown）。 */
+function RelationshipMenu({ block }: { block: BlockNode }) {
+  const api = useEditorApi();
+  const doc = api.getState().doc;
+  const parentId = findParentId({ nodes: doc.nodes, edges: doc.edges }, block.id);
+  const childIds = findChildIds({ nodes: doc.nodes, edges: doc.edges }, block.id);
+
+  const jump = (id: string) => {
+    api.setSelection([id]);
+    api.focusNode?.(id);
+  };
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          title="父子关系（跳到父/子块）"
+          aria-label={`块「${block.id}」的父子关系菜单`}
+          className="rounded p-0.5 text-slate-500 hover:bg-slate-100"
+        >
+          <Waypoints size={12} />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start">
+        <DropdownMenuItem disabled={!parentId} onSelect={() => parentId && jump(parentId)}>
+          跳到父块{parentId ? '' : '（无）'}
+        </DropdownMenuItem>
+        <DropdownMenuItem disabled={childIds.length === 0} onSelect={() => childIds[0] && jump(childIds[0])}>
+          跳到第一个子块{childIds.length ? `（${childIds.length} 个）` : '（无）'}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => api.tabAddChild()}>
+          新建子块并连线（Tab）
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

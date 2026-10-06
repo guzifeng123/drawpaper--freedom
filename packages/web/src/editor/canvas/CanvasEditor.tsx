@@ -19,6 +19,7 @@ import type { BlockNode, Edge as CoreEdge } from '@drawpaper/core';
 import type { EditorApi } from '../editor-api';
 import { EditorApiContext, useEditorSnapshot } from './editor-context';
 import { useHydrationScheduler } from './use-hydration-scheduler';
+import { applyHydrationDelta } from './hydration-store';
 import { nodeTypes, resolveNodeType } from '../nodes';
 import { edgeTypes } from '../edges';
 import { useKeyboardShortcuts } from '../state/useKeyboardShortcuts';
@@ -192,13 +193,29 @@ function CanvasInner({ api }: { api: EditorApi }) {
       });
   }, [snap.doc, hidden, selectedEdgeIds, dimSet]);
 
-  // 飞块：搜索/大纲 lastFocus → setCenter + 高亮
+  // 飞块：搜索/大纲/Alt+方向键 lastFocus → setCenter + 高亮 + 键盘焦点落到块 DOM。
+  // Wave9：离屏 Skeleton 先强制水合再居中；reduced-motion 时相机动画即时。
   useEffect(() => {
     const f = snap.lastFocus;
     if (!f) return;
     const n = snap.doc.nodes.find((x) => x.id === f.nodeId);
     if (!n) return;
-    rf.setCenter(n.x + n.width / 2, n.y + n.height / 2, { zoom: Math.max(rf.getZoom(), 0.8), duration: 300 });
+    // 强制水合（视口调度器可能还没轮到离屏块）。
+    applyHydrationDelta([n.id], []);
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    rf.setCenter(n.x + n.width / 2, n.y + n.height / 2, {
+      zoom: Math.max(rf.getZoom(), 0.8),
+      duration: reduce ? 0 : 300,
+    });
+    // 两帧后 RF 已提交挂载，把键盘焦点落到块外壳（:focus-visible 环出现）。
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        const el = document.querySelector<HTMLElement>(
+          `.react-flow__node[data-id="${CSS.escape(n.id)}"] .block-shell`,
+        );
+        el?.focus({ preventScroll: true });
+      });
+    });
   }, [snap.lastFocus]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 一键整理落位后：ghost 消失（应用/取消）时 fitView 让布局结果进入视野。
@@ -391,6 +408,8 @@ function CanvasInner({ api }: { api: EditorApi }) {
   return (
     <div
       className={`relative h-full w-full ${dragOver ? 'ring-2 ring-inset ring-blue-400' : ''}`}
+      role="application"
+      aria-label="画布"
       ref={(el) => {
         (wrapRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
         setPaneEl(el);
@@ -453,6 +472,8 @@ function CanvasInner({ api }: { api: EditorApi }) {
             <button
               className={`flex h-11 w-11 items-center justify-center rounded ${snap.mode === 'select' ? 'bg-blue-100 text-blue-600' : 'text-slate-500'}`}
               title="选择 (V)"
+              aria-label="选择工具"
+              aria-pressed={snap.mode === 'select'}
               onClick={() => api.setMode('select')}
             >
               <MousePointer2 size={20} />
@@ -460,6 +481,8 @@ function CanvasInner({ api }: { api: EditorApi }) {
             <button
               className={`flex h-11 w-11 items-center justify-center rounded ${snap.mode === 'connect' ? 'bg-blue-100 text-blue-600' : 'text-slate-500'}`}
               title="连线 (C)"
+              aria-label="连线工具"
+              aria-pressed={snap.mode === 'connect'}
               onClick={() => api.setMode('connect')}
             >
               <Spline size={20} />
@@ -467,6 +490,8 @@ function CanvasInner({ api }: { api: EditorApi }) {
             <button
               className={`flex h-11 w-11 items-center justify-center rounded ${snap.mode === 'pan' ? 'bg-blue-100 text-blue-600' : 'text-slate-500'}`}
               title="平移"
+              aria-label="平移工具"
+              aria-pressed={snap.mode === 'pan'}
               onClick={() => api.setMode('pan')}
             >
               <Hand size={20} />
@@ -496,13 +521,13 @@ function CanvasInner({ api }: { api: EditorApi }) {
 
         {/* 右下角自建缩放控件（百分比 + 适应/100%） */}
         <Panel position="bottom-right" className="!mb-16 mr-2 flex items-center gap-1 rounded border bg-[hsl(var(--popover))] text-[hsl(var(--popover-foreground))] px-1 py-0.5 text-[10px] shadow">
-          <button className="px-1" onClick={() => rf.zoomOut()}>
+          <button className="px-1" title="缩小" onClick={() => rf.zoomOut()}>
             −
           </button>
           <button className="w-12 text-center" onClick={() => rf.fitView({ duration: 200 })} title="适应屏幕">
             {Math.round(snap.viewport.zoom * 100)}%
           </button>
-          <button className="px-1" onClick={() => rf.zoomIn()}>
+          <button className="px-1" title="放大" onClick={() => rf.zoomIn()}>
             +
           </button>
           <button className="px-1" onClick={() => rf.setViewport({ x: snap.viewport.x, y: snap.viewport.y, zoom: 1 }, { duration: 200 })} title="实际大小">

@@ -76,6 +76,20 @@ export function ExportDialog({
   const [colorMode, setColorModeState] = React.useState(src.colorMode);
   const [edgeLabels, setEdgeLabelsState] = React.useState(src.edgeLabels);
 
+  // Wave9 无障碍：弹层打开时记录触发元素，关闭后把键盘焦点还回去
+  // （Radix 默认会还，但触发元素是画布内 .block-shell div 时偶尔落到 body；显式兜底）。
+  const triggerRef = React.useRef<Element | null>(null);
+  React.useEffect(() => {
+    if (api.exportOpen) {
+      triggerRef.current = document.activeElement;
+    } else if (triggerRef.current instanceof HTMLElement) {
+      const t = triggerRef.current;
+      triggerRef.current = null;
+      // 下一帧再还，避免与 Radix 自己的 focus 还原竞争。
+      requestAnimationFrame(() => t.focus({ preventScroll: true }));
+    }
+  }, [api.exportOpen]);
+
   const fileName = buildExportFileName({
     title: api.doc?.title ?? '未命名',
     date: new Date(),

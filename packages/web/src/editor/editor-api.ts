@@ -210,6 +210,11 @@ export interface EditorApi {
   setFocusNode?(id: string | null): void;
   /** 设置标签筛选（any/all 语义）。 */
   setTagFilter?(filter: TagFilter): void;
+  /**
+   * Wave9 无障碍：把相机飞到某块并把键盘焦点落到该块 DOM 上
+   * （选中 + 强制水合 + 居中 + focus）。Alt+方向键导航 / 块关系菜单共用。
+   */
+  focusNode?(id: string): void;
 
   // ---- P1 附件上传（经存储 agent；mock 先行；可选，Wave4 接真实 store）----
   /**

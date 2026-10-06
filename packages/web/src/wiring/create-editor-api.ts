@@ -228,6 +228,9 @@ export function createEditorApi(store: EditorStoreApi, bridge: ConflictBridge): 
     setTagFilter: (filter) =>
       store.getState().setTagFilter({ tagIds: filter.tagIds, match: filter.mode }),
 
+    // ---- Wave9 无障碍：飞块 + 键盘焦点 ----
+    focusNode: (id) => store.getState().flyToNode(id),
+
     // ---- P1 附件上传（OPFS 资产管线）----
     putImageAsset: async (file) => {
       const r = await store.getState().putImageAsset(file);

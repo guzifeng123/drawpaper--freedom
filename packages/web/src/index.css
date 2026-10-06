@@ -164,3 +164,45 @@ body {
 .react-flow__node.dragging {
   transition: none;
 }
+
+/* ============================================================
+   Wave9 无障碍：焦点环仅键盘导航（:focus-visible）显示。
+   鼠标点击不出现持久焦点环（浏览器默认 :focus 在鼠标点击时也显示，
+   这里统一收口为 :focus-visible，视觉风格不破坏、深色模式跟随 --ring）。
+   ============================================================ */
+:focus {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+/* 块节点外壳的焦点环：用 ring 色、不被 outline-offset 推出画布裁剪。 */
+.block-shell:focus-visible {
+  outline: 2px solid hsl(var(--ring));
+  outline-offset: 2px;
+}
+/* Tiptap 编辑区自身有焦点态，不再叠加外层 outline，避免双层环。 */
+.block-shell.is-editing:focus-visible {
+  outline: none;
+}
+
+/* ============================================================
+   Wave9 prefers-reduced-motion：尊重系统「减少动态效果」设置。
+   统一收口：所有 250ms 布局/面板动画在 reduce 时降级为即时（≤1ms 淡入）。
+   不在组件里逐个内联 transition 时长。
+   ============================================================ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+  .react-flow__node {
+    transition: none !important;
+  }
+}

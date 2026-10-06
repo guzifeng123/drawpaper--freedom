@@ -198,12 +198,25 @@ const BlockShellFull = memo(function BlockShellFull({
     borderColor: selected ? '#3b82f6' : block.style.border ?? 'hsl(var(--node-border))',
   };
 
+  // Wave9 无障碍：块外壳可聚焦（键盘 Tab / Alt+方向键落到块上）。
+  // 编辑中（Tiptap 接管焦点）tabIndex=-1，避免双层 Tab 停点。
+  // role=article：画布是自由布局的 application，块不是 RF 托管的 tree widget，
+  // 用 article + aria-label 描述内容比伪 tree/treeitem 更诚实（见 docs/wave9/a11y-keyboard.md）。
+  const text = extractPlainText(block.content.data, 60);
+  const ariaLabel = `${block.type === 'heading' ? '标题块' : block.type === 'todo' ? '待办块' : block.type === 'image' ? '图片块' : '块'}${text ? '：' + text : ''}`;
+
   return (
     <div
-      className={`relative flex h-full w-full flex-col rounded-lg border text-[hsl(var(--node-text))] shadow-sm transition-shadow ${
+      className={`block-shell relative flex h-full w-full flex-col rounded-lg border text-[hsl(var(--node-text))] shadow-sm transition-shadow ${
         selected ? 'shadow-md ring-2 ring-blue-400/40' : ''
-      } ${shellClassName} ${isEditing ? 'nodrag nowheel' : ''}`}
+      } ${isEditing ? 'nodrag nowheel is-editing' : ''} ${shellClassName}`}
       style={shellStyle}
+      role="article"
+      aria-label={ariaLabel}
+      tabIndex={isEditing ? -1 : 0}
+      onFocus={() => {
+        if (!isEditing) api.setSelection([block.id]);
+      }}
       onDoubleClick={(e) => {
         e.stopPropagation();
         if (!isEditing) api.setEditingNode(block.id);
