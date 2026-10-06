@@ -99,7 +99,7 @@ export interface DrawpaperDevHook {
   /** 读 fake 目录转储（断言 conflicted 副本）。 */
   syncFakeDump(): Record<string, string>;
   /** 以 WebDAV 配置启动通道（host 由 page.route mock）。 */
-  syncStartWebdav(url: string, username: string, password: string): void;
+  syncStartWebdav(url: string, username: string, password: string, e2eePassphrase?: string): void;
   /** 跑一轮同步并返回结果。 */
   syncRunNow(): Promise<unknown>;
   /** 停止同步并清除全部元数据/凭据。 */
@@ -108,6 +108,8 @@ export interface DrawpaperDevHook {
   syncInspect(): unknown;
   /** 本端同步 clientId / Lamport 水位。 */
   syncIdentity(): { clientId: string; lamport: number };
+  /** Wave11：用口令解锁已配置的加密 WebDAV 通道。 */
+  syncUnlock(passphrase: string): Promise<unknown>;
 }
 
 declare global {
@@ -326,9 +328,13 @@ export function installDevHooks(): void {
     syncFakeDump() {
       return injectedFake?.dump() ?? {};
     },
-    syncStartWebdav(url: string, username: string, password: string) {
+    syncStartWebdav(url: string, username: string, password: string, e2eePassphrase?: string) {
       injectedFake = null;
-      syncController.startWebdav({ baseUrl: url, username, password }, 0);
+      syncController.startWebdav(
+        { baseUrl: url, username, password },
+        0,
+        e2eePassphrase ? { enabled: true, passphrase: e2eePassphrase, rememberSession: false } : { enabled: false },
+      );
     },
     async syncRunNow() {
       await syncController.runNow();
@@ -343,6 +349,10 @@ export function installDevHooks(): void {
     },
     syncIdentity() {
       return { clientId: syncStamper.clientId, lamport: syncStamper.lamport };
+    },
+    async syncUnlock(passphrase: string) {
+      await syncController.unlockWebdav(passphrase);
+      return syncController.inspect();
     },
   };
 }

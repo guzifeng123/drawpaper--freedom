@@ -83,6 +83,14 @@ export async function resetSyncMeta(): Promise<void> {
   await db.syncState.clear();
 }
 
+/**
+ * 仅清 base 快照（保留计数与水位之外的状态）。
+ * Wave11 换口令后调用：让本地每文档都被视为「领先/新增」，下一轮全量重推新口令信封。
+ */
+export async function clearSyncBase(): Promise<void> {
+  await db.syncBase.clear();
+}
+
 /** 测试用：直接访问底层 db（e2e 检视）。 */
 export function syncMetaDb(): Dexie {
   return db;
