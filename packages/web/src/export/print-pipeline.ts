@@ -47,15 +47,6 @@ export async function runVectorPrint(orientation: PageOrientation): Promise<void
   }
 }
 
-function triggerDownload(dataUrl: string, fileName: string): void {
-  const a = document.createElement('a');
-  a.href = dataUrl;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-}
-
 /** 取当前离屏打印容器里的所有 .sheet 元素。 */
 export function collectSheetElements(): HTMLElement[] {
   return Array.from(
@@ -92,32 +83,35 @@ function revealOffScreenForCapture(): () => void {
   };
 }
 
-/** 逐页导出高清 PNG（pixelRatio≈3）。 */
-export async function downloadSheetsAsPng(
+/** 逐页导出高清 PNG（pixelRatio≈3）为 Blob（不在此处触发下载）。 */
+export async function renderSheetsAsPng(
   sheets: HTMLElement[],
   baseFileName: string,
-): Promise<void> {
+): Promise<{ blob: Blob; fileName: string }[]> {
   const restore = revealOffScreenForCapture();
   try {
     // 懒加载：html-to-image 仅在用户点「导出 PNG」时拉取，不进首包。
     const { toPng } = await import('html-to-image');
+    const out: { blob: Blob; fileName: string }[] = [];
     for (let i = 0; i < sheets.length; i++) {
       const el = sheets[i];
       if (!el) continue;
       const dataUrl = await toPng(el, { pixelRatio: 3, backgroundColor: '#ffffff' });
-      triggerDownload(dataUrl, buildPageFileName(baseFileName, i));
+      const blob = await (await fetch(dataUrl)).blob();
+      out.push({ blob, fileName: buildPageFileName(baseFileName, i) });
     }
+    return out;
   } finally {
     restore();
   }
 }
 
-/** 直接下载 PDF：把每页位图（scale≈3）按 A4 pt 合成多页 PDF。 */
-export async function downloadSheetsAsPdf(
+/** 直接合成 PDF（位图）为 Blob（不在此处触发下载）。 */
+export async function renderSheetsAsPdf(
   sheets: HTMLElement[],
   baseFileName: string,
   orientation: PageOrientation,
-): Promise<void> {
+): Promise<{ blob: Blob; fileName: string }> {
   const restore = revealOffScreenForCapture();
   try {
     // 懒加载：pdf-lib + html-to-image 仅在用户点「直接下载 PDF」时拉取，不进首包。
@@ -136,9 +130,7 @@ export async function downloadSheetsAsPdf(
     }
     const bytes = await pdf.save();
     const blob = new Blob([bytes], { type: 'application/pdf' });
-    const url = URL.createObjectURL(blob);
-    triggerDownload(url, baseFileName);
-    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    return { blob, fileName: baseFileName };
   } finally {
     restore();
   }

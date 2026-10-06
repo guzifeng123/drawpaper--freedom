@@ -8,6 +8,13 @@ import { TEMPLATE_REGISTRY } from '../storage/templates';
 import { createConflictBridge, type ConflictBridge } from '../wiring/conflict-bridge';
 import { pushToast } from '../panels/lib/toast';
 import { syncStamper } from '../sync/stamper';
+import {
+  buildWelcomeDoc,
+  detectTauriHost,
+  readWelcomeFlag,
+  shouldCreateWelcomeDoc,
+  writeWelcomeFlag,
+} from '../wiring/welcome-doc';
 
 /**
  * React 单例 editor store：注入浏览器 storage / host，启动时打开最近文档或新建空白。
@@ -75,15 +82,22 @@ setStorageQuotaWarningHook((kind) => {
 // Wave10 阶段 B：订阅命令管道，本地变更差量盖章（加载文档后先 adoptClockFloor 抬钟）。
 syncStamper.install(editorStore);
 
-/** 启动后：列出文档 → 打开最近一份；没有则新建。 */
+/** 启动后：列出文档 → 打开最近一份；没有则新建。桌面端首次运行先建欢迎文档。 */
 async function bootstrap(): Promise<void> {
   await editorStore.getState().listDocs();
-  const docs = editorStore.getState().docs;
-  const recent = [...docs].sort((a, b) => b.updatedAt - a.updatedAt)[0];
-  if (recent) {
-    await editorStore.getState().openDoc(recent.id);
+  // Wave13：桌面端首次运行自动创建「欢迎使用 drawpaper」。
+  // 浏览器/PWA/e2e 无 __TAURI__ → shouldCreateWelcomeDoc 恒 false，永不创建。
+  if (shouldCreateWelcomeDoc({ isTauri: detectTauriHost(), flagSet: readWelcomeFlag() })) {
+    editorStore.getState().loadDoc(buildWelcomeDoc());
+    writeWelcomeFlag();
   } else {
-    editorStore.getState().newDoc();
+    const docs = editorStore.getState().docs;
+    const recent = [...docs].sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    if (recent) {
+      await editorStore.getState().openDoc(recent.id);
+    } else {
+      editorStore.getState().newDoc();
+    }
   }
   // 尝试恢复上次活动本地文件句柄（需用户重新授权；失败则保持 IndexedDB 自动保存）。
   try {

@@ -16,6 +16,14 @@ import {
   registerConflictCopy,
 } from '@/sync/sync-db';
 import { db } from '@/storage/db';
+import {
+  buildWelcomeDoc,
+  detectTauriHost,
+  readWelcomeFlag,
+  shouldCreateWelcomeDoc,
+  writeWelcomeFlag,
+  WELCOME_DOC_FLAG,
+} from './welcome-doc';
 
 /** e2e 注入的内存 fake 同步目录（FSA 通道测试 seam）。 */
 let injectedFake: FakeDirectoryHandle | null = null;
@@ -133,6 +141,15 @@ export interface DrawpaperDevHook {
   opfsSeedAsset(ref: string, b64: string): Promise<void>;
   /** 删除 OPFS 中某资产（导出→清空→导入还原 e2e 验证资产回填）。 */
   opfsRemoveAsset(ref: string): Promise<void>;
+  // ---- Wave13 欢迎文档：e2e 模拟宿主首次运行创建流程 ----
+  /** 当前是否检测到 Tauri 宿主（duck-type __TAURI__）。 */
+  welcomeDetectHost(): boolean;
+  /** 读欢迎文档已创建标记。 */
+  welcomeFlagSet(): boolean;
+  /** 清除欢迎文档标记（e2e 复跑前重置）。 */
+  welcomeClearFlag(): void;
+  /** 按当前宿主检测 + 标记跑一次真实「首次运行创建」决策；返回是否创建。 */
+  welcomeRunFirstRunFlow(): { created: boolean; title?: string };
 }
 
 declare global {
@@ -426,6 +443,26 @@ export function installDevHooks(): void {
     },
     async opfsRemoveAsset(ref: string) {
       await deleteAsset(ref);
+    },
+    // Wave13 欢迎文档 e2e seam
+    welcomeDetectHost() {
+      return detectTauriHost();
+    },
+    welcomeFlagSet() {
+      return readWelcomeFlag();
+    },
+    welcomeClearFlag() {
+      try {
+        localStorage.removeItem(WELCOME_DOC_FLAG);
+      } catch { /* 隐私模式忽略 */ }
+    },
+    welcomeRunFirstRunFlow() {
+      const isTauri = detectTauriHost();
+      const flagSet = readWelcomeFlag();
+      if (!shouldCreateWelcomeDoc({ isTauri, flagSet })) return { created: false as const };
+      editorStore.getState().loadDoc(buildWelcomeDoc());
+      writeWelcomeFlag();
+      return { created: true as const, title: editorStore.getState().doc.title };
     },
   };
 }

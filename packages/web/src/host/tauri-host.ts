@@ -1,5 +1,6 @@
 import type { HostAdapter, OpenFileResult } from '@drawpaper/core';
 import { WebHostAdapter } from './web-host';
+import { blobToBase64 } from './blob-base64';
 
 /**
  * Tauri 2 HostAdapter — desktop (Windows WebView2) implementation.
@@ -46,6 +47,26 @@ interface OpenKbnoteReply {
   text: string;
   path: string;
 }
+
+/**
+ * Wave13：最近文件菜单点击后 Rust 读盘并 emit 的富 `app:open-file` payload。
+ *  - 最近文件子菜单：`{path, name, text, external:true}`（text 已由 Rust 读好）。
+ *  - 双击关联 / 单实例转发（兼容路径）：仅 `{path, external:true}`，无 text。
+ */
+export interface OpenFilePayload {
+  path: string;
+  name?: string;
+  text?: string;
+  external?: boolean;
+}
+
+/** `save_export` 的四类导出类型（与 Rust 过滤器一一对应）。 */
+export type ExportExt = 'pdf' | 'png' | 'svg' | 'md';
+
+/** `save_export` 的联合返回值：cancelled 是正常 resolve，绝不弹错误。 */
+export type ExportSaveOutcome =
+  | { status: 'saved'; path: string }
+  | { status: 'cancelled' };
 
 export class TauriHostAdapter implements HostAdapter {
   private readonly tauri: TauriGlobal;
@@ -113,12 +134,12 @@ export class TauriHostAdapter implements HostAdapter {
     });
   }
 
-  /** 订阅 `.kbnote` 双击/第二实例转发的打开文件事件。 */
-  onOpenFileEvent(handler: (path: string) => void): Promise<() => void> {
+  /** 订阅 `.kbnote` 双击/第二实例转发/最近文件菜单的打开文件事件。 */
+  onOpenFileEvent(handler: (payload: OpenFilePayload) => void): Promise<() => void> {
     if (!this.tauri.event) return Promise.resolve(() => undefined);
     return this.tauri.event.listen('app:open-file', (e) => {
-      const payload = e.payload as { path?: string };
-      if (payload && typeof payload.path === 'string') handler(payload.path);
+      const payload = e.payload as OpenFilePayload;
+      if (payload && typeof payload.path === 'string') handler(payload);
     });
   }
 
@@ -173,6 +194,28 @@ export class TauriHostAdapter implements HostAdapter {
     return this.invoke('set_native_dirty', { dirty });
   }
 
+  /**
+   * Wave13：把导出产物（PDF 位图 / PNG / SVG / MD）交 Rust 原生 Save 对话框写盘。
+   *
+   * - `suggestedName` 必须与浏览器下载链路逐字一致（含扩展名，如
+   *   `读书笔记_20261006_横向.pdf`）；Rust 会补/对齐扩展名。
+   * - `bytes` 任意 Blob，内部转标准 base64 传 `bytesBase64`。
+   * - 用户取消对话框 → resolve `{status:'cancelled'}`，**调用方静默，绝不 toast**。
+   * - 写盘 / 解码失败 → reject(string)，调用方 toast。
+   */
+  async saveExport(opts: {
+    suggestedName: string;
+    ext: ExportExt;
+    bytes: Blob;
+  }): Promise<ExportSaveOutcome> {
+    const bytesBase64 = await blobToBase64(opts.bytes);
+    return this.invoke<ExportSaveOutcome>('save_export', {
+      suggestedName: opts.suggestedName,
+      ext: opts.ext,
+      bytesBase64,
+    });
+  }
+
   /** 三选对话框里选了「保存/不保存」之后真正退出（Rust 会绕过 CloseRequested 守卫）。 */
   forceQuit(): Promise<void> {
     return this.invoke('force_quit');
@@ -202,4 +245,29 @@ export function createBestHostAdapter(): HostAdapter {
   const t = tauriGlobal();
   if (t && t.core) return new TauriHostAdapter();
   return new WebHostAdapter();
+}
+
+/** 缓存的导出用 TauriHostAdapter；浏览器环境为 null。 */
+let exportHost: TauriHostAdapter | null | undefined;
+
+/**
+ * 给导出管线用的 TauriHostAdapter 取号。
+ *  - 浏览器/PWA（无 __TAURI__）→ null，导出走既有 Blob 下载链路。
+ *  - 桌面 WebView → 返回一个 TauriHostAdapter 实例（与 desktop-bridge 各自构造，
+ *    共用同一条 __TAURI__ 通道，无状态冲突）。
+ * 结果按环境缓存，避免每次导出都 new。
+ */
+export function getTauriExportHost(): TauriHostAdapter | null {
+  if (exportHost !== undefined) return exportHost;
+  try {
+    exportHost = new TauriHostAdapter();
+  } catch {
+    exportHost = null;
+  }
+  return exportHost;
+}
+
+/** 测试钩子：重置缓存的导出 host（单测间隔离 window.__TAURI__ 桩）。 */
+export function resetTauriExportHost(): void {
+  exportHost = undefined;
 }
