@@ -195,16 +195,19 @@ async function renderVectorPdfInner(
   assertNoMissingGlyphs(svgPages);
 
   // 懒加载：jspdf + svg2pdf + CJK 字体仅在用户点「直接下载 PDF（矢量）」时拉取，不进首包。
+  const _t0 = performance.now();
   const [{ jsPDF }, { svg2pdf }, fontBase64] = await Promise.all([
     import('jspdf'),
     import('svg2pdf.js'),
     loadVectorFontBase64(),
   ]);
+  const _tImports = performance.now();
 
   const { width, height } = A4_PT[opts.orientation];
   const pdf = new jsPDF({ orientation: opts.orientation, unit: 'pt', format: 'a4' });
   pdf.addFileToVFS(FONT_VFS_NAME, fontBase64);
   pdf.addFont(FONT_VFS_NAME, FONT_FAMILY, 'normal');
+  const _tFont = performance.now();
 
   for (let i = 0; i < svgPages.length; i += 1) {
     if (i > 0) pdf.addPage('a4', opts.orientation);
@@ -220,15 +223,20 @@ async function renderVectorPdfInner(
     const scaleX = width / svgW;
     const scaleY = height / svgH;
 
+    const _tp = performance.now();
     await svg2pdf(svgEl, pdf, { x: 0, y: 0, width, height });
+    const _tSvg = performance.now();
 
     for (const img of images) {
       const canvas = await dataUriToCanvas(img.href);
       pdf.addImage(canvas, 'PNG', img.x * scaleX, img.y * scaleY, img.w * scaleX, img.h * scaleY);
     }
+    const _tImg = performance.now();
+    console.log(`[vecpdf-t] page ${i + 1}/${svgPages.length} svg2pdf=${(_tSvg - _tp).toFixed(0)}ms img=${(_tImg - _tSvg).toFixed(0)}ms`);
   }
 
   const bytes = pdf.output('arraybuffer');
   const blob = new Blob([bytes], { type: 'application/pdf' });
+  console.log(`[vecpdf-t] imports=${(_tImports - _t0).toFixed(0)}ms font=${(_tFont - _tImports).toFixed(0)}ms total=${(performance.now() - _t0).toFixed(0)}ms pages=${svgPages.length} fontB64=${(fontBase64.length / 1024).toFixed(0)}KB`);
   return { blob, fileName: opts.baseFileName };
 }

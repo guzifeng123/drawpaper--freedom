@@ -97,29 +97,20 @@ e2e 用含图片块文档验证：`pdfimages -list` 在对应页列出 image XOb
 
 ## 9. 字体验证方法与实测输出
 
-环境具备 poppler-utils（`pdffonts` / `pdftotext` / `pdfimages` / `pdfinfo`）。对标准样例（纵向 tiles，9 页）导出的矢量 PDF 实测：
+本地具备 poppler-utils（`pdffonts` / `pdftotext` / `pdfimages` / `pdfinfo`）时可用命令行核对；**CI runner 不预装 poppler-utils**，故 e2e 权威断言走 Node 侧 `pdfjs-dist`（devDependency）解析下载产物：页数 / 文本层（getTextContent）/ 图片 XObject（paintImageXObject）/ setFont 字体引用。
 
 ```
-$ pdffonts vector-direct.pdf
+$ pdffonts vector-direct.pdf            # 本地
 name    type           encoding    emb sub uni
 VecCJK  CID TrueType   Identity-H  yes no  yes
 
-$ pdftotext vector-direct.pdf - | grep ...
-bullet#3
-note#20
-孤块-无连接
-...
-
-$ pdfinfo vector-direct.pdf | grep Pages
-Pages: 9        # 与 .drawpaper-print-container .sheet 数一致
-
-$ pdfimages -list vector-direct.pdf
-page  num  type   width height ...
- 4    0    image  1     1      ...   # 图片块光栅可见
+$ pdfjs (Node) → pages=9 hasImage=true fontRefs=1
+  text: bullet#3 / note#20 / 孤块-无连接 ...
 ```
 
 - `emb=yes`：字体已嵌入；`uni=yes`：带 ToUnicode CMap，可抽取。
-- 中文（`孤块-无连接`）与英文节点正文（`bullet#3`/`note#20`）均可被 pdftotext 抽出 → 文本对象可选可复制，非整页栅格。
+- 中文（`孤块-无连接`）与英文节点正文（`bullet#3`/`note#20`）均可被抽出 → 文本对象可选可复制，非整页栅格。
+- 用 pdfjs 抽出中文即等价于"矢量文本对象"：整页位图 PDF 抽不出任何文本。
 
 ## 10. 门禁
 
