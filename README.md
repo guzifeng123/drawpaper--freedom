@@ -62,6 +62,26 @@ pnpm e2e            # Playwright（在 packages/web 下，自动起 dev server�
 
 桌面外壳见 `apps/desktop-tauri/README.md`（Linux 下 cargo check 需 GTK/webkit2gtk 开发库，Windows 出包无需）。
 
+## 键盘快捷键
+
+| 键 | 作用 |
+|---|---|
+| `Enter` | 选中块 = 新建同级块；无选中 = 在视口中心建根块并进编辑 |
+| `Tab` / `Shift+Tab` | 选中块 = 新建子块并连父子边 / 升级（移出父级） |
+| `Esc` | 退出编辑 → 取消选中；弹层打开时关弹层 |
+| `F2` | 选中块 = 进入编辑 |
+| `Alt+→` / `Alt+←` | 跳到第一个子块 / 跳到父块 |
+| `Alt+↑` / `Alt+↓` | 上一个 / 下一个兄弟块（同父） |
+| `方向键` / `Shift+方向键` | 微移选中块 1px / 10px |
+| `Delete` / `Backspace` | 删除选中块 / 边 |
+| `Ctrl/Cmd+S` / `Z` / `Shift+Z` / `Y` | 保存 / 撤销 / 重做 / 重做 |
+| `Ctrl/Cmd+D` / `G` / `A` | 复制 / 成组 / 全选 |
+| `Ctrl/Cmd+F` / `P` | 全文搜索 / 导出打印 |
+| `Ctrl/Cmd+0` / `1` | 适应屏幕 / 实际大小 |
+| `V` / `C` / 空格按住 | 选择工具 / 连线工具 / 平移 |
+
+无障碍细节（:focus-visible、reduced-motion、ARIA 语义、屏幕阅读器人工复测清单）见 `docs/wave9/a11y-keyboard.md`。
+
 ## 状态 / 获取安装包
 
 - **Web PWA**：浏览器直接打开部署地址即可，可「添加到主屏幕」离线使用。
