@@ -71,9 +71,10 @@ export class WebDavClient {
     return res;
   }
 
-  /** 列根目录下一层条目（文件相对路径）。不存在/空目录返回空数组。 */
-  async list(): Promise<string[]> {
-    const res = await this.req('PROPFIND', '', {
+  /** 列集合下一层条目（文件相对路径）。subpath 默认根目录；传 'assets' 即列 assets/ 子目录。
+   *  集合不存在/空目录返回空数组。 */
+  async list(subpath = ''): Promise<string[]> {
+    const res = await this.req('PROPFIND', subpath, {
       headers: { Depth: '1', 'Content-Type': 'application/xml; charset=utf-8' },
       body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/><d:resourcetype/></d:prop></d:propfind>',
     });

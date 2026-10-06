@@ -36,10 +36,16 @@ import { useSyncUi } from './sync-ui-store';
 /** 通道抽象：FSA / WebDAV 各自实现同一组读写。 */
 export interface SyncChannel {
   readonly type: 'folder' | 'webdav';
+  /** 当前通道是否处于端到端加密模式（FSA 恒 false；WebDAV 开口令时 true）。
+   *  用于决定 conflicted 副本远端文件名是否带标题——加密时远端文件名不得泄露标题。 */
+  readonly e2eeActive: boolean;
   /** 通道目标标签（设置面板展示）。 */
   label(): string;
   /** 列远端 .kbnote 文件相对名（不含 conflicted 副本）。 */
   listRemoteDocs(): Promise<string[]>;
+  /** 列远端已有资产 ref 集合（`assets/<ref>` 中的 `<ref>`）。push 前去重基准；
+   *  assets/ 目录不存在时返回空数组。 */
+  listRemoteAssets(): Promise<string[]>;
   pullDoc(docId: string): Promise<string | null>;
   pushDoc(docId: string, contents: string): Promise<void>;
   pullAsset(ref: string): Promise<Uint8Array | null>;
@@ -62,6 +68,10 @@ export interface SyncRunResult {
   merged: number;
   conflicts: number;
   skipped: number;
+  /** 本轮成功推送到远端的资产数（全局去重后、本地 OPFS 读取成功并上传成功）。 */
+  assetsPushed: number;
+  /** 本轮推送失败的资产数（OPFS 缺失或通道上传失败；尽力而为，不阻断文档同步）。 */
+  assetsFailed: number;
 }
 
 /**
@@ -72,7 +82,7 @@ export async function runSync(channel: SyncChannel): Promise<SyncRunResult> {
   ui.setBusy(true);
   ui.clearConflicts();
   ui.setError('');
-  const result: SyncRunResult = { push: 0, pull: 0, merged: 0, conflicts: 0, skipped: 0 };
+  const result: SyncRunResult = { push: 0, pull: 0, merged: 0, conflicts: 0, skipped: 0, assetsPushed: 0, assetsFailed: 0 };
   try {
     // 1) 刷盘当前文档。
     editorStore.getState().requestSave();
@@ -150,7 +160,15 @@ export async function runSync(channel: SyncChannel): Promise<SyncRunResult> {
       if (conflicts.length > 0) {
         result.conflicts += conflicts.length;
         // 写 conflicted 副本（保留对端版本供人工核对）。
-        const copyName = `${remoteDoc.title || '未命名'}.conflicted-${nowStamp()}.kbnote`;
+        // 命名规则（Wave14）：
+        //  - 未加密通道（FSA / 明文 WebDAV）：远端文件名可读，带文档标题，便于人工翻文件；
+        //  - 开启 E2EE 的 WebDAV：远端文件名【不得】泄露标题（服务器能看到文件名），
+        //    改用 docId 派生名 `<docId>.conflicted-<时间>.kbnote`；文档标题保留在信封密文内。
+        //  本地冲突副本注册表仍存展示标题（title 字段，仅本地库，不落远端明文文件名）。
+        const copyBase = channel.e2eeActive
+          ? `${remoteDoc.id}.conflicted-${nowStamp()}`
+          : `${remoteDoc.title || '未命名'}.conflicted-${nowStamp()}`;
+        const copyName = `${copyBase}.kbnote`;
         const copyText = serializeKBNote(remoteDoc);
         await channel.writeConfcted(copyName, copyText);
         // 同时登记到本地冲突副本注册表（冲突处理面板三来源聚合；刷新后仍在）。
@@ -182,7 +200,9 @@ export async function runSync(channel: SyncChannel): Promise<SyncRunResult> {
           if (bytes) {
             const existing = await import('@/storage/opfs').then((m) => m.getAsset(ref));
             if (!existing) {
-              await import('@/storage/opfs').then((m) => m.putAsset(new Blob([bytes])));
+              // 必须按原 ref 同名落盘（writeAssetToRef）；不能用 putAsset——那会随机生成新 nanoid，
+              // 导致画布里 image.src=<ref> 指向不存在的对象（见 opfs.writeAssetToRef 注释）。
+              await import('@/storage/opfs').then((m) => m.writeAssetToRef(ref, bytes));
             }
           }
         } catch {
@@ -190,6 +210,14 @@ export async function runSync(channel: SyncChannel): Promise<SyncRunResult> {
         }
       }
     }
+
+    // 4d) 资产推送（Wave14 修复「资产只拉不推」）：
+    // 本轮收敛的文档集合 = pushDocIds（本端领先/独有）∪ pullIds（对端领先/合并后）。
+    // 收集这些文档在本地登记的全部 assetRefs，与远端已有资产清单比对得出对端缺失集，
+    // 全局去重后从本地 OPFS 读字节、经 channel.pushAsset 上传。
+    // 开启 E2EE 时资产字节在通道层包成加密信封（WebDAV pushAsset 已实现，这里只负责接通）。
+    // 单个资产失败尽力而为、不阻断文档同步（与 4c 容错风格一致），计数可观测。
+    await pushMissingAssets(channel, result, new Set([...bundle.pushDocIds, ...pullIds]));
 
     // 5) 推进 cursor + 计数持久化。
     const state = await readSyncState();
@@ -215,3 +243,66 @@ export async function runSync(channel: SyncChannel): Promise<SyncRunResult> {
 }
 
 export { docFileName };
+
+/**
+ * 资产推送（Wave14）：把本轮收敛文档引用、但远端仍缺失的资产上传。
+ *
+ * 去重/缺失集算法：
+ *  1. 遍历 docIds（= 本轮 pushDocIds ∪ pullIds 合并结果），从本地库读出每篇文档的
+ *     assetRefs，并入一个全局 Set（跨文档同 ref 自动去重）；
+ *  2. 调 channel.listRemoteAssets() 得远端已有 ref 集合（FSA 递归列 assets/，WebDAV
+ *     PROPFIND assets/ 子目录）；
+ *  3. missing = 本地 refs − 远端 refs；
+ *  4. 逐个 missing：从本地 OPFS 读字节（动态 import，与 4c 同款），读不到记一次失败、
+ *     不阻断；读到则 channel.pushAsset(ref, bytes)（WebDAV 开启 E2EE 时通道层包信封）。
+ *
+ * 合并后文档资产如何纳入：pullIds 在 4b 已 mergeSnapshots 落库，其 assetRefs 是合并后的
+ * 并集；故对端带来的文档若引用了「本端才有」的资产（如 B 本地后加的图），也会在这一步
+ * 被反向推回远端，实现双向收敛。
+ *
+ * 孤儿资产（文档删除后无人引用的 ref）本波不做 GC，保守保留，详见 docs/wave14/asset-push.md。
+ */
+async function pushMissingAssets(
+  channel: SyncChannel,
+  result: SyncRunResult,
+  docIds: Set<string>,
+): Promise<void> {
+  // 1) 收集本地本轮收敛文档引用的全部资产 ref（全局去重）。
+  const localRefs = new Set<string>();
+  for (const id of docIds) {
+    const doc = await db.docs.get(id);
+    if (!doc) continue;
+    for (const ref of doc.assetRefs) localRefs.add(ref);
+  }
+  if (localRefs.size === 0) return;
+
+  // 2) 远端已有资产清单（列举失败/目录不存在一律视为空，不阻断本轮文档同步）。
+  let remoteRefs: Set<string>;
+  try {
+    remoteRefs = new Set(await channel.listRemoteAssets());
+  } catch {
+    remoteRefs = new Set();
+  }
+
+  // 3) 对端缺失集。
+  const missing = [...localRefs].filter((ref) => !remoteRefs.has(ref));
+  if (missing.length === 0) return;
+
+  // 4) 逐个上传（尽力而为）。
+  const opfs = await import('@/storage/opfs');
+  for (const ref of missing) {
+    try {
+      const blob = await opfs.getAsset(ref);
+      if (!blob) {
+        // 文档登记了 ref 但本地 OPFS 没有字节（罕见：资产被清），跳过并不阻断。
+        result.assetsFailed += 1;
+        continue;
+      }
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      await channel.pushAsset(ref, bytes);
+      result.assetsPushed += 1;
+    } catch {
+      result.assetsFailed += 1;
+    }
+  }
+}

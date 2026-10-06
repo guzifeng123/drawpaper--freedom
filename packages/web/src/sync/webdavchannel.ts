@@ -43,6 +43,12 @@ export class WebDavSyncChannel implements SyncChannel {
     return all.filter((f) => f.endsWith('.kbnote') && !f.includes('conflicted-') && !f.startsWith('assets/'));
   }
 
+  async listRemoteAssets(): Promise<string[]> {
+    // assets/ 子目录：不存在（404）时 WebDavClient.list 返回 []；列举失败不抛出（外层兜底）。
+    const all = await this.client.list('assets');
+    return all.filter((f) => f.startsWith('assets/')).map((f) => f.slice('assets/'.length));
+  }
+
   async pullDoc(docId: string): Promise<string | null> {
     const raw = await this.client.getBytes(`${docId}.kbnote`);
     if (raw == null) return null;

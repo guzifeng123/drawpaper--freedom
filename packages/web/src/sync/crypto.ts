@@ -157,16 +157,53 @@ function randomBytes(n: number): Uint8Array {
   return buf;
 }
 
-/** 由口令 + salt 派生 AES-GCM 加密密钥（不可导出）。 */
+/**
+ * 会话内派生密钥缓存（Wave14 打磨）。
+ *
+ * 键 = `${passphrase}|${saltB64url}|${iterations}`：同一口令 + 同一 salt + 同一迭代次数
+ * 不重复跑 310k 次 PBKDF2（一次派生约数百 ms，一轮同步可能解/封大量文档与资产）。
+ *  - 仅内存（模块级 Map），绝不写 localStorage/sessionStorage 之外的持久层；
+ *  - 页面刷新后 Map 随 JS 堆一起销毁，按原策略重新派生；
+ *  - 缓存的是【Promise】而非 resolved key：同一键的并发派生只跑一次，不会竞态双派生；
+ *  - 派生失败时从缓存剔除，允许下次重试。
+ */
+const derivedKeyCache = new Map<string, Promise<CryptoKey>>();
+
+function keyCacheKey(passphrase: string, salt: Uint8Array, iterations: number): string {
+  return `${passphrase}|${bytesToBase64Url(salt)}|${iterations}`;
+}
+
+/** 测试用：清空会话内派生密钥缓存（隔离单测用；生产不调用）。 */
+export function __clearKeyCacheForTest(): void {
+  derivedKeyCache.clear();
+}
+
+/** 测试用：当前缓存条目数（断言命中/隔离用；生产不调用）。 */
+export function __derivedKeyCacheSizeForTest(): number {
+  return derivedKeyCache.size;
+}
+
+/** 由口令 + salt 派生 AES-GCM 加密密钥（不可导出）。同键会话内缓存复用。 */
 async function deriveKey(passphrase: string, salt: Uint8Array, iterations: number): Promise<CryptoKey> {
-  const baseKey = await subtle().importKey('raw', utf8Encode(passphrase), 'PBKDF2', false, ['deriveKey']);
-  return subtle().deriveKey(
-    { name: 'PBKDF2', salt: salt as BufferSource, iterations, hash: 'SHA-256' },
-    baseKey,
-    { name: 'AES-GCM', length: KEY_BITS },
-    false,
-    ['encrypt', 'decrypt'],
-  );
+  const cacheKey = keyCacheKey(passphrase, salt, iterations);
+  const hit = derivedKeyCache.get(cacheKey);
+  if (hit) return hit;
+  const promise = (async () => {
+    const baseKey = await subtle().importKey('raw', utf8Encode(passphrase), 'PBKDF2', false, ['deriveKey']);
+    return subtle().deriveKey(
+      { name: 'PBKDF2', salt: salt as BufferSource, iterations, hash: 'SHA-256' },
+      baseKey,
+      { name: 'AES-GCM', length: KEY_BITS },
+      false,
+      ['encrypt', 'decrypt'],
+    );
+  })();
+  derivedKeyCache.set(cacheKey, promise);
+  promise.catch(() => {
+    // 派生失败：剔除缓存，避免一个坏键永久占位导致后续必然失败。
+    if (derivedKeyCache.get(cacheKey) === promise) derivedKeyCache.delete(cacheKey);
+  });
+  return promise;
 }
 
 // ---------------------------------------------------------------------------
