@@ -19,6 +19,9 @@ const E2E_PORT = Number(process.env['E2E_PORT'] ?? 4173);
 
 export default defineConfig({
   testDir: './e2e',
+  // Wave8 离线回归跑生产预览（独立 playwright.offline.config.ts），dev server 无 SW，
+  // 这里显式忽略 offline 目录，避免 dev 套件误跑离线用例。
+  testIgnore: '**/offline/**',
   fullyParallel: true,
   forbidOnly: !!process.env['CI'],
   retries: 0,
