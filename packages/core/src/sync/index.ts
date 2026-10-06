@@ -5,3 +5,4 @@ export * from './migrate.js';
 export * from './clock-floor.js';
 export * from './merge.js';
 export * from './manifest.js';
+export * from './prune.js';

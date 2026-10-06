@@ -12,6 +12,10 @@ export * from './store/index.js';
 export * from './collab/index.js';
 // 跨设备同步合并内核（Wave10 阶段 A：快照级 LWW 合并 / schema v3 元数据 / manifest 差异）。
 export * from './sync/index.js';
+// 同名消解：collab 运行态（CollabState）与 sync 落盘（KBNoteDoc）各有一个 pruneTombstones。
+// 顶层以 sync 版（Wave14 公共快照 API）为准；collab 运行态版以别名导出，不丢契约。
+export { pruneTombstones as pruneCollabStateTombstones } from './collab/index.js';
+export { pruneTombstones } from './sync/index.js';
 // AI 纯逻辑（与 store/adapters 的 AIProvider 接口配合；类型名刻意与 adapters 的
 // 宽松 AISuggestion 区分：这里是校验过的判别联合 AiSuggestion）。
 export * from './ai/index.js';
