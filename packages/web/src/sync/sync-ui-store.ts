@@ -25,6 +25,12 @@ export interface SyncUiState {
   error: string;
   /** 同步目录名 / WebDAV 主机名（展示用）。 */
   targetLabel: string;
+  /** WebDAV 同步配置中是否开启了端到端加密（持久化配置的镜像）。 */
+  e2eeEnabled: boolean;
+  /** 已配置加密但口令尚未解锁（刷新后待输入）：面板弹解锁框。 */
+  e2eeLocked: boolean;
+  /** 当前通道是否真的带加密上线（与 e2eeEnabled 区分：配置开但未解锁时为 false）。 */
+  e2eeActive: boolean;
 
   setChannel(c: SyncChannelType): void;
   setBusy(b: boolean): void;
@@ -34,6 +40,9 @@ export interface SyncUiState {
   clearConflicts(): void;
   setError(err: string): void;
   setTargetLabel(label: string): void;
+  setE2eeEnabled(b: boolean): void;
+  setE2eeLocked(b: boolean): void;
+  setE2eeActive(b: boolean): void;
   reset(): void;
 }
 
@@ -47,6 +56,9 @@ export const useSyncUi = create<SyncUiState>((set) => ({
   conflicts: [],
   error: '',
   targetLabel: '',
+  e2eeEnabled: false,
+  e2eeLocked: false,
+  e2eeActive: false,
 
   setChannel: (channel) => set({ channel }),
   setBusy: (busy) => set({ busy }),
@@ -57,6 +69,9 @@ export const useSyncUi = create<SyncUiState>((set) => ({
   clearConflicts: () => set({ conflicts: [], conflictCount: 0 }),
   setError: (error) => set({ error }),
   setTargetLabel: (targetLabel) => set({ targetLabel }),
+  setE2eeEnabled: (e2eeEnabled) => set({ e2eeEnabled }),
+  setE2eeLocked: (e2eeLocked) => set({ e2eeLocked }),
+  setE2eeActive: (e2eeActive) => set({ e2eeActive }),
   reset: () =>
     set({
       channel: 'none',
@@ -68,5 +83,8 @@ export const useSyncUi = create<SyncUiState>((set) => ({
       conflicts: [],
       error: '',
       targetLabel: '',
+      e2eeEnabled: false,
+      e2eeLocked: false,
+      e2eeActive: false,
     }),
 }));
