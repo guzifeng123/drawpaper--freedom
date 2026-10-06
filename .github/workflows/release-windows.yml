@@ -103,6 +103,173 @@ jobs:
             exit "$code"
           fi
 
+      # ------------------------------------------------------------------
+      # Smoke tests (Wave 12 C). See docs/wave12/windows-smoke.md for design.
+      #
+      # - "fresh web assets" runs on BOTH arches: it only inspects files on
+      #   disk, no execution.
+      # - install / launch / uninstall steps are gated to `matrix.arch ==
+      #   'x64'`: the windows-latest runner is x64 hardware, so an aarch64
+      #   PE built here cannot be launched (Win32 loader rejects it). The
+      #   steps stay in the YAML for arm64 but are skipped, never faked green.
+      # ------------------------------------------------------------------
+      - name: 'Smoke (both arches): bundled web assets contain a fresh index-*.js'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $targetRoot = 'apps/desktop-tauri/src-tauri/target'
+          Write-Host "::group::Scan $targetRoot for index-*.js"
+          $files = Get-ChildItem -Path $targetRoot -Recurse -Filter 'index-*.js' -File -ErrorAction SilentlyContinue
+          if (-not $files) {
+            Write-Error "Smoke FAIL: no index-*.js found under $targetRoot (packaged web bundle may be missing)"
+          }
+          $newest = $files | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+          Write-Host ("Found {0} index-*.js file(s); newest:" -f $files.Count)
+          $files | ForEach-Object { Write-Host ("  - {0}  ({1:o})" -f $_.FullName, $_.LastWriteTimeUtc) }
+          $ageMin = (New-TimeSpan -Start $newest.LastWriteTimeUtc -End (Get-Date).ToUniversalTime()).TotalMinutes
+          Write-Host ("Newest index-*.js age = {0:N1} min" -f $ageMin)
+          if ($ageMin -gt 15) {
+            Write-Error ("Smoke FAIL: newest index-*.js is {0:N1} min old (>15 min); packaged resources look stale" -f $ageMin)
+          }
+          Write-Host "Smoke OK: bundled web assets are fresh"
+          Write-Host "::endgroup::"
+
+      - name: 'Smoke (x64): silent NSIS install, exe present, ProductVersion matches tauri.conf'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # 1) Expected version straight from tauri.conf.json (branch runs have
+          #    no release tag name; the source of truth is the conf file).
+          $tauriConf = Get-Content -Raw 'apps/desktop-tauri/src-tauri/tauri.conf.json' | ConvertFrom-Json
+          $expectedVersion = $tauriConf.version
+          Write-Host "tauri.conf.json version (raw) = '$expectedVersion'"
+
+          # 2) Locate the NSIS installer produced by `tauri build`.
+          $installer = Get-ChildItem -Path 'apps/desktop-tauri/src-tauri/target' -Recurse -Filter '*-setup.exe' -File |
+            Where-Object { $_.FullName -match '[\\/]bundle[\\/]nsis[\\/]' } |
+            Select-Object -First 1
+          if (-not $installer) { Write-Error 'Smoke FAIL: NSIS *-setup.exe not found under target/**/bundle/nsis' }
+          Write-Host "Installer = $($installer.FullName)"
+
+          # 3) Silent install. nsis.installMode is currentUser, so /S installs
+          #    per-user without elevation.
+          Write-Host "Running silent install: Start-Process -Wait /S"
+          $p = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
+          Write-Host "Installer exit code = $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { Write-Error "Smoke FAIL: silent installer exited $($p.ExitCode)" }
+
+          # 4) Discover install dir (expected %LOCALAPPDATA%\drawpaper).
+          $installDir = Get-ChildItem $env:LOCALAPPDATA -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if (-not $installDir) {
+            Write-Error 'Smoke FAIL: install dir %LOCALAPPDATA%\drawpaper not found after silent install'
+          }
+          $installDir = $installDir.FullName
+          Write-Host "Install dir = $installDir"
+
+          # 5) Locate drawpaper.exe.
+          $exe = Join-Path $installDir 'drawpaper.exe'
+          if (-not (Test-Path $exe)) {
+            $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $exe -or -not (Test-Path $exe)) { Write-Error "Smoke FAIL: drawpaper.exe not found under $installDir" }
+          Write-Host "App exe = $exe"
+
+          # 6) Version assertion with normalization.
+          #    Windows ProductVersion can rewrite a pre-release tag:
+          #    tauri.conf '0.1.0-rc.4' may come back as '0.1.0.4' (the 'rc'
+          #    label dropped, revision number bumped). We therefore compare
+          #    the NUMERIC token sequences (split on any non-digit run),
+          #    padding the shorter side with trailing zeros, and print both
+          #    raw values for the log.
+          $productVersion = (Get-Item $exe).VersionInfo.ProductVersion
+          Write-Host "Installed exe ProductVersion (raw) = '$productVersion'"
+          Write-Host "tauri.conf version           (raw) = '$expectedVersion'"
+          function Get-NumTokens([string]$v) {
+            if (-not $v) { return @() }
+            return @([regex]::Matches($v, '\d+') | ForEach-Object { [int]$_.Value })
+          }
+          $exp = Get-NumTokens $expectedVersion
+          $got = Get-NumTokens $productVersion
+          Write-Host ("Normalized numeric tokens - expected: [{0}]" -f ($exp -join '.'))
+          Write-Host ("Normalized numeric tokens - got:      [{0}]" -f ($got -join '.'))
+          # Pad to equal length with trailing zeros.
+          $max = [Math]::Max($exp.Count, $got.Count)
+          while ($exp.Count -lt $max) { $exp += 0 }
+          while ($got.Count -lt $max) { $got += 0 }
+          $mismatch = @(Compare-Object $exp $got -SyncWindow 0)
+          if ($mismatch.Count -ne 0) {
+            Write-Error ("Smoke FAIL: version mismatch. tauri.conf='$expectedVersion' vs ProductVersion='$productVersion'")
+          }
+          Write-Host "Smoke OK: installed exe present and numeric version tokens match"
+
+      - name: 'Smoke (x64): launch exe, main window title contains drawpaper, then kill'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installDir = Get-ChildItem $env:LOCALAPPDATA -Filter 'drawpaper' -Directory |
+            Select-Object -First 1 -ExpandProperty FullName
+          $exe = Join-Path $installDir 'drawpaper.exe'
+          if (-not (Test-Path $exe)) { $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName }
+          Write-Host "Launching $exe"
+          $proc = Start-Process -FilePath $exe -PassThru
+          Write-Host ("Start-Process returned pid={0}" -f $proc.Id)
+          $ok = $false
+          for ($i = 1; $i -le 20; $i++) {
+            Start-Sleep -Seconds 1
+            $p = Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($p) {
+              $title = $p.MainWindowTitle
+              Write-Host ("t={0,2}s pid={1} MainWindowTitle='{2}'" -f $i, $p.Id, $title)
+              if ($title -and ($title.ToLower().Contains('drawpaper'))) {
+                $ok = $true
+                Write-Host "Smoke OK: process alive and main window title contains 'drawpaper'"
+                Stop-Process -Id $p.Id -Force
+                break
+              }
+            } else {
+              Write-Host ("t={0,2}s: drawpaper process not found yet" -f $i)
+            }
+          }
+          # Best-effort cleanup of any leftover drawpaper processes.
+          Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          if (-not $ok) {
+            Write-Error 'Smoke FAIL: drawpaper process did not present a main window whose title contains "drawpaper" within 20s'
+          }
+
+      - name: 'Smoke (x64): silent uninstall, install dir removed'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $installDir = Get-ChildItem $env:LOCALAPPDATA -Filter 'drawpaper' -Directory |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $installDir) {
+            Write-Host "Install dir already absent; nothing to uninstall"
+            exit 0
+          }
+          Write-Host "Install dir = $installDir"
+          $uninst = Get-ChildItem $installDir -Filter 'Uninstall*.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $uninst) { $uninst = Get-ChildItem $installDir -Filter 'uninstall*.exe' -File | Select-Object -First 1 }
+          if (-not $uninst) { Write-Error "Smoke FAIL: uninstaller exe (Uninstall*.exe) not found in $installDir" }
+          Write-Host "Uninstaller = $($uninst.FullName)"
+          $p = Start-Process -FilePath $uninst.FullName -ArgumentList '/S' -Wait -PassThru
+          Write-Host "Uninstaller exit code = $($p.ExitCode)"
+          $removed = $false
+          for ($i = 1; $i -le 20; $i++) {
+            Start-Sleep -Seconds 1
+            if (-not (Test-Path $installDir)) { $removed = $true; break }
+          }
+          if (-not $removed) {
+            Write-Host "Remaining files under $installDir :"
+            Get-ChildItem $installDir -Recurse -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
+            Write-Error "Smoke FAIL: install dir still present 20s after silent uninstall"
+          }
+          Write-Host "Smoke OK: install dir removed after silent uninstall"
+
       - name: Upload NSIS installer artifact
         uses: actions/upload-artifact@v4
         with:
@@ -145,6 +312,25 @@ jobs:
           find artifacts -type f -name '*.exe' -print
           echo "::endgroup::"
 
+      - name: Generate SHA256SUMS.txt
+        # One line per installer: "<sha256>  <basename>". Basename (no arch
+        # subdir) so a user who downloads both exes + the sums file into one
+        # folder can run `sha256sum -c SHA256SUMS.txt` directly.
+        run: |
+          set -euo pipefail
+          cd artifacts
+          : > SHA256SUMS.txt
+          # shellcheck disable=SC2044
+          for exe in $(find nsis-x64 nsis-arm64 -name '*-setup.exe' -type f | sort); do
+            hash="$(sha256sum "$exe" | cut -d' ' -f1)"
+            base="$(basename "$exe")"
+            printf '%s  %s\n' "$hash" "$base" >> SHA256SUMS.txt
+          done
+          echo "::group::SHA256SUMS.txt"
+          cat SHA256SUMS.txt
+          echo "::endgroup::"
+          test "$(wc -l < SHA256SUMS.txt)" -ge 2
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -157,6 +343,7 @@ jobs:
           files: |
             artifacts/nsis-x64/**/*.exe
             artifacts/nsis-arm64/**/*.exe
+            artifacts/SHA256SUMS.txt
           generate_release_notes: false
           body: |
             ## drawpaper ${{ github.ref_name }}（预发布）
@@ -165,5 +352,6 @@ jobs:
 
             - `drawpaper_*_x64-setup.exe` — 64 位 Intel/AMD
             - `drawpaper_*_arm64-setup.exe` — ARM64（Copilot+、Surface Pro X 等）
+            - `SHA256SUMS.txt` — 两个安装包的 SHA-256 校验和（下载后 `sha256sum -c SHA256SUMS.txt` 校验）。
 
             本版为预发布（RC），尚未启用自动更新：升级请手动下载新安装包覆盖安装。详见仓库 `CHANGELOG.md` 与 `docs/RELEASE.md`。
