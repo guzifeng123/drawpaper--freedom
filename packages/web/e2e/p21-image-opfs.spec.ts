@@ -127,6 +127,7 @@ test.describe('P2.1 图片 → OPFS assetRef 统一管线', () => {
 
     const svgs = await page.evaluate(() => window.__drawpaper__!.buildSvgPagesDev());
     console.log('SVG_PAGE_COUNT', svgs.length, 'SVG_HAS_DATA_IMAGE', svgs.some((s) => s.includes('data:image')));
+    fs.mkdirSync('test-results', { recursive: true });
     for (const [i, s] of svgs.entries()) {
       fs.writeFileSync(`test-results/p21-debug-${i}.svg`, s);
       console.log(`SVG[${i}] len=${s.length} hasImageTag=${s.includes('<image')}`, s.slice(0, 600));
