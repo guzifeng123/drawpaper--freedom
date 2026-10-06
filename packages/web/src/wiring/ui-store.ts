@@ -36,6 +36,12 @@ export interface WiringUiState {
   /** Wave10：设置→同步面板是否打开。 */
   syncOpen: boolean;
 
+  /**
+   * Wave12：原生关闭守卫弹窗是否打开。仅桌面端且「已绑定原生 .kbnote 且脏」时
+   * 由 Rust `app:close-requested` 事件置 true；三选一（保存/不保存/取消）。
+   */
+  closeGuardOpen: boolean;
+
   // ============================================================
   // Wave7 P2.1：删除块时的跨文档反链影响确认
   // ============================================================
@@ -63,6 +69,7 @@ export interface WiringUiState {
   setBacklinksOpen(open: boolean): void;
   setOverviewOpen(open: boolean): void;
   setSyncOpen(open: boolean): void;
+  setCloseGuardOpen(open: boolean): void;
   setBlockDeleteRequest(req: WiringUiState['blockDeleteRequest']): void;
 }
 
@@ -79,6 +86,7 @@ export const useWiringUi = create<WiringUiState>((set) => ({
   backlinksOpen: false,
   overviewOpen: false,
   syncOpen: false,
+  closeGuardOpen: false,
   blockDeleteRequest: null,
   setExportOpen: (open) => set({ exportOpen: open }),
   setSearchOpen: (open) => set({ searchOpen: open }),
@@ -92,6 +100,7 @@ export const useWiringUi = create<WiringUiState>((set) => ({
   setBacklinksOpen: (open) => set({ backlinksOpen: open }),
   setOverviewOpen: (open) => set({ overviewOpen: open }),
   setSyncOpen: (open) => set({ syncOpen: open }),
+  setCloseGuardOpen: (open) => set({ closeGuardOpen: open }),
   setBlockDeleteRequest: (req) => set({ blockDeleteRequest: req }),
 }));
 

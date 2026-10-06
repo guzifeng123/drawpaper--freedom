@@ -35,6 +35,9 @@ import {
   useExportModel,
   computePanelsPaginate,
 } from '@/export';
+import { registerExportActions } from '@/export/export-actions-bridge';
+import { initDesktopBridge } from '@/host/desktop-bridge';
+import { CloseGuardDialog } from '@/panels/CloseGuardDialog';
 
 /**
  * App 总装（Wave4 P1）：在 Wave2 基础上接齐大纲 / 标签筛选 / AI 面板 / 导出新选项。
@@ -149,6 +152,15 @@ export default function App() {
 
   // 导出数据流
   const { result, sheetsVisible, actions, scope, setScope, busy } = useExportModel(panelsApi);
+  // Wave12：把导出动作注册给原生菜单（浏览器环境菜单不触发，纯注册表 no-op 安全）。
+  useEffect(() => {
+    registerExportActions(actions);
+  }, [actions]);
+
+  // Wave12：桌面桥接——原生菜单路由 / 动态窗口标题 / 关闭守卫。浏览器环境 no-op。
+  useEffect(() => {
+    return initDesktopBridge();
+  }, []);
 
   // 定时备份调度：backupEnabled 开启且 dirty 时每 10 分钟下载一份 .kbnote 备份。
   const backupEnabled = useEditorStore((s) => s.backupEnabled);
@@ -324,6 +336,8 @@ export default function App() {
       </button>
       {/* Wave7 P2.1：删块反链影响确认框（有 incoming/outgoing 链接时才弹出） */}
       <BlockDeleteConfirmDialog />
+      {/* Wave12：原生关闭守卫三选框（仅桌面端绑定且脏时出现） */}
+      <CloseGuardDialog />
     </div>
   );
 }
