@@ -77,6 +77,14 @@ jobs:
         env:
           CI: '1'
 
+      # 生产构建（vite preview + Service Worker）下的真实断网回归：
+      # 该配置的 webServer 会自行 build 并起 preview（OFFLINE_PORT 默认 4188）。
+      - name: Playwright offline e2e (production preview + Service Worker)
+        working-directory: packages/web
+        run: npx playwright test --config playwright.offline.config.ts
+        env:
+          CI: '1'
+
       - name: Upload Playwright report
         if: always()
         uses: actions/upload-artifact@v4
