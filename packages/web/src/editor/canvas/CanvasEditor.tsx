@@ -18,6 +18,7 @@ import {
 import type { BlockNode, Edge as CoreEdge } from '@drawpaper/core';
 import type { EditorApi } from '../editor-api';
 import { EditorApiContext, useEditorSnapshot } from './editor-context';
+import { useHydrationScheduler } from './use-hydration-scheduler';
 import { nodeTypes, resolveNodeType } from '../nodes';
 import { edgeTypes } from '../edges';
 import { useKeyboardShortcuts } from '../state/useKeyboardShortcuts';
@@ -329,6 +330,11 @@ function CanvasInner({ api }: { api: EditorApi }) {
 
   // RF v22 不把 onDoubleClick/onContextMenu 透传到 pane；改用包装 div 上的原生监听。
   const wrapRef = useRef<HTMLDivElement>(null);
+  const [paneEl, setPaneEl] = useState<HTMLElement | null>(null);
+
+  // 【Wave8】大规模文档渐进水化：视口邻近升级/远离降级 + 分批调度。
+  useHydrationScheduler(api, snap.doc, snap.viewport, paneEl);
+
   useEffect(() => {
     const el = wrapRef.current;
     if (!el) return;
@@ -385,7 +391,10 @@ function CanvasInner({ api }: { api: EditorApi }) {
   return (
     <div
       className={`relative h-full w-full ${dragOver ? 'ring-2 ring-inset ring-blue-400' : ''}`}
-      ref={wrapRef}
+      ref={(el) => {
+        (wrapRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+        setPaneEl(el);
+      }}
       onDragOver={(e) => {
         e.preventDefault();
         e.dataTransfer.dropEffect = 'copy';
