@@ -103,9 +103,7 @@ Rust `build_menu()` 补项，菜单事件除「帮助→项目主页」外全部
       "nsis": {
 +       "installMode": "currentUser",
 +       "displayLanguageSelector": true,
-        "languages": ["SimpChinese", "English"],
-+       "headerImage": "icons/installer-header.bmp",
-+       "sidebarImage": "icons/installer-sidebar.bmp"
+        "languages": ["SimpChinese", "English"]
       }
     }
   }
@@ -114,12 +112,18 @@ Rust `build_menu()` 补项，菜单事件除「帮助→项目主页」外全部
 - MSI/WiX 整条移除（targets 只剩 nsis，wix 配置成死配置）。
 - `installMode: currentUser`：免 UAC 装到用户目录，配合文件关联更顺。
 - `displayLanguageSelector: true`：安装首屏选简体中文/English。
-- header/sidebar 引用 B 路并行产出的 `icons/installer-header.bmp` /
-  `icons/installer-sidebar.bmp`（同路径文件由 B 路提供）。
-- **桌面快捷方式勾选框**：放弃。Tauri 2 NSIS 的桌面图标默认行为已内置
-  （不需要自定义 template 就会建桌面快捷方式）；要加「勾选框」需要写
-  NSIS 自定义模板（`nsis.template` 覆盖整个 nsi 片段），模板与 Tauri 2
-  版本强耦合、升级即碎，当前阶段不硬塞，等模板方案在 CI 里稳定后再加。
+- ~~headerImage / sidebarImage~~：**本波暂不引用**。B 路并行产出的
+  `icons/installer-header.bmp` / `icons/installer-sidebar.bmp` 在 A 路分支
+  （feat/desktop-shell-polish）上尚不存在，NSIS bundler 引用缺失图片会直接
+  构建失败（release-windows 真实构建验证：两次红）。待 B 路图标合并进本分支后，
+  在 nsis 段加回两行：
+  ```json
+  "headerImage": "icons/installer-header.bmp",
+  "sidebarImage": "icons/installer-sidebar.bmp"
+  ```
+- **桌面快捷方式勾选框**：放弃。Tauri 2 NSIS 默认行为已建桌面快捷方式；
+  要加「勾选框」需写 NSIS 自定义模板（`nsis.template` 覆盖整个 nsi 片段），
+  模板与 Tauri 2 版本强耦合、升级即碎，当前阶段不硬塞。
 
 ## 7. capabilities 最小权限复核
 

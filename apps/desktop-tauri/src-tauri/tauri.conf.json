@@ -51,9 +51,7 @@
         "languages": [
           "SimpChinese",
           "English"
-        ],
-        "headerImage": "icons/installer-header.bmp",
-        "sidebarImage": "icons/installer-sidebar.bmp"
+        ]
       }
     },
     "macOS": {
