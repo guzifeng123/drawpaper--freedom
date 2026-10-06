@@ -115,6 +115,7 @@ jobs:
       # ------------------------------------------------------------------
       - name: 'Smoke (both arches): bundled web assets contain a fresh index-*.js'
         shell: pwsh
+        timeout-minutes: 3
         run: |
           $ErrorActionPreference = 'Stop'
           # Search both the raw frontend build output (packages/web/dist,
@@ -154,6 +155,7 @@ jobs:
       - name: 'Smoke (x64): silent NSIS install, exe present, ProductVersion matches tauri.conf'
         if: matrix.arch == 'x64'
         shell: pwsh
+        timeout-minutes: 5
         run: |
           $ErrorActionPreference = 'Stop'
           # 1) Expected version straight from tauri.conf.json (branch runs have
@@ -170,9 +172,17 @@ jobs:
           Write-Host "Installer = $($installer.FullName)"
 
           # 3) Silent install. nsis.installMode is currentUser, so /S installs
-          #    per-user without elevation.
-          Write-Host "Running silent install: Start-Process -Wait /S"
-          $p = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -Wait -PassThru
+          #    per-user without elevation. Bounded wait (no -Wait) so a stray
+          #    dialog cannot hang the step; timeout-minutes: 5 is the backstop.
+          Write-Host "Running silent install: Start-Process /S"
+          $p = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -PassThru
+          for ($w = 0; $w -lt 120; $w++) {
+            Start-Sleep -Seconds 1
+            $p.Refresh()
+            if ($p.HasExited) { break }
+          }
+          Write-Host "Installer exited = $($p.HasExited)"
+          if (-not $p.HasExited) { Write-Error 'Smoke FAIL: silent installer did not exit within 120s (likely a blocking dialog)' }
           Write-Host "Installer exit code = $($p.ExitCode)"
           if ($p.ExitCode -ne 0) { Write-Error "Smoke FAIL: silent installer exited $($p.ExitCode)" }
 
@@ -242,6 +252,7 @@ jobs:
       - name: 'Smoke (x64): launch exe, main window title contains drawpaper, then kill'
         if: matrix.arch == 'x64'
         shell: pwsh
+        timeout-minutes: 3
         run: |
           $ErrorActionPreference = 'Stop'
           # Resolve install dir the same way the install step does.
@@ -284,8 +295,12 @@ jobs:
             }
             if ($ok) { break }
           }
-          # Best-effort cleanup of any leftover drawpaper processes.
+          # Best-effort cleanup of any leftover drawpaper AND its WebView2
+          # child processes; otherwise the uninstaller below can hit a
+          # "files in use" dialog and hang on Start-Process -Wait.
           Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$installDir*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
           if (-not $ok) {
             Write-Error 'Smoke FAIL: drawpaper process did not present a main window whose title contains "drawpaper" within 20s'
           }
@@ -294,6 +309,7 @@ jobs:
       - name: 'Smoke (x64): silent uninstall, install dir removed'
         if: matrix.arch == 'x64'
         shell: pwsh
+        timeout-minutes: 3
         run: |
           $ErrorActionPreference = 'Stop'
           $candidates = @(
@@ -321,12 +337,20 @@ jobs:
           }
           Write-Host "Uninstaller = $($uninst.FullName)"
           # NSIS uninstaller accepts /S; some Tauri builds expect /SILENT.
-          # Try /SILENT first, fall back to /S, polling after each.
+          # Try /SILENT first, fall back to /S. Do NOT use -Wait blindly: a
+          # "files in use" dialog would hang the step forever. Instead poll
+          # the uninstaller process for up to 60s, then poll dir removal.
           $removed = $false
           foreach ($arg in @('/SILENT', '/S')) {
             Write-Host "Running uninstaller with arg '$arg'"
-            $u = Start-Process -FilePath $uninst.FullName -ArgumentList $arg -Wait -PassThru
-            Write-Host "Uninstaller ($arg) exit code = $($u.ExitCode)"
+            $u = Start-Process -FilePath $uninst.FullName -ArgumentList $arg -PassThru
+            # Wait up to 60s for the uninstaller process itself to exit.
+            for ($w = 0; $w -lt 60; $w++) {
+              Start-Sleep -Seconds 1
+              $u.Refresh()
+              if ($u.HasExited) { break }
+            }
+            Write-Host "Uninstaller ($arg) exited = $($u.HasExited)"
             for ($i = 1; $i -le 20; $i++) {
               Start-Sleep -Seconds 1
               if (-not (Test-Path $installDir)) { $removed = $true; break }
