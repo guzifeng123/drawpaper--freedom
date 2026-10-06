@@ -36,7 +36,14 @@
 **跨端外壳**
 - `apps/desktop-tauri`：Tauri 2 桌面外壳（菜单/打开保存/打印/最近文件/.kbnote 关联），目标 Windows WebView2 出包
 - `apps/mobile-capacitor`：Capacitor 平板外壳配置与 HostAdapter 参考实现
-- 跨画布双链、全局知识图谱总览、同浏览器多标签实时协作（`BroadcastChannel`，零服务器 / 零外网）均已落地；跨设备 / 云端协作（Yjs/CRDT）仅预留 `CollabAdapter` 接口，未实现
+- 跨画布双链、全局知识图谱总览、同浏览器多标签实时协作（`BroadcastChannel`，零服务器 / 零外网）均已落地；跨设备文档同步经用户自带通道实现（见下）；云端多人实时协作（Yjs/CRDT）仅预留 `CollabAdapter` 接口，未实现
+
+**跨设备同步（自带通道，默认关闭）**
+- **官方零服务器、零托管**：不做官方云、不提供任何同步服务，也无从接触你的数据
+- **两种通道二选一（互斥）**：①同步盘 watched 文件夹（Syncthing 推荐，亦支持 iCloud Drive / OneDrive / Dropbox 本地目录）；②WebDAV（Nextcloud / 坚果云 / 自建 NAS）
+- **凭据仅存本机 localStorage**（与 AI key 同级）；未配置通道时同步模块完全静默，app 不发任何网络请求
+- 自动合并（Lamport 时钟 + 字段级 LWW + 墓碑防复活）；无法自动取舍时保留 `《文档名》.conflicted-《时间》.kbnote` 副本并弹横幅，不静默丢数据
+- 配置步骤、各家 WebDAV 地址示例与故障排查见 [`docs/sync.md`](./docs/sync.md)
 
 ## 技术栈
 
@@ -90,7 +97,7 @@ pnpm e2e            # Playwright（在 packages/web 下，自动起 dev server�
 - **Android 平板**：每次 push 到 feat/develop 会由 `android-debug.yml` 产出一个 unsigned debug APK（workflow artifact，14 天内下载）。侧载到平板即可测试；未签名、不上架。
 - **CI**：`.github/workflows/web-ci.yml` 在每次 push/PR 跑 build/typecheck/lint/单测/e2e/PWA precache 守门。
 
-**本期明确不做**：iOS（需 Apple Developer 账号 + 签名证书 + macOS runner）、跨设备 / 云端多人协作（同浏览器多标签协作已实现；Yjs/CRDT 仅预留 `CollabAdapter` 接口）、手绘墨迹块（需手写笔硬件预研）、自动更新（无签名私钥与更新服务器，见 `docs/p2-tauri-ci.md` §3）。
+**本期明确不做**：iOS（需 Apple Developer 账号 + 签名证书 + macOS runner）、云端多人实时协作（跨设备文档同步已经用户自带通道实现，见上；同浏览器多标签实时协作已落地；Yjs/CRDT 实时协作仅预留 `CollabAdapter` 接口）、手绘墨迹块（需手写笔硬件预研）、自动更新（无签名私钥与更新服务器，见 `docs/p2-tauri-ci.md` §3）。
 
 ## 目录
 
