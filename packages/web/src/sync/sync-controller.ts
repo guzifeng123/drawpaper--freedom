@@ -1,6 +1,6 @@
 import { editorStore } from '@/store/editor-store';
 import { pushToast } from '@/panels/lib/toast';
-import { runSync, type SyncChannel } from './orchestrator';
+import { runSync, type SyncChannel, type SyncRunResult } from './orchestrator';
 import { FolderSyncChannel } from './fsachannel';
 import { WebDavSyncChannel } from './webdavchannel';
 import type { SyncDirectoryHandle } from './directory-handle';
@@ -93,6 +93,8 @@ class SyncController {
   private lastDocJson = '';
   /** 内存中的 E2EE 口令（刷新即失，不持久化）。 */
   private e2eePass: string | null = null;
+  /** 最近一轮同步结果（e2e 检视资产推送计数用；非持久）。 */
+  private lastRun: SyncRunResult | null = null;
 
   /** 当前是否已配置并启用通道。 */
   get active(): boolean {
@@ -282,10 +284,14 @@ class SyncController {
     this.running = true;
     try {
       const r = await runSync(this.channel);
+      this.lastRun = r;
       if (r.conflicts > 0) {
         pushToast('warn', `同步完成，发现 ${r.conflicts} 处冲突，已生成副本，顶部可查看`);
-      } else if (r.push + r.merged > 0) {
-        pushToast('success', `同步完成：推送 ${r.push}、拉取 ${r.merged} 个文档`);
+      } else if (r.push + r.merged > 0 || r.assetsPushed > 0) {
+        const parts = [`推送 ${r.push} 个文档`, `拉取/合并 ${r.merged} 个文档`];
+        if (r.assetsPushed > 0) parts.push(`上传资产 ${r.assetsPushed}`);
+        if (r.assetsFailed > 0) parts.push(`资产失败 ${r.assetsFailed}`);
+        pushToast('success', `同步完成：${parts.join('、')}`);
       }
       void reason;
     } catch (e) {
@@ -334,6 +340,8 @@ class SyncController {
       hasChannel: this.channel !== null,
       e2eeActive: useSyncUi.getState().e2eeActive,
       e2eeLocked: useSyncUi.getState().e2eeLocked,
+      /** 最近一轮同步结果（含资产推/失败计数）；未跑过为 null。 */
+      lastRun: this.lastRun,
     };
   }
 }

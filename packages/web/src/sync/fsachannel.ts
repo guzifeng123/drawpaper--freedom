@@ -8,6 +8,8 @@ import type { SyncDirectoryHandle } from './directory-handle';
  */
 export class FolderSyncChannel implements SyncChannel {
   readonly type = 'folder' as const;
+  /** FSA 文件夹通道不接端到端加密（见 docs/wave11/e2ee.md 威胁模型）。 */
+  readonly e2eeActive = false as const;
 
   constructor(private dir: SyncDirectoryHandle) {}
 
@@ -18,6 +20,11 @@ export class FolderSyncChannel implements SyncChannel {
   async listRemoteDocs(): Promise<string[]> {
     const files = await this.dir.listFiles();
     return files.filter((f) => f.endsWith('.kbnote') && !f.includes('conflicted-'));
+  }
+
+  async listRemoteAssets(): Promise<string[]> {
+    const files = await this.dir.listFiles();
+    return files.filter((f) => f.startsWith('assets/')).map((f) => f.slice('assets/'.length));
   }
 
   async pullDoc(docId: string): Promise<string | null> {

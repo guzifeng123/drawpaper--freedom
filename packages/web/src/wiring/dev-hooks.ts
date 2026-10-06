@@ -141,6 +141,10 @@ export interface DrawpaperDevHook {
   opfsSeedAsset(ref: string, b64: string): Promise<void>;
   /** 删除 OPFS 中某资产（导出→清空→导入还原 e2e 验证资产回填）。 */
   opfsRemoveAsset(ref: string): Promise<void>;
+  /** Wave14：读 OPFS 某资产为 base64（跨设备 FSA e2e 把 A 的资产搬到 B 的 fake 目录）。 */
+  opfsReadAssetB64(ref: string): Promise<string | null>;
+  /** Wave14：向注入的 fake 同步目录写字节文件（assets/<ref>），模拟对端落盘资产。 */
+  syncFakeWriteBytes(path: string, b64: string): void;
   // ---- Wave13 欢迎文档：e2e 模拟宿主首次运行创建流程 ----
   /** 当前是否检测到 Tauri 宿主（duck-type __TAURI__）。 */
   welcomeDetectHost(): boolean;
@@ -443,6 +447,21 @@ export function installDevHooks(): void {
     },
     async opfsRemoveAsset(ref: string) {
       await deleteAsset(ref);
+    },
+    async opfsReadAssetB64(ref: string) {
+      const blob = await getAsset(ref);
+      if (!blob) return null;
+      const buf = new Uint8Array(await blob.arrayBuffer());
+      let binary = '';
+      for (let i = 0; i < buf.length; i += 1) binary += String.fromCharCode(buf[i] ?? 0);
+      return btoa(binary);
+    },
+    syncFakeWriteBytes(path: string, b64: string) {
+      if (!injectedFake) throw new Error('syncUseFakeFolder 未调用');
+      const binary = atob(b64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i) ?? 0;
+      void injectedFake.writeBytes(path, bytes);
     },
     // Wave13 欢迎文档 e2e seam
     welcomeDetectHost() {

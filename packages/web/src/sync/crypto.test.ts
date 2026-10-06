@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   encryptBundle,
   decryptBundle,
@@ -14,6 +14,8 @@ import {
   SALT_BYTES,
   NONCE_BYTES,
   E2eeError,
+  __clearKeyCacheForTest,
+  __derivedKeyCacheSizeForTest,
   type Envelope,
 } from './crypto';
 
@@ -124,5 +126,72 @@ describe('crypto.ts base64url 编解码', () => {
     data[0] = 0;
     data[31] = 255;
     expect([...base64UrlToBytes(bytesToBase64Url(data))]).toEqual([...data]);
+  });
+});
+
+describe('crypto.ts PBKDF2 派生密钥会话内缓存（Wave14）', () => {
+  beforeEach(() => __clearKeyCacheForTest());
+
+  it('同口令同 salt 不重复派生：第二次 subtle.deriveKey 调用数不增', async () => {
+    const subtleApi = globalThis.crypto.subtle;
+    const origDerive = subtleApi.deriveKey.bind(subtleApi) as typeof subtleApi.deriveKey;
+    let deriveCalls = 0;
+    // 包一层计数：证明命中缓存时不再跑 PBKDF2（deriveKey）。
+    subtleApi.deriveKey = ((...args: Parameters<typeof origDerive>) => {
+      deriveCalls += 1;
+      return origDerive(...args);
+    }) as typeof origDerive;
+
+    try {
+      const salt = new Uint8Array(16).fill(3);
+      await encryptBundle(bytes('first'), 'pw-cache', { salt, nonce: new Uint8Array(12).fill(5) });
+      expect(deriveCalls).toBe(1);
+      // 第二次：同口令同 salt，nonce 不同（缓存键不含 nonce）→ 应命中缓存，不再派生。
+      await encryptBundle(bytes('second'), 'pw-cache', { salt, nonce: new Uint8Array(12).fill(6) });
+      expect(deriveCalls, '同口令同 salt 第二次不应再跑 PBKDF2 派生').toBe(1);
+      // 命中缓存解出的 key 仍可正确加解密。
+      const env = await encryptBundle(bytes('roundtrip'), 'pw-cache', { salt, nonce: new Uint8Array(12).fill(7) });
+      expect(new TextDecoder().decode(await decryptBundle(env, 'pw-cache'))).toBe('roundtrip');
+      expect(deriveCalls, '解密同 salt 也命中缓存').toBe(1);
+    } finally {
+      subtleApi.deriveKey = origDerive;
+      __clearKeyCacheForTest();
+    }
+  });
+
+  it('缓存隔离：不同 salt / 口令互不串键，各自派生独立密钥', async () => {
+    const saltA = new Uint8Array(16).fill(1);
+    const saltB = new Uint8Array(16).fill(2);
+    const envA = await encryptBundle(bytes('aaa'), 'pass-A', { salt: saltA, nonce: new Uint8Array(12).fill(1) });
+    const envB = await encryptBundle(bytes('bbb'), 'pass-B', { salt: saltB, nonce: new Uint8Array(12).fill(2) });
+    // 两个不同键各派生一次，缓存里恰好两条。
+    expect(__derivedKeyCacheSizeForTest()).toBe(2);
+    // 各自口令解开各自密文。
+    expect(new TextDecoder().decode(await decryptBundle(envA, 'pass-A'))).toBe('aaa');
+    expect(new TextDecoder().decode(await decryptBundle(envB, 'pass-B'))).toBe('bbb');
+    // 交叉口令解不开（GCM 认证失败），证明没有串键。
+    await expect(decryptBundle(envA, 'pass-B')).rejects.toMatchObject({ kind: 'auth' });
+    await expect(decryptBundle(envB, 'pass-A')).rejects.toMatchObject({ kind: 'auth' });
+  });
+
+  it('缓存仅内存：清空后同口令同 salt 重新派生', async () => {
+    const subtleApi = globalThis.crypto.subtle;
+    const origDerive = subtleApi.deriveKey.bind(subtleApi) as typeof subtleApi.deriveKey;
+    let deriveCalls = 0;
+    subtleApi.deriveKey = ((...args: Parameters<typeof origDerive>) => {
+      deriveCalls += 1;
+      return origDerive(...args);
+    }) as typeof origDerive;
+    try {
+      const salt = new Uint8Array(16).fill(8);
+      await encryptBundle(bytes('x'), 'pw-evict', { salt, nonce: new Uint8Array(12).fill(9) });
+      expect(deriveCalls).toBe(1);
+      __clearKeyCacheForTest(); // 模拟页面刷新后的内存态
+      await encryptBundle(bytes('y'), 'pw-evict', { salt, nonce: new Uint8Array(12).fill(10) });
+      expect(deriveCalls, '清空缓存后应重新派生').toBe(2);
+    } finally {
+      subtleApi.deriveKey = origDerive;
+      __clearKeyCacheForTest();
+    }
   });
 });
