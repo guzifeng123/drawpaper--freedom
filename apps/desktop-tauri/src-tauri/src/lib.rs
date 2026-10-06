@@ -700,33 +700,42 @@ fn rebuild_menu(app: &tauri::AppHandle) {
     }
 }
 
-/// Click on File → 打开最近 → `recent:<n>`.
+/// Shared "open a `.kbnote` off disk" routine used by THREE entry points:
+///   * File → 打开最近 → `recent:<n>` (menu click)
+///   * file-association double-click on COLD start (argv[1], no instance running)
+///   * single-instance second launch on HOT start (another `.kbnote` double-clicked
+///     while the app is already running) — Wave14 修复 #2。
 ///
-/// Mirrors the successful `open_kbnote` path: Rust reads the `.kbnote` itself
-/// (the webview has no arbitrary-path read command) and emits a rich
-/// `app:open-file` event `{path, name, text, external}`. The frontend loads it
-/// via parseKBNote(text) → loadDoc → bindNativeFile(path), identical to the
-/// 文件→打开 success flow. If the file vanished, the stale entry is dropped and
-/// the menu rebuilt (no frontend toast; the item disappears).
-fn open_recent_by_index(app: &tauri::AppHandle, n: usize) {
-    let state = app.state::<AppState>();
-    let path: Option<String> = { state.recents.lock().unwrap().get(n).cloned() };
-    let Some(path) = path else { return };
-    let p = PathBuf::from(&path);
+/// Rust reads the file itself (the webview has no arbitrary-path read) and emits a
+/// rich `app:open-file` `{path,name,text,external:true}` — byte-identical to the
+/// 文件→打开 success flow — so the frontend loads it via
+/// `parseKBNote(text) → loadDoc → bindNativeFile(path)`.
+///
+/// On read failure the stale recents entry (if any) is dropped and the menu
+/// rebuilt, and a lightweight `app:open-file-error` is emitted so the running
+/// window can toast a friendly message. Never panics; never rejects a caller.
+fn open_external_path(app: &tauri::AppHandle, p: &Path) {
+    // Only act on `.kbnote` files (argv may carry a stray non-doc arg, e.g. when
+    // the single-instance plugin forwards a launch without a file association).
+    if p.extension().and_then(|e| e.to_str()) != Some("kbnote") {
+        return;
+    }
+    let path_s = p.to_string_lossy().to_string();
 
-    match fs::read_to_string(&p) {
+    match fs::read_to_string(p) {
         Ok(text) => {
             let name = p
                 .file_name()
                 .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| path.clone());
+                .unwrap_or_else(|| path_s.clone());
             // Bind so the next 保存 overwrites in place; move to front + rebuild.
-            *state.current_path.lock().unwrap() = Some(p.clone());
-            push_recent(&state, app, &p);
+            let state = app.state::<AppState>();
+            *state.current_path.lock().unwrap() = Some(p.to_path_buf());
+            push_recent(&state, app, p);
             let _ = app.emit(
                 "app:open-file",
                 serde_json::json!({
-                    "path": path,
+                    "path": path_s,
                     "name": name,
                     "text": text,
                     "external": true,
@@ -734,15 +743,33 @@ fn open_recent_by_index(app: &tauri::AppHandle, n: usize) {
             );
         }
         Err(e) => {
-            log::warn!("recent file unreadable, dropping from list: {path}: {e}");
+            log::warn!("external .kbnote unreadable, dropping from recents: {path_s}: {e}");
             {
+                let state = app.state::<AppState>();
                 let mut r = state.recents.lock().unwrap();
-                r.retain(|x| x != &path);
+                r.retain(|x| x != &path_s);
                 persist_recents(app, &r);
             }
             rebuild_menu(app);
+            // Lightweight error the running window can toast (no panic).
+            let _ = app.emit(
+                "app:open-file-error",
+                serde_json::json!({
+                    "path": path_s,
+                    "message": format!("无法打开文件：{e}"),
+                }),
+            );
         }
     }
+}
+
+/// Click on File → 打开最近 → `recent:<n>`. Looks up the path by index, then
+/// delegates to the shared [`open_external_path`] rich-open routine.
+fn open_recent_by_index(app: &tauri::AppHandle, n: usize) {
+    let state = app.state::<AppState>();
+    let path: Option<String> = { state.recents.lock().unwrap().get(n).cloned() };
+    let Some(path) = path else { return };
+    open_external_path(app, &PathBuf::from(path));
 }
 
 // ---------------------------------------------------------------------------
@@ -750,23 +777,15 @@ fn open_recent_by_index(app: &tauri::AppHandle, n: usize) {
 // line (double-click), stash it in state and emit to the frontend.
 // ---------------------------------------------------------------------------
 
-fn maybe_seed_startup_file(state: &AppState, app: &tauri::AppHandle) {
+fn maybe_seed_startup_file(app: &tauri::AppHandle) {
     let argv: Vec<String> = std::env::args().collect();
     // argv[0] is the exe; a file association launch passes the path as argv[1].
     if let Some(path) = argv.get(1) {
-        let p = Path::new(path).to_path_buf();
-        if p.extension().and_then(|e| e.to_str()) == Some("kbnote") && p.exists() {
-            {
-                let mut cur = state.current_path.lock().unwrap();
-                *cur = Some(p.clone());
-            }
-            push_recent(state, app, &p);
-            // Emit so the frontend immediately loads it.
-            let _ = app.emit(
-                "app:open-file",
-                serde_json::json!({ "path": p.to_string_lossy().to_string() }),
-            );
-        }
+        // Delegate to the shared rich-open helper: validates the `.kbnote`
+        // extension/existence, reads the file, binds current_path, pushes
+        // recents and emits the rich `app:open-file` payload — identical to the
+        // hot-start (single-instance) path so cold/hot launches behave the same.
+        open_external_path(app, Path::new(path));
     }
 }
 
@@ -784,12 +803,13 @@ pub fn run() {
         // exit the second process before the rest of the app initializes.
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             // A second instance was launched (e.g. user double-clicked another
-            // .kbnote). Forward the argv path to the already-running window.
+            // .kbnote). Wave14 #2: delegate to the shared rich-open helper so
+            // Rust reads the file and emits the SAME rich `app:open-file`
+            // payload `{path,name,text,external:true}` the "打开最近" menu uses —
+            // the running window actually loads the document instead of just
+            // focusing with a stale path.
             if let Some(path) = argv.get(1) {
-                let _ = app.emit(
-                    "app:open-file",
-                    serde_json::json!({ "path": path, "external": true }),
-                );
+                open_external_path(app, Path::new(path));
             }
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.set_focus();
@@ -826,10 +846,7 @@ pub fn run() {
             }
 
             // Seed startup .kbnote (double-click association).
-            {
-                let state: tauri::State<AppState> = app.state();
-                maybe_seed_startup_file(&state, &app.handle());
-            }
+            maybe_seed_startup_file(&app.handle());
 
             // Build native menu and route events to the frontend.
             let menu = build_menu(app.handle(), &app.state::<AppState>());
