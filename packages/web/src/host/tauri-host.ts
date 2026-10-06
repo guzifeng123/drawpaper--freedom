@@ -138,6 +138,53 @@ export class TauriHostAdapter implements HostAdapter {
   backupDoc(title: string, text: string): Promise<string> {
     return this.invoke<string>('backup_doc', { title, text });
   }
+
+  // -------------------------------------------------------------------------
+  // Wave12: 动态窗口标题 + 原生关闭守卫 + 原生打开（带 path）
+  // -------------------------------------------------------------------------
+
+  /** 打开 .kbnote 并拿回绝对 path（菜单「文件→打开」用，用于 bind_native_file）。 */
+  async openKbnoteNative(): Promise<OpenKbnoteReply | null> {
+    return this.invoke<OpenKbnoteReply | null>('open_kbnote');
+  }
+
+  /** 另存为…：强制弹保存对话框（覆盖 current_path 原地写盘的默认行为）。 */
+  async saveKbnoteAs(filename: string, text: string): Promise<void> {
+    try {
+      await this.invoke<string>('save_kbnote', { filename, text, forcePick: true });
+    } catch (err) {
+      if (typeof err === 'string' && err === 'cancelled') return;
+      throw err;
+    }
+  }
+
+  /** 推送窗口标题（格式由前端定：脏=「● 标题 — drawpaper」）。 */
+  setWindowTitle(title: string): Promise<void> {
+    return this.invoke('set_window_title', { title });
+  }
+
+  /** 告知外壳：当前文档是否绑定了原生 .kbnote（None = IDB 文档，关闭不拦）。 */
+  bindNativeFile(path: string | null): Promise<void> {
+    return this.invoke('bind_native_file', { path });
+  }
+
+  /** 告知外壳：绑定的原生文件当前是否有未保存改动。 */
+  setNativeDirty(dirty: boolean): Promise<void> {
+    return this.invoke('set_native_dirty', { dirty });
+  }
+
+  /** 三选对话框里选了「保存/不保存」之后真正退出（Rust 会绕过 CloseRequested 守卫）。 */
+  forceQuit(): Promise<void> {
+    return this.invoke('force_quit');
+  }
+
+  /** 订阅原生关闭请求（仅当绑定且脏时 Rust 才 emit）。 */
+  onCloseRequested(handler: () => void): Promise<() => void> {
+    if (!this.tauri.event) return Promise.resolve(() => undefined);
+    return this.tauri.event.listen('app:close-requested', () => {
+      handler();
+    });
+  }
 }
 
 /**

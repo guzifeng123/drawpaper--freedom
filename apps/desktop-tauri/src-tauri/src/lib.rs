@@ -22,6 +22,7 @@ use tauri::{Emitter, Manager};
 use tauri::menu::{AboutMetadata, Menu, MenuEvent, Submenu};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
+use tauri_plugin_opener::OpenerExt;
 
 // ---------------------------------------------------------------------------
 // State
@@ -50,6 +51,15 @@ struct AppState {
     /// enhancement). When Some, debounced auto-save writes a sibling .kbnote
     /// into this folder keyed by document id. Not wired to the store yet.
     auto_save_dir: Mutex<Option<PathBuf>>,
+    /// Wave12 close-guard: whether the CURRENT document is bound to a native
+    /// `.kbnote` on disk (user opened/saved one via the native dialog). When
+    /// true AND `native_dirty` is true, CloseRequested is intercepted and the
+    /// frontend is asked 保存/不保存/取消. IDB-only documents leave this false
+    /// so closing never blocks (auto-save is the durability net).
+    native_bound: Mutex<bool>,
+    /// Wave12 close-guard: frontend-reported dirty flag for the bound native
+    /// file. Frontend keeps this in sync via `set_native_dirty`.
+    native_dirty: Mutex<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -260,6 +270,44 @@ fn get_startup_file(state: tauri::State<'_, AppState>) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Wave12: 动态窗口标题 + 原生关闭守卫
+// ---------------------------------------------------------------------------
+
+/// Frontend → native window title. Frontend formats the string (dirty bullet
+/// / doc name) and pushes it on every doc switch / rename / dirty-toggle /
+/// save. Browser build never calls this (host bridge no-ops outside Tauri).
+#[tauri::command]
+fn set_window_title(window: tauri::WebviewWindow, title: String) -> Result<(), String> {
+    window.set_title(&title).map_err(|e| e.to_string())
+}
+
+/// Frontend tells the shell whether the current document is bound to a native
+/// `.kbnote` on disk. `Some(path)` = bound; `None` = IDB-only doc (closing it
+/// never prompts — IndexedDB auto-save is the durability net).
+#[tauri::command]
+fn bind_native_file(state: tauri::State<'_, AppState>, path: Option<String>) {
+    let mut bound = state.native_bound.lock().unwrap();
+    *bound = path.is_some();
+}
+
+/// Frontend pushes the dirty flag of the bound native file. Combined with
+/// `native_bound`, this decides whether CloseRequested is intercepted.
+#[tauri::command]
+fn set_native_dirty(state: tauri::State<'_, AppState>, dirty: bool) {
+    let mut d = state.native_dirty.lock().unwrap();
+    *d = dirty;
+}
+
+/// Hard exit. Called by the frontend AFTER the user chose 保存/不保存 in the
+/// close-guard dialog — it bypasses the CloseRequested interception on the way
+/// out (we flip the dirty flag off first so the guard lets us through).
+#[tauri::command]
+fn force_quit(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
+    *state.native_dirty.lock().unwrap() = false;
+    app.exit(0);
+}
+
+// ---------------------------------------------------------------------------
 // Optional: real-folder auto-save skeleton (planning §4.9 P2).
 //
 // The idea: user picks a folder once; every debounced autosave writes
@@ -440,15 +488,34 @@ fn build_menu(app: &tauri::App) -> Menu<tauri::Wry> {
     let edit = Submenu::new(app, "编辑", true).unwrap();
     edit.append(&item(app, "edit:undo", "撤销\tCtrl+Z")).unwrap();
     edit.append(&item(app, "edit:redo", "重做\tCtrl+Shift+Z")).unwrap();
+    edit.append(&PredefinedMenuItem::separator(app).unwrap()).unwrap();
+    // Wave12: 原生剪贴板角色——WebView2 对聚焦的可编辑元素自动执行
+    // 剪切/复制/粘贴/全选（Tiptap contenteditable 原生支持），前端无需接线。
+    edit.append(&PredefinedMenuItem::cut(app, Some("剪切")).unwrap()).unwrap();
+    edit.append(&PredefinedMenuItem::copy(app, Some("复制")).unwrap()).unwrap();
+    edit.append(&PredefinedMenuItem::paste(app, Some("粘贴")).unwrap()).unwrap();
+    edit.append(&PredefinedMenuItem::select_all(app, Some("全选")).unwrap()).unwrap();
 
     let export = Submenu::new(app, "导出", true).unwrap();
     export.append(&item(app, "export:print", "打印 / 另存为 PDF\tCtrl+P")).unwrap();
     export.append(&item(app, "export:pdf", "直接下载 PDF")).unwrap();
+    export.append(&item(app, "export:png", "导出 PNG")).unwrap();
+    export.append(&item(app, "export:svg", "导出 SVG")).unwrap();
+    export.append(&item(app, "export:md", "导出 Markdown")).unwrap();
 
     let view = Submenu::new(app, "视图", true).unwrap();
     view.append(&item(app, "view:fit", "适应屏幕\tCtrl+0")).unwrap();
     view.append(&item(app, "view:zoom-in", "放大\tCtrl+=")).unwrap();
     view.append(&item(app, "view:zoom-out", "缩小\tCtrl+-")).unwrap();
+    view.append(&PredefinedMenuItem::separator(app).unwrap()).unwrap();
+    view.append(&item(app, "view:dark-mode", "深色模式")).unwrap();
+    view.append(&item(app, "view:outline", "大纲面板")).unwrap();
+    view.append(&item(app, "view:search", "搜索…\tCtrl+F")).unwrap();
+
+    // Wave12: 同步子菜单——打开前端的同步设置对话框（emit sync:settings，
+    // 前端 setSyncOpen(true)）。
+    let sync = Submenu::new(app, "同步", true).unwrap();
+    sync.append(&item(app, "sync:settings", "同步设置…")).unwrap();
 
     let help = Submenu::new(app, "帮助", true).unwrap();
     help.append(
@@ -466,10 +533,11 @@ fn build_menu(app: &tauri::App) -> Menu<tauri::Wry> {
         .unwrap(),
     )
     .unwrap();
+    help.append(&item(app, "help:home", "项目主页")).unwrap();
 
     Menu::with_items(
         app,
-        &[&file, &edit, &export, &view, &help],
+        &[&file, &edit, &export, &view, &sync, &help],
     )
     .unwrap()
 }
@@ -546,12 +614,37 @@ pub fn run() {
             let menu = build_menu(app);
             app.set_menu(menu.clone())?;
             app.on_menu_event(move |app: &tauri::AppHandle, event: MenuEvent| {
-                // Every menu click becomes an `app:menu` event with the item id.
+                let id = event.id.0.as_str();
+                // 帮助→项目主页：Rust 直接用 opener 打开外链，不绕前端。
+                if id == "help:home" {
+                    let _ = app.opener().open_url(
+                        "https://github.com/guzifeng123/drawpaper--freedom",
+                        None::<&str>,
+                    );
+                    return;
+                }
+                // Every other menu click becomes an `app:menu` event with the item id.
                 // The frontend maps ids to store actions (undo/redo/print/fit).
-                let _ = app.emit("app:menu", serde_json::json!({ "id": event.id.0.as_str() }));
+                let _ = app.emit("app:menu", serde_json::json!({ "id": id }));
             });
 
             Ok(())
+        })
+        // Wave12 close-guard: when the user closes the window while a native
+        // .kbnote is bound AND dirty, intercept and ask the frontend.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let state = window.state::<AppState>();
+                let bound = *state.native_bound.lock().unwrap();
+                let dirty = *state.native_dirty.lock().unwrap();
+                if bound && dirty {
+                    api.prevent_close();
+                    let _ = window.emit(
+                        "app:close-requested",
+                        serde_json::json!({ "docTitle": window.title().unwrap_or_default() }),
+                    );
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             open_kbnote,
@@ -564,6 +657,10 @@ pub fn run() {
             auto_save_doc,
             notify,
             backup_doc,
+            set_window_title,
+            bind_native_file,
+            set_native_dirty,
+            force_quit,
         ])
         .run(tauri::generate_context!())
         .expect("error while running drawpaper desktop shell");
