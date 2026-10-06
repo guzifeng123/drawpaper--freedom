@@ -19,6 +19,9 @@ concurrency:
   group: android-debug-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 jobs:
   build-apk:
     runs-on: ubuntu-latest
@@ -105,3 +108,28 @@ jobs:
           path: apps/mobile-capacitor/android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish rolling debug APK to prerelease
+        if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          APK="apps/mobile-capacitor/android/app/build/outputs/apk/debug/app-debug.apk"
+          OUT="drawpaper-android-debug.apk"
+          cp "$APK" "$OUT"
+          SHA="${GITHUB_SHA::12}"
+          BUILT_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          NOTES="$(mktemp)"
+          {
+            echo "develop 分支滚动调试包，每次 develop 更新自动覆盖。"
+            echo
+            echo "- 来源提交：\`${SHA}\`"
+            echo "- 构建时间（UTC）：${BUILT_AT}"
+            echo "- 安装：Android 设置中允许「安装未知来源应用」后直接安装；debug 签名，不能与其他签名的同名包互相覆盖。"
+          } > "$NOTES"
+          gh release create android-debug-latest "$OUT" \
+            --title "Android debug（滚动构建）" --prerelease \
+            --notes-file "$NOTES" 2>/dev/null \
+            || gh release upload android-debug-latest "$OUT" --clobber
+          gh release edit android-debug-latest --prerelease --draft=false --notes-file "$NOTES"
