@@ -103,6 +103,7 @@ test.describe('§9 导出硬验收 / 真实产物', () => {
   });
 
   test('直接下载 PDF（位图）与高清 PNG：文件名合规、非空、多页', async ({ page }) => {
+    test.setTimeout(90_000); // PDF 直下载现为矢量默认路径：冷编译 jspdf/svg2pdf/字体 + svg2pdf 多页，CI 上较慢
     fs.mkdirSync(OUT, { recursive: true });
     // 后台排水：多页 PNG 会连发多个下载事件，统一接住存盘，避免污染后续断言。
     page.on('download', async (d) => {
