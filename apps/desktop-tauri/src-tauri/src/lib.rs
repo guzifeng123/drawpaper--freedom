@@ -19,10 +19,16 @@ use std::sync::Mutex;
 
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, Manager};
-use tauri::menu::{AboutMetadata, Menu, MenuEvent, Submenu};
+use tauri::menu::{AboutMetadata, Menu, MenuEvent, MenuItem, Submenu};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_log::{Target, TargetKind};
+
+/// GitHub repository URL — shared by 帮助→项目主页 / 检查更新 / About.
+const GITHUB_REPO: &str = "https://github.com/guzifeng123/drawpaper--freedom";
+const GITHUB_RELEASES_LATEST: &str =
+    "https://github.com/guzifeng123/drawpaper--freedom/releases/latest";
 
 // ---------------------------------------------------------------------------
 // State
@@ -117,14 +123,17 @@ fn persist_recents(app: &tauri::AppHandle, recents: &VecDeque<String>) {
 }
 
 fn push_recent(state: &AppState, app: &tauri::AppHandle, path: &Path) {
-    let mut recents = state.recents.lock().unwrap();
-    let p = path.to_string_lossy().to_string();
-    recents.retain(|x| x != &p);
-    recents.push_front(p);
-    while recents.len() > RECENTS_CAP {
-        recents.pop_back();
-    }
-    persist_recents(app, &recents);
+    {
+        let mut recents = state.recents.lock().unwrap();
+        let p = path.to_string_lossy().to_string();
+        recents.retain(|x| x != &p);
+        recents.push_front(p);
+        while recents.len() > RECENTS_CAP {
+            recents.pop_back();
+        }
+        persist_recents(app, &recents);
+    } // drop the lock before rebuilding the menu (which re-locks recents)
+    rebuild_menu(app);
 }
 
 // ---------------------------------------------------------------------------
@@ -247,6 +256,85 @@ fn print(app: tauri::AppHandle) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+// ---------------------------------------------------------------------------
+// Wave13: save_export — native Save dialog + Rust writes the exported bytes.
+//
+// The frontend renders PDF (bitmap-mode) / PNG / SVG / Markdown to bytes, sends
+// them base64-encoded; Rust shows a native Save dialog, decodes and writes the
+// file. Cancelling the dialog resolves `{status:"cancelled"}` (NOT an error),
+// mirroring web showSaveFilePicker cancel semantics. The Ctrl+P browser print
+// pipeline is untouched. Contract frozen in docs/wave13/native-gaps.md.
+// ---------------------------------------------------------------------------
+
+/// `save_export` return shape: a tagged union the frontend switches on.
+/// Serializes to `{"status":"saved","path":"…"}` or `{"status":"cancelled"}`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "lowercase")]
+enum ExportSaveOutcome {
+    /// User picked a path and Rust wrote the bytes successfully.
+    Saved { path: String },
+    /// User cancelled the native Save dialog — not an error.
+    Cancelled,
+}
+
+/// HostAdapter export save: PDF / PNG / SVG / MD all funnel through this one
+/// command. `ext` selects the dialog file filter; `bytes_base64` is the payload.
+#[tauri::command]
+async fn save_export(
+    app: tauri::AppHandle,
+    suggested_name: String,
+    ext: String,
+    bytes_base64: String,
+) -> Result<ExportSaveOutcome, String> {
+    // Map the extension to a native Save-dialog filter.
+    let (filter_label, exts): (&str, &[&str]) = match ext.to_lowercase().as_str() {
+        "pdf" => ("PDF 文档", &["pdf"][..]),
+        "png" => ("PNG 图片", &["png"][..]),
+        "svg" => ("SVG 图片", &["svg"][..]),
+        "md" | "markdown" => ("Markdown 文档", &["md", "markdown"][..]),
+        other => return Err(format!("unsupported ext: {other}")),
+    };
+
+    // Ensure the suggested default name carries the right extension.
+    let dot_ext = format!(".{}", ext.to_lowercase());
+    let default_name = if suggested_name.to_lowercase().ends_with(&dot_ext) {
+        suggested_name.clone()
+    } else {
+        format!("{suggested_name}{dot_ext}")
+    };
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_title("导出为")
+        .set_file_name(&default_name)
+        .add_filter(filter_label, exts)
+        .save_file(move |res| {
+            let _ = tx.send(res);
+        });
+    let picked = rx.await.map_err(|e| e.to_string())?;
+    let Some(picked) = picked else {
+        // User cancelled — resolve as cancelled, NOT an error.
+        return Ok(ExportSaveOutcome::Cancelled);
+    };
+    let target = picked.into_path().map_err(|e| e.to_string())?;
+
+    // Decode the base64 payload, then write with std::fs (no fs-plugin IPC
+    // needed; this command runs entirely in Rust).
+    use base64::Engine as _;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(bytes_base64.as_bytes())
+        .map_err(|e| format!("base64 decode failed: {e}"))?;
+    if let Some(parent) = target.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    fs::write(&target, &bytes).map_err(|e| format!("write failed: {e}"))?;
+    log::info!("exported {ext} -> {}", target.display());
+    Ok(ExportSaveOutcome::Saved {
+        path: target.to_string_lossy().to_string(),
+    })
+}
+
 /// Recent files list (native File → Open Recent menu + frontend docs list).
 #[tauri::command]
 fn list_recents(state: tauri::State<'_, AppState>) -> Vec<String> {
@@ -256,9 +344,12 @@ fn list_recents(state: tauri::State<'_, AppState>) -> Vec<String> {
 /// Clear recents.
 #[tauri::command]
 fn clear_recents(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
-    let mut r = state.recents.lock().unwrap();
-    r.clear();
-    persist_recents(&app, &r);
+    {
+        let mut r = state.recents.lock().unwrap();
+        r.clear();
+        persist_recents(&app, &r);
+    }
+    rebuild_menu(&app);
 }
 
 /// Absolute path of the `.kbnote` the user double-clicked to launch the app
@@ -468,78 +559,190 @@ fn backup_doc(
 // Menu
 // ---------------------------------------------------------------------------
 
-fn build_menu(app: &tauri::App) -> Menu<tauri::Wry> {
-    use tauri::menu::{MenuItem, PredefinedMenuItem, Submenu};
+fn build_menu(handle: &tauri::AppHandle, state: &AppState) -> Menu<tauri::Wry> {
+    use tauri::menu::PredefinedMenuItem;
 
     // `MenuItem::with_id` returns a Result; build an owned item in one call.
-    fn item(app: &tauri::App, id: &str, text: &str) -> MenuItem<tauri::Wry> {
-        MenuItem::with_id(app, id, text, true, None::<&str>).unwrap()
+    fn item(handle: &tauri::AppHandle, id: &str, text: &str) -> MenuItem<tauri::Wry> {
+        MenuItem::with_id(handle, id, text, true, None::<&str>).unwrap()
     }
 
-    let file = Submenu::new(app, "文件", true).unwrap();
-    file.append(&item(app, "file:new", "新建画布")).unwrap();
-    file.append(&item(app, "file:open", "打开…\tCtrl+O")).unwrap();
-    file.append(&item(app, "file:save", "保存\tCtrl+S")).unwrap();
-    file.append(&item(app, "file:save-as", "另存为…")).unwrap();
-    file.append(&PredefinedMenuItem::separator(app).unwrap()).unwrap();
-    file.append(&item(app, "file:open-recent", "打开最近")).unwrap();
-    file.append(&item(app, "file:clear-recent", "清空最近")).unwrap();
+    let file = Submenu::new(handle, "文件", true).unwrap();
+    file.append(&item(handle, "file:new", "新建画布")).unwrap();
+    file.append(&item(handle, "file:open", "打开…\tCtrl+O")).unwrap();
+    file.append(&item(handle, "file:save", "保存\tCtrl+S")).unwrap();
+    // Wave13: real accelerator bound via the accelerator field (the menu shows
+    // it on the right); Ctrl+Shift+S triggers `app:menu{id:"file:save-as"}`.
+    file.append(
+        &MenuItem::with_id(
+            handle,
+            "file:save-as",
+            "另存为…",
+            true,
+            Some("CmdOrCtrl+Shift+S"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    file.append(&PredefinedMenuItem::separator(handle).unwrap()).unwrap();
+    // Wave13: real dynamic submenu rebuilt from `state.recents`.
+    file.append(&build_open_recent_submenu(handle, state)).unwrap();
 
-    let edit = Submenu::new(app, "编辑", true).unwrap();
-    edit.append(&item(app, "edit:undo", "撤销\tCtrl+Z")).unwrap();
-    edit.append(&item(app, "edit:redo", "重做\tCtrl+Shift+Z")).unwrap();
-    edit.append(&PredefinedMenuItem::separator(app).unwrap()).unwrap();
+    let edit = Submenu::new(handle, "编辑", true).unwrap();
+    edit.append(&item(handle, "edit:undo", "撤销\tCtrl+Z")).unwrap();
+    edit.append(&item(handle, "edit:redo", "重做\tCtrl+Shift+Z")).unwrap();
+    edit.append(&PredefinedMenuItem::separator(handle).unwrap()).unwrap();
     // Wave12: 原生剪贴板角色——WebView2 对聚焦的可编辑元素自动执行
     // 剪切/复制/粘贴/全选（Tiptap contenteditable 原生支持），前端无需接线。
-    edit.append(&PredefinedMenuItem::cut(app, Some("剪切")).unwrap()).unwrap();
-    edit.append(&PredefinedMenuItem::copy(app, Some("复制")).unwrap()).unwrap();
-    edit.append(&PredefinedMenuItem::paste(app, Some("粘贴")).unwrap()).unwrap();
-    edit.append(&PredefinedMenuItem::select_all(app, Some("全选")).unwrap()).unwrap();
+    edit.append(&PredefinedMenuItem::cut(handle, Some("剪切")).unwrap()).unwrap();
+    edit.append(&PredefinedMenuItem::copy(handle, Some("复制")).unwrap()).unwrap();
+    edit.append(&PredefinedMenuItem::paste(handle, Some("粘贴")).unwrap()).unwrap();
+    edit.append(&PredefinedMenuItem::select_all(handle, Some("全选")).unwrap()).unwrap();
 
-    let export = Submenu::new(app, "导出", true).unwrap();
-    export.append(&item(app, "export:print", "打印 / 另存为 PDF\tCtrl+P")).unwrap();
-    export.append(&item(app, "export:pdf", "直接下载 PDF")).unwrap();
-    export.append(&item(app, "export:png", "导出 PNG")).unwrap();
-    export.append(&item(app, "export:svg", "导出 SVG")).unwrap();
-    export.append(&item(app, "export:md", "导出 Markdown")).unwrap();
+    let export = Submenu::new(handle, "导出", true).unwrap();
+    export.append(&item(handle, "export:print", "打印 / 另存为 PDF\tCtrl+P")).unwrap();
+    export.append(&item(handle, "export:pdf", "直接下载 PDF")).unwrap();
+    export.append(&item(handle, "export:png", "导出 PNG")).unwrap();
+    export.append(&item(handle, "export:svg", "导出 SVG")).unwrap();
+    export.append(&item(handle, "export:md", "导出 Markdown")).unwrap();
 
-    let view = Submenu::new(app, "视图", true).unwrap();
-    view.append(&item(app, "view:fit", "适应屏幕\tCtrl+0")).unwrap();
-    view.append(&item(app, "view:zoom-in", "放大\tCtrl+=")).unwrap();
-    view.append(&item(app, "view:zoom-out", "缩小\tCtrl+-")).unwrap();
-    view.append(&PredefinedMenuItem::separator(app).unwrap()).unwrap();
-    view.append(&item(app, "view:dark-mode", "深色模式")).unwrap();
-    view.append(&item(app, "view:outline", "大纲面板")).unwrap();
-    view.append(&item(app, "view:search", "搜索…\tCtrl+F")).unwrap();
+    let view = Submenu::new(handle, "视图", true).unwrap();
+    view.append(&item(handle, "view:fit", "适应屏幕\tCtrl+0")).unwrap();
+    view.append(&item(handle, "view:zoom-in", "放大\tCtrl+=")).unwrap();
+    view.append(&item(handle, "view:zoom-out", "缩小\tCtrl+-")).unwrap();
+    view.append(&PredefinedMenuItem::separator(handle).unwrap()).unwrap();
+    view.append(&item(handle, "view:dark-mode", "深色模式")).unwrap();
+    view.append(&item(handle, "view:outline", "大纲面板")).unwrap();
+    view.append(&item(handle, "view:search", "搜索…\tCtrl+F")).unwrap();
 
     // Wave12: 同步子菜单——打开前端的同步设置对话框（emit sync:settings，
     // 前端 setSyncOpen(true)）。
-    let sync = Submenu::new(app, "同步", true).unwrap();
-    sync.append(&item(app, "sync:settings", "同步设置…")).unwrap();
+    let sync = Submenu::new(handle, "同步", true).unwrap();
+    sync.append(&item(handle, "sync:settings", "同步设置…")).unwrap();
 
-    let help = Submenu::new(app, "帮助", true).unwrap();
+    let help = Submenu::new(handle, "帮助", true).unwrap();
     help.append(
         &PredefinedMenuItem::about(
-            app,
+            handle,
             Some("关于 drawpaper"),
             Some(AboutMetadata {
                 name: Some("drawpaper".to_string()),
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
                 authors: Some(vec!["drawpaper contributors".to_string()]),
-                comments: Some("Local-first infinite-canvas knowledge-block notes.".to_string()),
+                comments: Some("本地优先的无限画布知识块笔记。数据留在本机，无账号、无云同步。".to_string()),
+                website: Some(GITHUB_REPO.to_string()),
                 ..Default::default()
             }),
         )
         .unwrap(),
     )
     .unwrap();
-    help.append(&item(app, "help:home", "项目主页")).unwrap();
+    // Wave13: 仅在用户点击时打开 releases/latest —— 零后台/启动网络请求。
+    help.append(&item(handle, "help:check-update", "检查更新…")).unwrap();
+    help.append(&item(handle, "help:open-data-dir", "打开数据目录")).unwrap();
+    help.append(&PredefinedMenuItem::separator(handle).unwrap()).unwrap();
+    help.append(&item(handle, "help:home", "项目主页")).unwrap();
 
     Menu::with_items(
-        app,
+        handle,
         &[&file, &edit, &export, &view, &sync, &help],
     )
     .unwrap()
+}
+
+/// Build the native File → 打开最近 submenu from the live recents list.
+///
+/// Items are `recent:<n>` (n = index into recents, most-recent first); the label
+/// is the file name (full path is the tooltip, see contract doc). A disabled
+/// placeholder shows when the list is empty. Always ends with a separator +
+/// 「清空最近」(`recent:clear`), disabled when there is nothing to clear.
+fn build_open_recent_submenu(handle: &tauri::AppHandle, state: &AppState) -> Submenu<tauri::Wry> {
+    use tauri::menu::PredefinedMenuItem;
+    let sub = Submenu::new(handle, "打开最近", true).unwrap();
+    let recents = state.recents.lock().unwrap();
+
+    if recents.is_empty() {
+        let placeholder =
+            MenuItem::with_id(handle, "recent:empty", "（无）", false, None::<&str>).unwrap();
+        sub.append(&placeholder).unwrap();
+    } else {
+        for (n, path) in recents.iter().enumerate() {
+            let label = Path::new(path)
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.clone());
+            let item = MenuItem::with_id(handle, format!("recent:{n}"), label, true, None::<&str>).unwrap();
+            sub.append(&item).unwrap();
+        }
+        sub.append(&PredefinedMenuItem::separator(handle).unwrap()).unwrap();
+    }
+
+    let clear = MenuItem::with_id(
+        handle,
+        "recent:clear",
+        "清空最近",
+        !recents.is_empty(),
+        None::<&str>,
+    )
+    .unwrap();
+    sub.append(&clear).unwrap();
+    sub
+}
+
+/// Rebuild the whole app menu (preserving every static item + accelerators) and
+/// re-apply it. Called after recents change (open / save / clear) so the
+/// dynamic 打开最近 submenu stays in sync. Best-effort: logs on failure.
+fn rebuild_menu(app: &tauri::AppHandle) {
+    let state = app.state::<AppState>();
+    let menu = build_menu(app, &state);
+    if let Err(e) = app.set_menu(menu) {
+        log::warn!("rebuild_menu failed: {e}");
+    }
+}
+
+/// Click on File → 打开最近 → `recent:<n>`.
+///
+/// Mirrors the successful `open_kbnote` path: Rust reads the `.kbnote` itself
+/// (the webview has no arbitrary-path read command) and emits a rich
+/// `app:open-file` event `{path, name, text, external}`. The frontend loads it
+/// via parseKBNote(text) → loadDoc → bindNativeFile(path), identical to the
+/// 文件→打开 success flow. If the file vanished, the stale entry is dropped and
+/// the menu rebuilt (no frontend toast; the item disappears).
+fn open_recent_by_index(app: &tauri::AppHandle, n: usize) {
+    let state = app.state::<AppState>();
+    let path: Option<String> = { state.recents.lock().unwrap().get(n).cloned() };
+    let Some(path) = path else { return };
+    let p = PathBuf::from(&path);
+
+    match fs::read_to_string(&p) {
+        Ok(text) => {
+            let name = p
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.clone());
+            // Bind so the next 保存 overwrites in place; move to front + rebuild.
+            *state.current_path.lock().unwrap() = Some(p.clone());
+            push_recent(&state, app, &p);
+            let _ = app.emit(
+                "app:open-file",
+                serde_json::json!({
+                    "path": path,
+                    "name": name,
+                    "text": text,
+                    "external": true,
+                }),
+            );
+        }
+        Err(e) => {
+            log::warn!("recent file unreadable, dropping from list: {path}: {e}");
+            {
+                let mut r = state.recents.lock().unwrap();
+                r.retain(|x| x != &path);
+                persist_recents(app, &r);
+            }
+            rebuild_menu(app);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -572,7 +775,9 @@ fn maybe_seed_startup_file(state: &AppState, app: &tauri::AppHandle) {
 // ---------------------------------------------------------------------------
 
 pub fn run() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    // Wave13: tauri-plugin-log is the global `log` logger (file + stdout +
+    // webview). It replaces the previous env_logger bootstrap; do NOT init a
+    // second global logger here or the process will panic on setup.
 
     tauri::Builder::default()
         // single-instance MUST be registered before any other plugin so it can
@@ -590,6 +795,22 @@ pub fn run() {
                 let _ = w.set_focus();
             }
         }))
+        // Wave13: file + stdout + webview logging, info level, drawpaper.log.
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .targets([
+                    Target::new(TargetKind::Stdout),
+                    Target::new(TargetKind::LogDir {
+                        file_name: Some("drawpaper".into()),
+                    }),
+                    Target::new(TargetKind::Webview),
+                ])
+                .build(),
+        )
+        // Wave13: remember window position/size/maximized; clamped to the
+        // tauri.conf minWidth/minHeight (960x600) on restore.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
@@ -611,18 +832,45 @@ pub fn run() {
             }
 
             // Build native menu and route events to the frontend.
-            let menu = build_menu(app);
-            app.set_menu(menu.clone())?;
+            let menu = build_menu(app.handle(), &app.state::<AppState>());
+            app.set_menu(menu)?;
             app.on_menu_event(move |app: &tauri::AppHandle, event: MenuEvent| {
                 let id = event.id.0.as_str();
-                // 帮助→项目主页：Rust 直接用 opener 打开外链，不绕前端。
+
+                // --- 帮助：纯 Rust 侧动作，不绕前端，零后台网络 ---
                 if id == "help:home" {
-                    let _ = app.opener().open_url(
-                        "https://github.com/guzifeng123/drawpaper--freedom",
-                        None::<&str>,
-                    );
+                    let _ = app.opener().open_url(GITHUB_REPO, None::<&str>);
                     return;
                 }
+                // 仅在用户点击时打开 releases/latest；没有任何定时/启动检查。
+                if id == "help:check-update" {
+                    let _ = app.opener().open_url(GITHUB_RELEASES_LATEST, None::<&str>);
+                    return;
+                }
+                // 在资源管理器中 reveal 数据目录。
+                if id == "help:open-data-dir" {
+                    if let Ok(dir) = app.path().app_data_dir() {
+                        let _ = app.opener().reveal_item_in_dir(&dir);
+                    }
+                    return;
+                }
+
+                // --- 打开最近：动态子菜单 ---
+                if id == "recent:clear" {
+                    let state = app.state::<AppState>();
+                    {
+                        let mut r = state.recents.lock().unwrap();
+                        r.clear();
+                        persist_recents(app, &r);
+                    }
+                    rebuild_menu(app);
+                    return;
+                }
+                if let Some(n) = id.strip_prefix("recent:").and_then(|s| s.parse::<usize>().ok()) {
+                    open_recent_by_index(app, n);
+                    return;
+                }
+
                 // Every other menu click becomes an `app:menu` event with the item id.
                 // The frontend maps ids to store actions (undo/redo/print/fit).
                 let _ = app.emit("app:menu", serde_json::json!({ "id": id }));
@@ -649,6 +897,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             open_kbnote,
             save_kbnote,
+            save_export,
             print,
             list_recents,
             clear_recents,
