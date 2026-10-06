@@ -117,3 +117,4 @@ drawpaper 官方不提供任何云服务，同步通道完全由你自己选，�
 - 同步是文件夹级 / WebDAV 级，**不是实时云端多人协作**；同一台机器同一个浏览器开多个标签页是实时的（`BroadcastChannel`，零外网）。
 - ARM64 包在 x64 Windows 上跑不起来（反之亦然），别下错架构。
 - 卸载保留 `%APPDATA%\com.drawpaper.app\`；要彻底清理请手动删。
+- CI 冒烟只覆盖「当前用户」静默安装路径；「为所有用户安装」（整机 / UAC / `C:\Program Files\drawpaper`）路径目前需人工在 Windows 桌面验证，注册表 HKLM 与公共快捷方式双探测已在冒烟里预留但不做硬门。

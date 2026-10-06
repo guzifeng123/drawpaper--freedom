@@ -173,11 +173,16 @@ jobs:
           if (-not $installer) { Write-Error 'Smoke FAIL: NSIS *-setup.exe not found under target/**/bundle/nsis' }
           Write-Host "Installer = $($installer.FullName)"
 
-          # 3) Silent install. nsis.installMode is currentUser, so /S installs
-          #    per-user without elevation. Bounded wait (no -Wait) so a stray
-          #    dialog cannot hang the step; timeout-minutes: 5 is the backstop.
-          Write-Host "Running silent install: Start-Process /S"
-          $p = Start-Process -FilePath $installer.FullName -ArgumentList '/S' -PassThru
+          # 3) Silent install. nsis.installMode is "both": on an elevated
+          #    runner (GitHub windows-latest runs as admin) the bare /S install
+          #    defaults to perMachine and lands under Program Files. To keep the
+          #    CI smoke on the stable per-user path (no UAC, predictable install
+          #    dir), pass /CURRENTUSER explicitly. Tauri 2 NSIS "both" mode
+          #    accepts the standard NSIS /CURRENTUSER flag; if it is ignored on
+          #    a future Tauri bump, the Program Files candidates in step 4 will
+          #    still catch the per-machine landing and log it for diagnosis.
+          Write-Host "Running silent install: Start-Process /S /CURRENTUSER"
+          $p = Start-Process -FilePath $installer.FullName -ArgumentList '/S','/CURRENTUSER' -PassThru
           for ($w = 0; $w -lt 120; $w++) {
             Start-Sleep -Seconds 1
             $p.Refresh()
@@ -188,29 +193,40 @@ jobs:
           Write-Host "Installer exit code = $($p.ExitCode)"
           if ($p.ExitCode -ne 0) { Write-Error "Smoke FAIL: silent installer exited $($p.ExitCode)" }
 
-          # 4) Discover install dir. Tauri 2 NSIS currentUser installs by
-          #    default to %LOCALAPPDATA%\Programs\<productName>; tolerate the
-          #    older %LOCALAPPDATA%\drawpaper layout as a fallback, and do a
-          #    generic Programs\ child-dir discovery as a last resort.
+          # 4) Discover install dir. installMode="both" means the silent
+          #    installer may land in either:
+          #      - currentUser: %LOCALAPPDATA%\Programs\drawpaper
+          #      - perMachine: %ProgramFiles%\drawpaper (C:\Program Files)
+          #    Probe both; fall back to a generic child-dir discovery under
+          #    each root.
           $candidates = @(
             (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
-            (Join-Path $env:LOCALAPPDATA 'drawpaper')
+            (Join-Path $env:LOCALAPPDATA 'drawpaper'),
+            (Join-Path $env:ProgramFiles 'drawpaper'),
+            (${env:ProgramFiles(x86)} | ForEach-Object { Join-Path $_ 'drawpaper' })
           )
           $installDir = $null
           foreach ($c in $candidates) {
-            Write-Host "  candidate: $c => exists=$(Test-Path $c)"
-            if (Test-Path $c) { $installDir = $c; break }
+            if ($c) {
+              Write-Host "  candidate: $c => exists=$(Test-Path $c)"
+              if ((Test-Path $c) -and -not $installDir) { $installDir = $c }
+            }
           }
           if (-not $installDir) {
-            $hit = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($hit) { $installDir = $hit.FullName }
+            foreach ($root in @((Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+              if ($root -and (Test-Path $root)) {
+                $hit = Get-ChildItem $root -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { $installDir = $hit.FullName; break }
+              }
+            }
           }
           if (-not $installDir) {
-            Write-Host "::group::Leftover dirs under %LOCALAPPDATA% (drawpaper* / Programs)"
+            Write-Host "::group::Leftover dirs under %LOCALAPPDATA% / Program Files"
             Get-ChildItem $env:LOCALAPPDATA -Filter 'drawpaper*' -Directory -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
             Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Filter 'drawpaper*' -Directory -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
+            Get-ChildItem $env:ProgramFiles -Filter 'drawpaper*' -Directory -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
             Write-Host "::endgroup::"
-            Write-Error 'Smoke FAIL: install dir not found after silent install (tried Programs\drawpaper and %LOCALAPPDATA%\drawpaper)'
+            Write-Error 'Smoke FAIL: install dir not found after silent install (tried LOCALAPPDATA\Programs\drawpaper, LOCALAPPDATA\drawpaper, ProgramFiles\drawpaper, ProgramFiles(x86)\drawpaper)'
           }
           Write-Host "Install dir (matched) = $installDir"
 
@@ -354,16 +370,24 @@ jobs:
         timeout-minutes: 3
         run: |
           $ErrorActionPreference = 'Stop'
-          # Resolve install dir the same way the install step does.
+          # Resolve install dir the same way the install step does. installMode
+          # "both" may land per-user (%LOCALAPPDATA%\Programs\drawpaper) or
+          # per-machine (%ProgramFiles%\drawpaper); probe both.
           $candidates = @(
             (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
-            (Join-Path $env:LOCALAPPDATA 'drawpaper')
+            (Join-Path $env:LOCALAPPDATA 'drawpaper'),
+            (Join-Path $env:ProgramFiles 'drawpaper')
           )
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'drawpaper') }
           $installDir = $null
           foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
           if (-not $installDir) {
-            $hit = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($hit) { $installDir = $hit.FullName }
+            foreach ($root in @((Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+              if ($root -and (Test-Path $root)) {
+                $hit = Get-ChildItem $root -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { $installDir = $hit.FullName; break }
+              }
+            }
           }
           if (-not $installDir) { Write-Error 'Smoke FAIL: install dir not found at launch time' }
           $exe = Join-Path $installDir 'drawpaper.exe'
@@ -422,13 +446,19 @@ jobs:
           # named msedgewebview2.exe, so they do not inflate this count.
           $candidates = @(
             (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
-            (Join-Path $env:LOCALAPPDATA 'drawpaper')
+            (Join-Path $env:LOCALAPPDATA 'drawpaper'),
+            (Join-Path $env:ProgramFiles 'drawpaper')
           )
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'drawpaper') }
           $installDir = $null
           foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
           if (-not $installDir) {
-            $hit = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($hit) { $installDir = $hit.FullName }
+            foreach ($root in @((Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+              if ($root -and (Test-Path $root)) {
+                $hit = Get-ChildItem $root -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { $installDir = $hit.FullName; break }
+              }
+            }
           }
           if (-not $installDir) { Write-Error 'Smoke FAIL: install dir not found at single-instance check' }
           $exe = Join-Path $installDir 'drawpaper.exe'
@@ -496,13 +526,19 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $candidates = @(
             (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
-            (Join-Path $env:LOCALAPPDATA 'drawpaper')
+            (Join-Path $env:LOCALAPPDATA 'drawpaper'),
+            (Join-Path $env:ProgramFiles 'drawpaper')
           )
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'drawpaper') }
           $installDir = $null
           foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
           if (-not $installDir) {
-            $hit = Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
-            if ($hit) { $installDir = $hit.FullName }
+            foreach ($root in @((Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+              if ($root -and (Test-Path $root)) {
+                $hit = Get-ChildItem $root -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { $installDir = $hit.FullName; break }
+              }
+            }
           }
           if (-not $installDir) {
             Write-Host "Install dir already absent; nothing to uninstall"
