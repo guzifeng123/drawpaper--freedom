@@ -1,13 +1,13 @@
 # 发布操作手册（RELEASE）
 
 > 本手册面向维护者：在 develop 合并、CI 全绿之后，如何打 tag 触发发布、产物落在哪、以后发版要改哪些文件、以及出问题如何回滚。
-> 当前版本：**0.1.0-rc.1**（预发布 / Release Candidate）。
+> 当前版本：**0.1.0-rc.2**（预发布 / Release Candidate）。
 
 ## 1. 何时打 tag
 
 - 前置：要发布的 commit 已合入 `develop`，且该 commit 在 GitHub 上的 `web-ci` / `release-windows`(build) / `android-debug` 三条 workflow 均为绿色。
 - `chore/*`、`feat/*`、`fix/*` 分支本身不触发云端 workflow；只有合到 `develop` 并在 develop tip 跑绿后，才以 develop tip 的 commit 为基线打 tag。
-- 本次（RC）约定 tag 为 `v0.1.0-rc.1`。正式版将为 `v0.1.0` / `v1.0.0` 等（不含 `-`）。
+- 本次（RC）约定 tag 为 `v0.1.0-rc.2`。正式版将为 `v0.1.0` / `v1.0.0` 等（不含 `-`）。
 
 ## 2. 打 tag 与推送
 
@@ -18,10 +18,10 @@ git pull --ff-only
 git log --oneline -1          # 确认这是已跑绿的那个 commit
 
 # 2) 打带注释的 tag（annotated tag）
-git tag -a v0.1.0-rc.1 -m "drawpaper 0.1.0-rc.1 (pre-release)"
+git tag -a v0.1.0-rc.2 -m "drawpaper 0.1.0-rc.2 (pre-release)"
 
 # 3) 只推这一个 tag（不要用 git push --tags，避免误推其他临时 tag）
-git push origin v0.1.0-rc.1
+git push origin v0.1.0-rc.2
 ```
 
 推送 tag 后，`release-windows` 的 `publish` job 只在 `github.ref` 以 `refs/tags/` 开头时才会跑；分支 push / 手动触发只验证出包，不创建 Release。
@@ -40,10 +40,10 @@ git push origin v0.1.0-rc.1
 
 ### 4.1 GitHub Release 上的 Windows 安装包
 
-版本号取自 `tauri.conf.json`（本版 `0.1.0-rc.1`），Tauri NSIS 产物命名规则为 `{productName}_{version}_{arch}-setup.exe`，因此本版：
+版本号取自 `tauri.conf.json`（本版 `0.1.0-rc.2`），Tauri NSIS 产物命名规则为 `{productName}_{version}_{arch}-setup.exe`，因此本版：
 
-- `drawpaper_0.1.0-rc.1_x64-setup.exe` — 64 位 Intel/AMD（Win10/11）
-- `drawpaper_0.1.0-rc.1_arm64-setup.exe` — ARM64（Copilot+ PC、Surface Pro X 等）
+- `drawpaper_0.1.0-rc.2_x64-setup.exe` — 64 位 Intel/AMD（Win10/11）
+- `drawpaper_0.1.0-rc.2_arm64-setup.exe` — ARM64（Copilot+ PC、Surface Pro X 等）
 
 这两个文件由 `publish` job 从 `artifacts/nsis-x64/**` 与 `artifacts/nsis-arm64/**` 通配收集并挂到 Release。NSIS 构建在 Windows runner 上完成；Linux/macOS 无法本地复现该产物。
 
@@ -100,11 +100,11 @@ git push origin v0.1.0-rc.1
 - **移动 / 删除 tag**（必须重发时）：
   ```bash
   # 删远端 tag 后本地重建到正确 commit
-  git push origin :refs/tags/v0.1.0-rc.1
-  git tag -d v0.1.0-rc.1
+  git push origin :refs/tags/v0.1.0-rc.2
+  git tag -d v0.1.0-rc.2
   git checkout <correct-commit-sha>
-  git tag -a v0.1.0-rc.1 -m "drawpaper 0.1.0-rc.1 (pre-release)"
-  git push origin v0.1.0-rc.1
+  git tag -a v0.1.0-rc.2 -m "drawpaper 0.1.0-rc.2 (pre-release)"
+  git push origin v0.1.0-rc.2
   ```
 - **版本号回退**：若某个版本号打错了（例如把 `-rc.1` 打成 `-rc.2`），按 §5 改回版本文件并合并到 develop，再用修正后的 tag 重发；已发错 tag 的 Release 按上面删除。
 - 代码本身不回滚：develop 已合入的功能不因为某个 tag 发错而撤回，下一个 tag 带上修复即可。
