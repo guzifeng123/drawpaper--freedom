@@ -8,6 +8,8 @@ export * from './paginate/index.js';
 export * from './hydration/index.js';
 export * from './serialize/index.js';
 export * from './store/index.js';
+// 同浏览器多标签实时协作协议（Wave9 阶段 A：纯类型 + 纯函数 + 单测，传输层在 web）。
+export * from './collab/index.js';
 // AI 纯逻辑（与 store/adapters 的 AIProvider 接口配合；类型名刻意与 adapters 的
 // 宽松 AISuggestion 区分：这里是校验过的判别联合 AiSuggestion）。
 export * from './ai/index.js';
