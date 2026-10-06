@@ -7,6 +7,12 @@ import { mountOverviewDev, unmountOverviewDev } from '@/overview/dev-mount';
 import { requestDeleteNodes } from './block-delete-guard';
 import { buildPagesSvgAsync } from '@/export/svg-export';
 import { collabManager } from '@/collab/collab-manager';
+import { syncController } from '@/sync/sync-controller';
+import { FakeDirectoryHandle } from '@/sync/directory-handle';
+import { syncStamper } from '@/sync/stamper';
+
+/** e2e 注入的内存 fake 同步目录（FSA 通道测试 seam）。 */
+let injectedFake: FakeDirectoryHandle | null = null;
 
 /**
  * DEV-only 测试钩子（window.__drawpaper__）。
@@ -85,6 +91,23 @@ export interface DrawpaperDevHook {
     migratedDeepEqual: boolean;
     mergedConflictCount: number;
   };
+  // ---- Wave10 跨设备同步：e2e 测试 seam ----
+  /** 注入内存 fake 同步目录并启动 FSA 通道。返回目录转储（路径→内容）。 */
+  syncUseFakeFolder(): Record<string, string>;
+  /** 向 fake 目录写一个 .kbnote（模拟对端/Syncthing 落盘）。 */
+  syncFakeWrite(path: string, contents: string): void;
+  /** 读 fake 目录转储（断言 conflicted 副本）。 */
+  syncFakeDump(): Record<string, string>;
+  /** 以 WebDAV 配置启动通道（host 由 page.route mock）。 */
+  syncStartWebdav(url: string, username: string, password: string): void;
+  /** 跑一轮同步并返回结果。 */
+  syncRunNow(): Promise<unknown>;
+  /** 停止同步并清除全部元数据/凭据。 */
+  syncStop(): Promise<void>;
+  /** 同步状态检视。 */
+  syncInspect(): unknown;
+  /** 本端同步 clientId / Lamport 水位。 */
+  syncIdentity(): { clientId: string; lamport: number };
 }
 
 declare global {
@@ -290,6 +313,36 @@ export function installDevHooks(): void {
         migratedDeepEqual,
         mergedConflictCount: merged.conflicts.length,
       };
+    },
+    syncUseFakeFolder() {
+      injectedFake = new FakeDirectoryHandle('e2e-fake-sync');
+      syncController.__injectFakeForTest(injectedFake);
+      return injectedFake.dump();
+    },
+    syncFakeWrite(path: string, contents: string) {
+      if (!injectedFake) throw new Error('syncUseFakeFolder 未调用');
+      void injectedFake.writeText(path, contents);
+    },
+    syncFakeDump() {
+      return injectedFake?.dump() ?? {};
+    },
+    syncStartWebdav(url: string, username: string, password: string) {
+      injectedFake = null;
+      syncController.startWebdav({ baseUrl: url, username, password }, 0);
+    },
+    async syncRunNow() {
+      await syncController.runNow();
+      return syncController.inspect();
+    },
+    async syncStop() {
+      await syncController.stopAndClear();
+      injectedFake = null;
+    },
+    syncInspect() {
+      return syncController.inspect();
+    },
+    syncIdentity() {
+      return { clientId: syncStamper.clientId, lamport: syncStamper.lamport };
     },
   };
 }

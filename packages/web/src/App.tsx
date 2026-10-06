@@ -23,6 +23,8 @@ import { DexieOverviewProvider } from '@/overview/DexieOverviewProvider';
 import { CollabBanner } from '@/collab/CollabBanner';
 import { PresenceAvatars } from '@/collab/PresenceAvatars';
 import { RemoteSelectionOverlay } from '@/collab/RemoteSelectionOverlay';
+import { SyncBanner } from '@/sync/SyncBanner';
+import { SyncSettingsDialog } from '@/sync/SyncSettingsDialog';
 import { db } from '@/storage/db';
 import { findDanglingLinks } from '@drawpaper/core';
 import { syncBacklinkTitles } from '@/storage/link-writes';
@@ -214,6 +216,7 @@ export default function App() {
       {/* 面板层 */}
       {/* 同浏览器多标签协作：冲突横幅 / 在线点 / 远端选区装饰 */}
       <CollabBanner />
+      <SyncBanner />
       <PresenceAvatars />
       <RemoteSelectionOverlay />
       <TopToolbar api={panelsApi} />
@@ -306,6 +309,19 @@ export default function App() {
 
       {/* 全局 toast（editor 与 panels 共用） */}
       <Toaster />
+      {/* Wave10 跨设备同步：设置→同步面板 */}
+      <SyncSettingsDialog open={useWiringUi((s) => s.syncOpen)} onOpenChange={(o) => useWiringUi.getState().setSyncOpen(o)} />
+      <button
+        type="button"
+        aria-label="打开同步设置"
+        data-testid="open-sync"
+        onClick={() => useWiringUi.getState().setSyncOpen(true)}
+        className="absolute right-4 top-14 z-20 rounded-full border bg-card/90 p-2 shadow hover:bg-accent"
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path d="M17.5 19a4.5 4.5 0 0 0 .42-8.98 6 6 0 0 0-11.7 1.5A4 4 0 0 0 7 19h10.5z" />
+        </svg>
+      </button>
       {/* Wave7 P2.1：删块反链影响确认框（有 incoming/outgoing 链接时才弹出） */}
       <BlockDeleteConfirmDialog />
     </div>
