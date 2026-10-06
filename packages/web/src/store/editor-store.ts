@@ -7,6 +7,7 @@ import { activeFileManager, setStorageQuotaWarningHook } from '../storage/fsa';
 import { TEMPLATE_REGISTRY } from '../storage/templates';
 import { createConflictBridge, type ConflictBridge } from '../wiring/conflict-bridge';
 import { pushToast } from '../panels/lib/toast';
+import { syncStamper } from '../sync/stamper';
 
 /**
  * React 单例 editor store：注入浏览器 storage / host，启动时打开最近文档或新建空白。
@@ -47,6 +48,9 @@ function blankInitialDoc(): KBNoteDoc {
 export const storageAdapter = new DexieStorageAdapter();
 export const hostAdapter = new WebHostAdapter();
 
+// Wave10 阶段 B：落盘前给本地变更盖 v3 同步戳（clientId+递增 lamport → doc.sync）。
+syncStamper.wrapSaveDoc(storageAdapter);
+
 /** 多父/成环冲突弹窗桥：store 挂起 → CanvasEditor 的 ConflictDialog 收集结果。 */
 export const conflictBridge: ConflictBridge = createConflictBridge();
 
@@ -67,6 +71,9 @@ setStorageQuotaWarningHook((kind) => {
     pushToast('warn', '写入本地文件失败，已降级为浏览器下载');
   }
 });
+
+// Wave10 阶段 B：订阅命令管道，本地变更差量盖章（加载文档后先 adoptClockFloor 抬钟）。
+syncStamper.install(editorStore);
 
 /** 启动后：列出文档 → 打开最近一份；没有则新建。 */
 async function bootstrap(): Promise<void> {

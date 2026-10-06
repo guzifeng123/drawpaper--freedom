@@ -33,6 +33,9 @@ export interface WiringUiState {
   /** 全局图谱总览全屏是否打开。 */
   overviewOpen: boolean;
 
+  /** Wave10：设置→同步面板是否打开。 */
+  syncOpen: boolean;
+
   // ============================================================
   // Wave7 P2.1：删除块时的跨文档反链影响确认
   // ============================================================
@@ -59,6 +62,7 @@ export interface WiringUiState {
   setBacklinksNodeId(id: string | null): void;
   setBacklinksOpen(open: boolean): void;
   setOverviewOpen(open: boolean): void;
+  setSyncOpen(open: boolean): void;
   setBlockDeleteRequest(req: WiringUiState['blockDeleteRequest']): void;
 }
 
@@ -74,6 +78,7 @@ export const useWiringUi = create<WiringUiState>((set) => ({
   backlinksNodeId: null,
   backlinksOpen: false,
   overviewOpen: false,
+  syncOpen: false,
   blockDeleteRequest: null,
   setExportOpen: (open) => set({ exportOpen: open }),
   setSearchOpen: (open) => set({ searchOpen: open }),
@@ -86,6 +91,7 @@ export const useWiringUi = create<WiringUiState>((set) => ({
   setBacklinksNodeId: (id) => set({ backlinksNodeId: id }),
   setBacklinksOpen: (open) => set({ backlinksOpen: open }),
   setOverviewOpen: (open) => set({ overviewOpen: open }),
+  setSyncOpen: (open) => set({ syncOpen: open }),
   setBlockDeleteRequest: (req) => set({ blockDeleteRequest: req }),
 }));
 
