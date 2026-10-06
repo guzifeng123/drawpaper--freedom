@@ -899,7 +899,7 @@ dependencies = [
 
 [[package]]
 name = "drawpaper"
-version = "0.1.0-rc.3"
+version = "0.1.0-rc.4"
 dependencies = [
  "dirs 5.0.1",
  "env_logger",
