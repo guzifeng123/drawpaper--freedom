@@ -1,7 +1,7 @@
 import type { KBNoteDoc, DocRefLink, PaginateResult } from '@drawpaper/core';
 import { parseKBNote, KBNoteFileError, serializeKBNote, mergeSnapshots } from '@drawpaper/core';
 import { editorStore } from '@/store/editor-store';
-import { getAsset, isOpfsAvailable } from '@/storage/opfs';
+import { getAsset, isOpfsAvailable, writeAssetToRef, deleteAsset } from '@/storage/opfs';
 import { loadBacklinks } from '@/storage/backlinks';
 import { mountOverviewDev, unmountOverviewDev } from '@/overview/dev-mount';
 import { requestDeleteNodes } from './block-delete-guard';
@@ -10,6 +10,12 @@ import { collabManager } from '@/collab/collab-manager';
 import { syncController } from '@/sync/sync-controller';
 import { FakeDirectoryHandle } from '@/sync/directory-handle';
 import { syncStamper } from '@/sync/stamper';
+import { exportAllToKbpackBlob, importKbpackBundle } from '@/sync/kbpack-transfer';
+import {
+  listConflictCopies,
+  registerConflictCopy,
+} from '@/sync/sync-db';
+import { db } from '@/storage/db';
 
 /** e2e 注入的内存 fake 同步目录（FSA 通道测试 seam）。 */
 let injectedFake: FakeDirectoryHandle | null = null;
@@ -110,6 +116,23 @@ export interface DrawpaperDevHook {
   syncIdentity(): { clientId: string; lamport: number };
   /** Wave11：用口令解锁已配置的加密 WebDAV 通道。 */
   syncUnlock(passphrase: string): Promise<unknown>;
+  // ---- Wave11 阶段 B 手动备份包 + 冲突副本：e2e seam ----
+  /** 导出全部文档为 .kbpack，返回 base64 字节（e2e 捕获后用于导入还原）。 */
+  syncExportKbpack(): Promise<string>;
+  /** 导入 base64 编码的 .kbpack 并合并，返回摘要。 */
+  syncImportKbpack(b64: string): Promise<unknown>;
+  /** 列出待处理冲突副本（id/标题/来源）。 */
+  syncListConflictCopies(): Promise<unknown[]>;
+  /** 制造一个可在面板处理的冲突副本登记（直接落注册表，供三动作 e2e）。 */
+  syncSeedConflictCopy(docId: string, title: string, text: string): Promise<void>;
+  /** 清空全部文档与 OPFS 资产（导出→清空→导入还原 e2e）。 */
+  syncWipeAllDocs(): Promise<void>;
+  /** 覆盖 FSA 目录选择能力探测（无 FSA 环境 e2e：注入 false 让面板高亮手动通道）。 */
+  setFsaSupported(supported: boolean): void;
+  /** 按指定 ref 写一个字节资产到 OPFS（资产往返 e2e 播种）。 */
+  opfsSeedAsset(ref: string, b64: string): Promise<void>;
+  /** 删除 OPFS 中某资产（导出→清空→导入还原 e2e 验证资产回填）。 */
+  opfsRemoveAsset(ref: string): Promise<void>;
 }
 
 declare global {
@@ -353,6 +376,56 @@ export function installDevHooks(): void {
     async syncUnlock(passphrase: string) {
       await syncController.unlockWebdav(passphrase);
       return syncController.inspect();
+    },
+    async syncExportKbpack() {
+      const { blob } = await exportAllToKbpackBlob();
+      const buf = new Uint8Array(await blob.arrayBuffer());
+      let binary = '';
+      for (let i = 0; i < buf.length; i += 1) binary += String.fromCharCode(buf[i] ?? 0);
+      return btoa(binary);
+    },
+    async syncImportKbpack(b64: string) {
+      const binary = atob(b64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+      return importKbpackBundle(bytes);
+    },
+    async syncListConflictCopies() {
+      const rows = await listConflictCopies();
+      return rows.map((r) => ({ id: r.id, title: r.title, source: r.source, docId: r.docId }));
+    },
+    async syncSeedConflictCopy(docId: string, title: string, text: string) {
+      await registerConflictCopy({
+        id: `${title}.conflicted-dev.kbnote`,
+        source: 'manual',
+        docId,
+        title,
+        text,
+        remoteName: '',
+        createdAt: Date.now(),
+      });
+    },
+    async syncWipeAllDocs() {
+      await db.docs.clear();
+      await db.snapshots.clear();
+      await db.trash.clear();
+      await editorStore.getState().listDocs();
+    },
+    setFsaSupported(supported: boolean) {
+      // isFsaDirectorySupported 读 window.showDirectoryPicker 是否为函数；
+      // 注入 false = 删它；true = 补一个 stub（e2e 测「无 FSA 高亮手动」时用）。
+      const w = window as unknown as { showDirectoryPicker?: unknown };
+      if (supported) w.showDirectoryPicker = w.showDirectoryPicker ?? (() => Promise.reject(new Error('stub')));
+      else delete w.showDirectoryPicker;
+    },
+    async opfsSeedAsset(ref: string, b64: string) {
+      const binary = atob(b64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+      await writeAssetToRef(ref, bytes);
+    },
+    async opfsRemoveAsset(ref: string) {
+      await deleteAsset(ref);
     },
   };
 }

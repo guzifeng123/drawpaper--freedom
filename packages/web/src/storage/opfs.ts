@@ -89,6 +89,20 @@ export async function deleteAsset(assetRef: string): Promise<void> {
   }
 }
 
+/**
+ * 按【指定】assetRef 写回字节（同步导入回填用）。
+ * 与 putAsset（每次随机 nanoid）不同：跨设备同步时文档 assetRefs 里登记的就是原 ref，
+ * 必须按同名落盘，否则画布引用指向不存在的对象。
+ * 已存在同名 ref 则覆盖写入（幂等）。
+ */
+export async function writeAssetToRef(assetRef: string, bytes: Uint8Array): Promise<void> {
+  const dir = await getAssetsDir();
+  const fh = await dir.getFileHandle(assetRef, { create: true });
+  const writable = await fh.createWritable();
+  await writable.write(bytes);
+  await writable.close();
+}
+
 // ============ 图片压缩 ============
 
 /**

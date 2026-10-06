@@ -15,6 +15,7 @@ import { editorStore, storageAdapter } from '@/store/editor-store';
 import { syncStamper } from './stamper';
 import { loadOrCreateDeviceClientId } from './device-identity';
 import { readBase, writeBase, readSyncState, writeSyncState } from './sync-db';
+import { registerConflictCopy } from './sync-db';
 import { useSyncUi } from './sync-ui-store';
 
 /**
@@ -149,10 +150,19 @@ export async function runSync(channel: SyncChannel): Promise<SyncRunResult> {
       if (conflicts.length > 0) {
         result.conflicts += conflicts.length;
         // 写 conflicted 副本（保留对端版本供人工核对）。
-        await channel.writeConfcted(
-          `${remoteDoc.title || '未命名'}.conflicted-${nowStamp()}.kbnote`,
-          serializeKBNote(remoteDoc),
-        );
+        const copyName = `${remoteDoc.title || '未命名'}.conflicted-${nowStamp()}.kbnote`;
+        const copyText = serializeKBNote(remoteDoc);
+        await channel.writeConfcted(copyName, copyText);
+        // 同时登记到本地冲突副本注册表（冲突处理面板三来源聚合；刷新后仍在）。
+        await registerConflictCopy({
+          id: copyName,
+          source: channel.type,
+          docId: remoteDoc.id,
+          title: remoteDoc.title || '未命名',
+          text: copyText,
+          remoteName: copyName,
+          createdAt: Date.now(),
+        });
         if (active) {
           useSyncUi.getState().setConflicts(
             conflicts.map((c) => c.reason),
