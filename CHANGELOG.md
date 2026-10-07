@@ -2,12 +2,6 @@
 
 本文件按「用户可见能力」分组归纳各版本，不逐条罗列提交。每个版本标题为语义化版本号，预发布版后缀 `-rc.N` / `-beta.N` / `-alpha.N`。
 
-## 未发布（Unreleased）
-
-### Windows 桌面端
-
-- **WiX MSI 安装包新增 zh-CN 中文 UI culture**：`bundle.windows.wix.language` 配成 `["en-US", "zh-CN"]` 后，x64 / arm64 各产出 en-US、zh-CN 两个 MSI（共 4 个 MSI），与 NSIS×2 合计 6 个 Windows 安装包；`SHA256SUMS.txt` 同步覆盖全部 6 个包。企业 `msiexec /qn` 按目标机 UI 偏好二选一部署（两种 culture 同 ProductCode，同机不并存）；NSIS 双语向导配置与行为完全不变。版本号与 `wix.version` 零改动。详见 `docs/wave18/msi-bilingual.md`。
-
 ## 0.1.0-rc.9
 
 Windows 桌面原生打磨波：冷启动外部文件打开竞态收口、原生文件夹自动保存镜像、全局快捷键，以及桌面文档与现状全面对齐。

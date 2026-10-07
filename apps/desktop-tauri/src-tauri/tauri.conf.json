@@ -58,11 +58,7 @@
         "sidebarImage": "icons/installer-sidebar.bmp"
       },
       "wix": {
-        "version": "0.1.0.9",
-        "language": [
-          "en-US",
-          "zh-CN"
-        ]
+        "version": "0.1.0.9"
       }
     },
     "macOS": {

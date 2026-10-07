@@ -1,100 +1,61 @@
-# Wave 18 — WiX MSI 双语 culture 双包（en-US + zh-CN）
+# Wave 18 — WiX MSI 双语 culture 双包（en-US + zh-CN）：**结论「不做」（已回退）**
 
-> 范围：仅 Windows 安装包出包配置（`bundle.windows.wix`）与 `release-windows.yml` 冒烟 / 收集断言。
-> 不改任何 Rust / Cargo / packages / NSIS 配置 / 版本字段。
+> 状态：本波尝试给 WiX MSI 加 zh-CN 中文 UI culture。**构建侧成功**，但 x64 zh-CN 安装/卸载
+> 冒烟两次失败，且匿名 CI 日志正文不可读、无法在止损窗口内定位根因。按止损指令**回退到
+> rc.9 的英文 MSI 单文化矩阵**（NSIS×2 + MSI en-US×2 = 4 包）。分支上仅保留 push 白名单探针，
+> `wix.language` 已撤除，未合入任何出包改动。
 > 基线：`0ef0ff5`（rc.9）。分支：`feat/msi-bilingual`。
 
-## 1. 目标
+## 1. 做了什么（已回退的尝试）
 
-rc.9 基线的 WiX MSI 只产 en-US 单文化包（安装向导 / 错误提示全英文）。企业批量部署里有中文
-系统用户，希望安装界面随系统语言。本波给 WiX MSI 加上 **en-US + zh-CN 两种 UI culture**，
-x64 与 arm64 各出两个 MSI（共 4 个 MSI），NSIS 行为完全不动。
+`bundle.windows.wix` 增加 `"language": ["en-US", "zh-CN"]`（schema 已核实：
+`WixLanguage = string | string[] | map`，数组即每种 culture 一个包，语言键即文件名后缀，
+见 <https://v2.tauri.app/distribute/windows-installer/>）。`wix.version: "0.1.0.9"` 与 app
+`0.1.0-rc.9` 全程零改动；NSIS 一行未动。
 
-## 2. 配置键（唯一出包改动）
+配套在 `release-windows.yml`：把 en-US 轮选包 pin 到 `*_x64_en-US.msi`、新增 x64 zh-CN
+静默装/卸冒烟、上传前打印 MSI 名+大小、`SHA256SUMS` 行数断言改 6。
 
-`apps/desktop-tauri/src-tauri/tauri.conf.json` → `bundle.windows.wix`：
+## 2. 实测证据（CI 权威门）
 
-```jsonc
-"wix": {
-  "version": "0.1.0.9",          // 既有数字 ProductVersion 覆盖，原样保留不动
-  "language": ["en-US", "zh-CN"] // 新增：数组 = 每种 culture 出一个独立 MSI
-}
-```
-
-- 键名 / 形态已对 Tauri 2 config schema（`https://schema.tauri.app/config/2`）核实：
-  `WixConfig.properties.language`，`anyOf: string | string[] | map`，默认 `"en-US"`。
-  传数组即「每种 culture 一个包」，无需自定义 WiX fragment / .wxl 模板——WixUIExtension
-  v3.14 自带 zh-CN 本地化（已编译进扩展，开箱可用）。
-- `wix.version: "0.1.0.9"` 是 MSI ProductVersion 数字覆盖（rc.9 基线值），**本波零改动**；
-  两种 culture 共用同一个 ProductVersion。
-- NSIS 段（`installMode` / `displayLanguageSelector` / `languages` / 两张位图）一行未动。
-
-## 3. 产物矩阵（一次 release-windows 构建）
-
-| 架构 | NSIS（不变） | WiX MSI（本波 ×2 culture） |
-|---|---|---|
-| x64 | `drawpaper_<ver>_x64-setup.exe` | `drawpaper_<wixver>_x64_en-US.msi` + `..._x64_zh-CN.msi` |
-| arm64 | `drawpaper_<ver>_arm64-setup.exe` | `drawpaper_<wixver>_arm64_en-US.msi` + `..._arm64_zh-CN.msi` |
-
-共 **6 个安装包**：NSIS×2（不变）+ MSI×4（x64/arm64 × en-US/zh-CN）。
-`SHA256SUMS.txt` 同步变为 6 行，publish job 对行数硬断言 `-eq 6`。
-
-### 3.1 实测文件名与大小（CI 产物证据，待回填）
-
-> 来源：release-windows 双架构 run 的 `List MSI artifacts to upload` 步骤输出（每文件
-> 全名 + 字节数）与 publish job 的 `SHA256SUMS.txt` cat。
-
-| 文件 | 大小 |
+| 项 | 结果 |
 |---|---|
-| （待回填：`<run URL>`） | |
+| `Tauri build (NSIS + MSI, x64)` | ✅ 绿 —— **双语 MSI 成功产出，无需自定义 fragment / .wxl**（WixUIExtension 内置 zh-CN 本地化开箱可用，构建未报任何语言包缺失） |
+| arm64 build job | ✅ 绿；上传 `msi-arm64` artifact = **11.6 MB**（约 = 2 × ~5.8 MB，对应 en-US + zh-CN 两个 arm64 MSI） |
+| en-US MSI 整轮冒烟（装→注册表→快捷方式→启动标题→卸净） | ✅ 全绿，与 rc.9 基线一致 |
+| NSIS 冒烟 | ✅ 未受影响（`*-setup.exe`×2 正常） |
+| **新增 `Smoke (x64 MSI zh-CN): silent install + uninstall`** | ❌ **两次失败** |
+| web-ci（feat/** 自动触发） | ✅ 绿 |
 
-## 4. 企业 msiexec 静默部署（两种 culture）
+失败 run：
+- `#110` run id `37657688949`（commit `0c9a8be`，首版双语）：x64 zh-CN 冒烟红叉，其后上传步骤全部跳过。
+- `#113` run id `37660508380`（commit `09555b5`，加「安装前排空 msiexec + 1618 繁忙单次重试」）：
+  **仍在同一步骤红叉**。说明不是瞬时 1618 busy。
 
-两种 culture 的 MSI **ProductCode / UpgradeCode 相同**，仅 UI 文化不同，同一台机器上**不能
-并存**——企业按目标机 UI 偏好二选一部署即可：
+x64 job 总时长从 `#110` 的 12m32s 增至 `#113` 的 17m46s——zh-CN 的 `msiexec /i` 实际跑起来了
+（不是「找不到 `*_x64_zh-CN.msi`」那种秒败），但既未通过安装退出码断言，也未通过卸载目录清理断言。
 
-```powershell
-# 英文界面包（默认，与 rc.9 之前一致）
-msiexec /i drawpaper_0.1.0.9_x64_en-US.msi /qn /norestart /lv* install.log   # 0 或 3010 都算成功
-msiexec /x drawpaper_0.1.0.9_x64_en-US.msi /qn /norestart                    # 卸载
+## 3. 为什么停手（不硬凑）
 
-# 中文界面包（新增）
-msiexec /i drawpaper_0.1.0.9_x64_zh-CN.msi /qn /norestart /lv* install.log
-msiexec /x drawpaper_0.1.0.9_x64_zh-CN.msi /qn /norestart
-```
+- **不是**「WiX 3.14 内置 zh-CN 语言包缺失 / 必须自定义 fragment 才能生成中文 MSI」——
+  构建步骤两次都绿，zh-CN MSI 确实产出。
+- 但 zh-CN MSI 在 x64 runner 上**静默装/卸冒烟不通过**（en-US 同包同流程全绿）。二者仅 UI culture
+  与 ProductLanguage 不同，疑似同 ProductCode 顺序装-卸交互 / 或该 culture 包在英文系统上的安装行为
+  差异。
+- 仓库匿名 `api.github.com` 限流、job 日志正文匿名不可见，**止损窗口内拿不到 msiexec 退出码与
+  install log tail**，无法在不再烧 CI 周期的前提下确认根因。
+- 按「严禁硬凑、严禁假绿」原则，**不**把一个冒烟未通过的 zh-CN MSI 当成可用产物发布。
 
-- 仍是 per-machine 装到 `C:\Program Files\drawpaper`，需要管理员；`/qn` 全程无界面，
-  culture 只影响本来就看不见的向导文案——静默部署下两种包行为等价，区别在交互安装时。
-- 从 en-US 包升级 / 换 zh-CN 包：ProductCode 相同，直接新包覆盖安装即可（同产品码
-  升级路径），用户数据不动。
+## 4. 回退内容（现状 = rc.9 英文矩阵）
 
-## 5. NSIS 不受影响
+- `tauri.conf.json`：撤掉 `wix.language`，恢复 `wix = { "version": "0.1.0.9" }`。
+- `release-windows.yml`：撤掉 zh-CN 冒烟步骤、en-US 选包 pin、List MSI 步骤、SHA256SUMS=6 断言、
+  release body 双语清单；**仅保留** push 白名单 `- 'feat/msi-bilingual'`（分支触发器）。
+- `apps/desktop-tauri/README.md`、`CHANGELOG.md`：恢复基线（英文 MSI 矩阵，4 包）。
+- 产物回到：NSIS×2 + MSI en-US×2 = **4 个 Windows 安装包**，`SHA256SUMS.txt` 4 行。
 
-- `bundle.windows.nsis` 配置（`installMode: "both"`、`displayLanguageSelector: true`、
-  `languages: [SimpChinese, English]`、两张 bmp 位图）**一行未动**。
-- NSIS 的中英双语向导是它自己的语言选择器体系，与 WiX `wix.language` 完全独立——
-  NSIS 本来就支持中 / 英，本波只解决 MSI 侧的单文化问题。
-- CI 里 NSIS 7 步冒烟一个字没改，产物仍是 `*-setup.exe`×2 + `.sig`（若配了签名）。
+## 5. 后续（若重启此波）
 
-## 6. CI 改动清单（release-windows.yml，只增不删）
-
-1. push 分支白名单新增 `- 'feat/msi-bilingual'`。
-2. 既有 en-US 轮 MSI 选包从裸 `*.msi | Select -First 1` 精化为 `*_x64_en-US.msi`
-   （install 步与 uninstall 步各一处；双文化后同目录有两个 MSI，裸选第一个会歧义）。
-3. 新增 `Smoke (x64 MSI zh-CN): silent install + uninstall of zh-CN culture`：
-   前置断言 en-US 轮已卸载干净 → `*_x64_zh-CN.msi` 静默装 → 断言
-   `C:\Program Files\drawpaper\drawpaper.exe`（+ ProductVersion 打印）→ 静默卸 →
-   60s 有界等待目录移除。与 en-US 轮严格串行。
-4. `Upload MSI installer artifact` 前新增 `List MSI artifacts to upload (name + size
-   evidence)`：打印 bundle/msi 下每个 MSI 全名 + 字节数（匿名日志正文不可见，证据全靠
-   Write-Host）。上传 glob `bundle/msi/*.msi` 天然收两种 culture，无需改 glob。
-5. publish job：`SHA256SUMS.txt` 行数断言从 `-ge 4` 写死为 `-eq 6`（NSIS×2 + MSI×4），
-   注释列明构成；release body 的 MSI 清单补 zh-CN 两条、校验和描述改「六个安装包」。
-6. arm64 MSI 维持**只构建不执行**（无 ARM runner）。
-
-## 7. 红线自检
-
-- `wix.version` / app `version` 零改动（diff 里 tauri.conf 只多 `language` 一个键）。
-- 不切 tag、不动 develop/main；只推 `feat/msi-bilingual`。
-- 未新增 WiX license / fragment / 自定义模板（基线 en-US 就没配 license，zh-CN 用扩展内置
-  本地化，实测零自定义成本）。
+需要一次**有日志权限**的环境复现：直接看 zh-CN 那次 `msiexec /i` 的真实退出码（1603? 1638?）
+与 install log tail，再决定是否需要：拆 ProductCode（每 culture 独立 GUID）、或 zh-CN 自定义
+`.wxl` fragment。当前证据不足以支撑直接发 zh-CN 包。
