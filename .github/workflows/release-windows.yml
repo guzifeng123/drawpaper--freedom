@@ -806,6 +806,17 @@ jobs:
           }
           Write-Host "::endgroup::"
 
+          # The log plugin forwards webview console to drawpaper.log — dump it to
+          # reveal any boot error (e.g. __TAURI__ missing, bootstrap throw).
+          foreach ($root in $dataRoots) {
+            $logCand = Join-Path $root 'logs\drawpaper.log'
+            if (Test-Path $logCand) {
+              Write-Host "::group::drawpaper.log tail (welcome-doc step) :: $logCand"
+              Get-Content $logCand -Tail 40 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $_" }
+              Write-Host "::endgroup::"
+            }
+          }
+
           if ($firstHits -lt 1) {
             Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
             Write-Error 'Smoke FAIL: welcome markers (doc_welcome_v1 / drawpaper:welcome-doc-v1) not found in EBWebView leveldb within 60s after confirmed boot'
