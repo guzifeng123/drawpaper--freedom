@@ -48,10 +48,9 @@ tokio = { version = "1", features = ["sync"] }
 dirs = "5"
 log = "0.4"
 # Wave15 C: pure-Rust diagnostic bundle (help → 导出诊断信息 / `--diag-export`).
-# zip writes the archive in Rust (no web dep); winreg reads the WebView2 Runtime
-# version + OS build out of the registry on Windows.
+# zip writes the archive in Rust (no web dep). WebView2/OS version detection shells
+# out to the system `reg.exe query` (std::process::Command) — no winreg dependency.
 zip = { version = "2", default-features = false, features = ["deflate"] }
-winreg = "0.52"
 
 # NOTE on tauri-plugin-updater: intentionally NOT included.
 # Auto-update requires (1) a TAURI_SIGNING_PRIVATE_KEY at build time and

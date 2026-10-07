@@ -129,7 +129,7 @@ pub fn write_diagnostic_zip(
     // NOTE: build `opts`/`zerr` BEFORE binding the writer to the name `zip`,
     // otherwise the local `zip` shadows the crate path and `zip::...` breaks.
     let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    let zerr = |e: zip::ZipError| {
+    let zerr = |e: zip::result::ZipError| {
         std::io::Error::new(std::io::ErrorKind::Other, format!("zip: {e}"))
     };
     let mut zip = zip::ZipWriter::new(file);
@@ -262,29 +262,45 @@ fn tail_file(path: &Path, max_bytes: u64) -> std::io::Result<Vec<u8>> {
 // ---------------------------------------------------------------------------
 
 #[cfg(windows)]
+fn reg_get_value(key: &str, value: &str) -> Option<String> {
+    use std::process::Command;
+    // 零新依赖：直接调系统自带 `reg.exe query`，避免 winreg 跨编译类型风险。
+    let out = Command::new("reg")
+        .args(["query", key, "/v", value])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    // stdout 形如：
+    //   HKEY_LOCAL_MACHINE\SOFTWARE\...
+    //       pv    REG_SZ    134.0.3124.66
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in text.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() >= 3 && parts[0].eq_ignore_ascii_case(value) {
+            let v = parts[parts.len() - 1].to_string();
+            if !v.is_empty() {
+                return Some(v);
+            }
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
 fn detect_webview2_runtime_version() -> String {
-    use winreg::enums::{HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ};
-    use winreg::RegKey;
-    // WebView2 Evergreen Runtime 的 CLSID。
     let clsid = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
-    // 64 位系统上运行时写在 WOW6432Node（32 位视图）；HKCU 对应用户安装。
-    // 不显式标注元组第二元素类型，避免在这里 winreg 类型路径写错。
-    let candidates = [
-        (
-            format!(r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{clsid}"),
-            HKEY_LOCAL_MACHINE,
-        ),
-        (
-            format!(r"Software\Microsoft\EdgeUpdate\Clients\{clsid}"),
-            HKEY_CURRENT_USER,
-        ),
+    // 64 位系统上运行时注册在 WOW6432Node（32 位视图）；再补 64 位视图与 HKCU。
+    let keys = [
+        format!(r"HKLM\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{clsid}"),
+        format!(r"HKLM\SOFTWARE\Microsoft\EdgeUpdate\Clients\{clsid}"),
+        format!(r"HKCU\Software\Microsoft\EdgeUpdate\Clients\{clsid}"),
     ];
-    for (sub, hive) in &candidates {
-        if let Ok(k) = RegKey::predef(*hive).open_subkey_with_flags(sub, KEY_READ) {
-            if let Ok(pv) = k.get_value::<String, _>("pv") {
-                if !pv.is_empty() {
-                    return pv;
-                }
+    for k in &keys {
+        if let Some(v) = reg_get_value(k, "pv") {
+            if !v.is_empty() {
+                return v;
             }
         }
     }
@@ -293,19 +309,11 @@ fn detect_webview2_runtime_version() -> String {
 
 #[cfg(windows)]
 fn detect_os_version() -> String {
-    use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
-    use winreg::RegKey;
-    let ndp = r"SOFTWARE\Microsoft\Windows NT\CurrentVersion";
-    let Ok(k) = RegKey::predef(HKEY_LOCAL_MACHINE).open_subkey_with_flags(ndp, KEY_READ) else {
-        return "unknown".to_string();
-    };
-    let get = |name: &str| k.get_value::<String, _>(name).unwrap_or_default();
-    let product = get("ProductName");
-    let display = get("DisplayVersion");
-    let build = get("CurrentBuild");
-    let ubr: String = k.get_value::<u32, _>("UBR")
-        .map(|n| n.to_string())
-        .unwrap_or_default();
+    let k = r"HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion";
+    let product = reg_get_value(k, "ProductName").unwrap_or_default();
+    let display = reg_get_value(k, "DisplayVersion").unwrap_or_default();
+    let build = reg_get_value(k, "CurrentBuild").unwrap_or_default();
+    let ubr = reg_get_value(k, "UBR").unwrap_or_default();
     let build_str = if ubr.is_empty() { build } else { format!("{build}.{ubr}") };
     let bits = [product, display, build_str]
         .into_iter()
@@ -395,7 +403,6 @@ const README_TEMPLATE: &str = "drawpaper 诊断信息包
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
     use zip::read::ZipArchive;
 
     /// 构造一个假数据目录，里面埋：

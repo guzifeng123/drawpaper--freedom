@@ -86,16 +86,22 @@ jobs:
         working-directory: apps/desktop-tauri/src-tauri
         shell: bash
         timeout-minutes: 20
+        env:
+          # src-tauri/Cargo.toml enables the `protocol-asset` feature but tauri.conf.json
+          # does not declare an `assetProtocol` block. When cargo runs the tauri-build
+          # script directly (not via `tauri build`), that feature/allowlist mismatch makes
+          # the build script exit 1. Merging assetProtocol.enable here satisfies the same
+          # check the CLI performs — no tauri.conf.json change.
+          TAURI_CONFIG: '{"app":{"security":{"assetProtocol":{"enable":true}}}}'
         run: |
           set -euo pipefail
-          # NOTE: no --locked — Wave15 C adds zip/winreg; Cargo.lock is refreshed
-          # by cargo in the runner workspace (we can't regenerate it locally,
-          # Linux has no cargo). The lockfile update is NOT committed on purpose.
+          # NOTE: no --locked — Wave15 C adds the `zip` crate; Cargo.lock is refreshed
+          # by cargo in the runner workspace. The lockfile update is NOT committed.
           cargo test 2>&1 | tr '\r' '\n' | tee /tmp/cargo-test.log
           code=${PIPESTATUS[0]}
           if [ "$code" != "0" ]; then
             echo "::error title=cargo-test::unit tests failed"
-            tail -n 40 /tmp/cargo-test.log
+            tail -n 60 /tmp/cargo-test.log
             exit "$code"
           fi
 
