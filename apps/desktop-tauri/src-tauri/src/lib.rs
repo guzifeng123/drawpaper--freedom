@@ -918,7 +918,7 @@ pub fn run() {
                         let data_dir = app
                             .path()
                             .app_data_dir()
-                            .unwrap_or_else(|| std::path::PathBuf::from("."));
+                            .unwrap_or_else(|_| std::path::PathBuf::from("."));
                         let log_path =
                             data_dir.join("logs").join("drawpaper.log");
                         let result =
