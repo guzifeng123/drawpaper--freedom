@@ -1871,6 +1871,332 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  # ------------------------------------------------------------------
+  # Wave19: NATIVE arm64 smoke on the hosted `windows-11-arm` runner.
+  #
+  # This job is intentionally INDEPENDENT of build/publish:
+  #   - it does its own checkout/toolchain/build and proves the arm64
+  #     installers INSTALL, RUN and UNINSTALL on real ARM64 hardware;
+  #   - it feeds NOTHING into publish — publish still ships the arm64
+  #     installers produced by the x64 CROSS build (nsis-arm64/msi-arm64
+  #     artifacts). Uploading our bundles here would collide with those
+  #     artifact names, so we upload only failure logs.
+  # Hard evidence of real ARM64 (asserted in the first step):
+  #   PROCESSOR_ARCHITECTURE == ARM64 AND rustc host triple == aarch64-pc-windows-msvc.
+  # ------------------------------------------------------------------
+  arm64-native:
+    runs-on: windows-11-arm
+    env:
+      npm_config_registry: https://registry.npmjs.org/
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Arch evidence — assert this runner is REALLY native ARM64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "PROCESSOR_ARCHITECTURE = '$env:PROCESSOR_ARCHITECTURE'"
+          Write-Host "PROCESSOR_IDENTIFIER  = '$env:PROCESSOR_IDENTIFIER'"
+          if ($env:PROCESSOR_ARCHITECTURE -ne 'ARM64') {
+            Write-Error "FAIL: expected PROCESSOR_ARCHITECTURE=ARM64 on windows-11-arm runner, got '$env:PROCESSOR_ARCHITECTURE'"
+          }
+          Write-Host '::group::rustc -vV'
+          rustc -vV
+          Write-Host '::endgroup::'
+          $rustcHost = ((rustc -vV) | Select-String '^host:').ToString().Trim()
+          Write-Host "rustc host line: '$rustcHost'"
+          if ($rustcHost -notmatch 'host: aarch64-pc-windows-msvc') {
+            Write-Error "FAIL: rustc host triple is not aarch64-pc-windows-msvc (got '$rustcHost') — native compile not confirmed"
+          }
+          Write-Host "OK: runner is native ARM64 (PROCESSOR_ARCHITECTURE=ARM64, rustc host=aarch64-pc-windows-msvc)"
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+          run_install: false
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile --registry=https://registry.npmjs.org/
+
+      - name: Install Tauri CLI (desktop shell, outside the pnpm workspace)
+        working-directory: apps/desktop-tauri
+        run: pnpm install --ignore-workspace --registry=https://registry.npmjs.org/
+
+      - name: Add Rust target (native arm64 host; explicit parity with build matrix)
+        run: rustup target add aarch64-pc-windows-msvc
+
+      - name: Build web frontend
+        run: pnpm -r build
+
+      - name: Tauri build arm64 (NSIS + MSI, native runner)
+        working-directory: apps/desktop-tauri
+        shell: bash
+        env:
+          # Same signing logic as the build matrix job: on branch runs the
+          # secret is absent -> signing skipped (unsigned installers), never a
+          # build failure.
+          TAURI_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_KEY }}
+          TAURI_SIGNING_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_KEY_PASSWORD }}
+        run: |
+          set +e
+          if [ -n "${TAURI_SIGNING_KEY:-}" ]; then
+            export TAURI_SIGNING_PRIVATE_KEY="$TAURI_SIGNING_KEY"
+            export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_KEY_PASSWORD:-}"
+            echo "updater signing: ENABLED (private key loaded from TAURI_SIGNING_KEY secret)"
+          else
+            echo "updater signing: SKIPPED (TAURI_SIGNING_KEY secret not set) — installers built unsigned, no .sig produced"
+          fi
+          echo "::group::tauri CLI version"
+          ./node_modules/.bin/tauri --version
+          echo "::endgroup::"
+          start_ts=$(date +%s)
+          ./node_modules/.bin/tauri build --ci --bundles nsis,msi --target aarch64-pc-windows-msvc 2>&1 | tr '\r' '\n' | tee tauri-build.log
+          code=${PIPESTATUS[0]}
+          echo "tauri build exit=$code elapsed=$(( $(date +%s)-start_ts ))s"
+          if [ "$code" != "0" ]; then
+            echo "::group::tauri build failure tail"
+            tail -n 30 tauri-build.log
+            echo "::endgroup::"
+            # Annotations are readable on the run page anonymously. GitHub caps
+            # each level at 10 per step: warnings for the prev 10, errors for
+            # the LAST 10 (Wave18-verified forensics pattern).
+            tail -n 30 tauri-build.log | sed -n '1,20p' | while IFS= read -r line; do
+              echo "::warning title=tauri-arm64native-ctx::${line:0:900}"
+            done
+            tail -n 30 tauri-build.log | sed -n '21,30p' | while IFS= read -r line; do
+              echo "::error title=tauri-arm64native-tail::${line:0:900}"
+            done
+            exit "$code"
+          fi
+
+      - name: 'Smoke (arm64 native): silent NSIS install, exe present, ProductVersion matches tauri.conf'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "[arch] PROCESSOR_ARCHITECTURE='$env:PROCESSOR_ARCHITECTURE'"
+          if ($env:PROCESSOR_ARCHITECTURE -ne 'ARM64') { Write-Error "FAIL: not on ARM64 runner" }
+          # 1) Expected version straight from tauri.conf.json.
+          $tauriConf = Get-Content -Raw 'apps/desktop-tauri/src-tauri/tauri.conf.json' | ConvertFrom-Json
+          $expectedVersion = $tauriConf.version
+          Write-Host "tauri.conf.json version (raw) = '$expectedVersion'"
+          # 2) Locate the NSIS installer produced by `tauri build`.
+          $installer = Get-ChildItem -Path 'apps/desktop-tauri/src-tauri/target' -Recurse -Filter '*-setup.exe' -File |
+            Where-Object { $_.FullName -match '[\\/]bundle[\\/]nsis[\\/]' } | Select-Object -First 1
+          if (-not $installer) { Write-Error 'Smoke FAIL: NSIS *-setup.exe not found under target/**/bundle/nsis' }
+          Write-Host "Installer = $($installer.FullName)"
+          # 3) Silent install: /S + /CURRENTUSER keeps the smoke on the stable
+          #    per-user path (no UAC, predictable install dir), same as x64.
+          Write-Host "Running silent install: Start-Process /S /CURRENTUSER"
+          $p = Start-Process -FilePath $installer.FullName -ArgumentList '/S','/CURRENTUSER' -PassThru
+          for ($w = 0; $w -lt 120; $w++) {
+            Start-Sleep -Seconds 1
+            $p.Refresh()
+            if ($p.HasExited) { break }
+          }
+          if (-not $p.HasExited) { Write-Error 'Smoke FAIL: silent installer did not exit within 120s (likely a blocking dialog)' }
+          Write-Host "Installer exit code = $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { Write-Error "Smoke FAIL: silent installer exited $($p.ExitCode)" }
+          # 4) Discover install dir (installMode="both": per-user or per-machine).
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'drawpaper'),
+            (Join-Path $env:ProgramFiles 'drawpaper')
+          )
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'drawpaper') }
+          $installDir = $null
+          foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
+          if (-not $installDir) {
+            foreach ($root in @((Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+              if ($root -and (Test-Path $root)) {
+                $hit = Get-ChildItem $root -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { $installDir = $hit.FullName; break }
+              }
+            }
+          }
+          if (-not $installDir) { Write-Error 'Smoke FAIL: install dir not found after silent install' }
+          Write-Host "Install dir (matched) = $installDir"
+          # 5) Locate drawpaper.exe.
+          $exe = Join-Path $installDir 'drawpaper.exe'
+          if (-not (Test-Path $exe)) {
+            $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $exe -or -not (Test-Path $exe)) { Write-Error "Smoke FAIL: drawpaper.exe not found under $installDir" }
+          Write-Host "App exe = $exe"
+          # 6) Version assertion: compare NUMERIC token sequences (Windows may
+          #    rewrite 0.1.0-rc.10 -> 0.1.0.10).
+          $productVersion = (Get-Item $exe).VersionInfo.ProductVersion
+          Write-Host "Installed exe ProductVersion (raw) = '$productVersion'"
+          Write-Host "tauri.conf version           (raw) = '$expectedVersion'"
+          function Get-NumTokens([string]$v) {
+            if (-not $v) { return @() }
+            return @([regex]::Matches($v, '\d+') | ForEach-Object { [int]$_.Value })
+          }
+          $exp = Get-NumTokens $expectedVersion
+          $got = Get-NumTokens $productVersion
+          $max = [Math]::Max($exp.Count, $got.Count)
+          while ($exp.Count -lt $max) { $exp += 0 }
+          while ($got.Count -lt $max) { $got += 0 }
+          if (@(Compare-Object $exp $got -SyncWindow 0).Count -ne 0) {
+            Write-Error "Smoke FAIL: version mismatch. tauri.conf='$expectedVersion' vs ProductVersion='$productVersion'"
+          }
+          Write-Host "Smoke OK: installed arm64 exe present and numeric version tokens match"
+
+      - name: 'Smoke (arm64 native): launch exe, main window title contains drawpaper, then kill'
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "[arch] PROCESSOR_ARCHITECTURE='$env:PROCESSOR_ARCHITECTURE'"
+          if ($env:PROCESSOR_ARCHITECTURE -ne 'ARM64') { Write-Error "FAIL: not on ARM64 runner" }
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'drawpaper'),
+            (Join-Path $env:ProgramFiles 'drawpaper')
+          )
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'drawpaper') }
+          $installDir = $null
+          foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
+          if (-not $installDir) {
+            foreach ($root in @((Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+              if ($root -and (Test-Path $root)) {
+                $hit = Get-ChildItem $root -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { $installDir = $hit.FullName; break }
+              }
+            }
+          }
+          if (-not $installDir) { Write-Error 'Smoke FAIL: install dir not found at launch time' }
+          $exe = Join-Path $installDir 'drawpaper.exe'
+          if (-not (Test-Path $exe)) { $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName }
+          Write-Host "Launching $exe"
+          $proc = Start-Process -FilePath $exe -PassThru
+          Write-Host ("Start-Process returned pid={0}" -f $proc.Id)
+          $ok = $false
+          # Bounded poll up to 20s for a main window whose title contains drawpaper.
+          for ($i = 1; $i -le 20; $i++) {
+            Start-Sleep -Seconds 1
+            $p = Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($p) {
+              for ($s = 1; $s -le 3; $s++) {
+                $p.Refresh()
+                $title = $p.MainWindowTitle
+                Write-Host ("t={0,2}s sample={1} pid={2} MainWindowTitle='{3}'" -f $i, $s, $p.Id, $title)
+                if ($title -and ($title.ToLower().Contains('drawpaper'))) { $ok = $true; break }
+                Start-Sleep -Milliseconds 300
+              }
+            } else {
+              Write-Host ("t={0,2}s: drawpaper process not found yet" -f $i)
+            }
+            if ($ok) { break }
+          }
+          # Best-effort cleanup of drawpaper AND its WebView2 children.
+          Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$installDir*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          if (-not $ok) {
+            Write-Error 'Smoke FAIL: drawpaper process did not present a main window whose title contains "drawpaper" within 20s'
+          }
+          Write-Host "Smoke OK: arm64 process alive and main window title contains 'drawpaper'"
+
+      - name: 'Smoke (arm64 native): silent uninstall, install dir removed'
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "[arch] PROCESSOR_ARCHITECTURE='$env:PROCESSOR_ARCHITECTURE'"
+          if ($env:PROCESSOR_ARCHITECTURE -ne 'ARM64') { Write-Error "FAIL: not on ARM64 runner" }
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'drawpaper'),
+            (Join-Path $env:ProgramFiles 'drawpaper')
+          )
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'drawpaper') }
+          $installDir = $null
+          foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
+          if (-not $installDir) {
+            foreach ($root in @((Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+              if ($root -and (Test-Path $root)) {
+                $hit = Get-ChildItem $root -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { $installDir = $hit.FullName; break }
+              }
+            }
+          }
+          if (-not $installDir) {
+            Write-Host "Install dir already absent; nothing to uninstall"
+            exit 0
+          }
+          Write-Host "Install dir = $installDir"
+          $uninst = Get-ChildItem $installDir -Filter 'unins*.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $uninst) { $uninst = Get-ChildItem $installDir -Filter 'Uninstall*.exe' -File | Select-Object -First 1 }
+          if (-not $uninst) {
+            Write-Host "Entries under $installDir :"
+            Get-ChildItem $installDir -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.Name)" }
+            Write-Error "Smoke FAIL: uninstaller exe (unins*.exe / Uninstall*.exe) not found in $installDir"
+          }
+          Write-Host "Uninstaller = $($uninst.FullName)"
+          # Try /SILENT first, fall back to /S. Never blind -Wait: poll instead.
+          $removed = $false
+          foreach ($arg in @('/SILENT', '/S')) {
+            Write-Host "Running uninstaller with arg '$arg'"
+            $u = Start-Process -FilePath $uninst.FullName -ArgumentList $arg -PassThru
+            for ($w = 0; $w -lt 60; $w++) {
+              Start-Sleep -Seconds 1
+              $u.Refresh()
+              if ($u.HasExited) { break }
+            }
+            Write-Host "Uninstaller ($arg) exited = $($u.HasExited)"
+            for ($i = 1; $i -le 20; $i++) {
+              Start-Sleep -Seconds 1
+              if (-not (Test-Path $installDir)) { $removed = $true; break }
+            }
+            if ($removed) { break }
+            Write-Host "  dir still present after '$arg'; trying next arg..."
+          }
+          if (-not $removed) {
+            # Wave18 P2 residual-process sweep before declaring failure.
+            Write-Host "::warning title=uninstall-residual-sweep::install dir still present; sweeping residual drawpaper/unins* processes before re-poll"
+            $victims = Get-Process -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -like 'drawpaper*' -or $_.Name -like 'unins*' -or $_.Name -like 'uninstall*' }
+            if ($victims) {
+              $victims | ForEach-Object { Write-Host "  killing residual process: $($_.Name) (PID $($_.Id))" }
+              $victims | Stop-Process -Force -ErrorAction SilentlyContinue
+            } else {
+              Write-Host '  no residual drawpaper/unins* process found'
+            }
+            Start-Sleep -Seconds 2
+            for ($i = 1; $i -le 10; $i++) {
+              Start-Sleep -Seconds 1
+              if (-not (Test-Path $installDir)) { $removed = $true; break }
+            }
+            Write-Host "post-sweep re-poll: dir removed = $removed"
+          }
+          if (-not $removed) {
+            Write-Host "Remaining files under $installDir (final) :"
+            Get-ChildItem $installDir -Recurse -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
+            Write-Error "Smoke FAIL: install dir still present after silent uninstall (tried /SILENT and /S, residual-process sweep + 10s re-poll)"
+          }
+          Write-Host "Smoke OK: install dir removed after silent uninstall"
+
+      # Failure forensics only: release assets are NEVER uploaded here (publish
+      # still ships the cross-built nsis-arm64/msi-arm64 artifacts).
+      - name: Upload arm64-native logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm64-native-logs
+          path: apps/desktop-tauri/tauri-build.log
+          if-no-files-found: ignore
+          retention-days: 7
+
   publish:
     needs: build
     # Only publish a release on tag pushes; branch/dispatch runs only validate
