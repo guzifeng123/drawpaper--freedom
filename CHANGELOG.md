@@ -2,6 +2,12 @@
 
 本文件按「用户可见能力」分组归纳各版本，不逐条罗列提交。每个版本标题为语义化版本号，预发布版后缀 `-rc.N` / `-beta.N` / `-alpha.N`。
 
+## 未发布（Unreleased）
+
+### Windows 桌面端
+
+- **新增便携模式（U盘运行）**：在 `drawpaper.exe` 同目录放一个空标记文件 `drawpaper.portable`（或预先建好 `data\` 目录），启动后所有由宿主管理的数据——最近文件列表、窗口状态、时间戳备份、`drawpaper.log` 日志，以及 WebView2 的网页用户数据（EBWebView）——全部改写进 exe 旁的 `data\` 目录，与安装版写入 `%APPDATA%` 的数据完全互不干扰。标记缺失时维持原安装路径不变。`data\` 所在盘只读/不可写时自动回退系统目录并在启动日志说明原因，不崩溃。直接覆盖 exe 升级、`data\` 不动即可保留全部状态。详见 `docs/windows-user-guide.md`「便携版（U盘运行）」与 `docs/wave16/portable-mode.md`。
+
 ## 0.1.0-rc.7
 
 同步正确性修复、Windows 桌面缺陷收口、触屏与多标签协作打磨，以及「直接下载 PDF」矢量化。
