@@ -1539,9 +1539,15 @@ jobs:
           Write-Host "  | diag: $diagText"
           Write-Host "  | stdout: $logText"
           Write-Host "::endgroup::"
-          if ($code -ne 0) { Write-Error "Smoke FAIL: updater-probe exited $code (expected 0 for a deliberate fallback decision); diag=$diagText" }
+          # Surface diagnostics as ::error annotations so they are visible without
+          # expanding the raw (sign-in-gated) step log.
+          if ($code -ne 0) {
+            Write-Host "::error file=updater-probe::updater-probe exited code=$code diag=$diagText stdout=$logText"
+            Write-Error "Smoke FAIL: updater-probe exited $code"
+          }
           if ($diagText -notmatch 'decision=fallback-releases') {
-            Write-Error "Smoke FAIL: updater-probe diag missing 'decision=fallback-releases' (diag: $diagText; stdout: $logText)"
+            Write-Host "::error file=updater-probe::updater-probe diag missing fallback-releases diag=$diagText stdout=$logText"
+            Write-Error "Smoke FAIL: updater-probe diag missing 'decision=fallback-releases'"
           }
           Write-Host "Smoke OK: updater-probe unreachable endpoint -> fallback-releases, exit 0, no hang"
 
