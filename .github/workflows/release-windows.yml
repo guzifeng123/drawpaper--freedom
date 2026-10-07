@@ -32,6 +32,7 @@ on:
       - 'feat/desktop-coldstart-race'
       - 'feat/desktop-folder-autosave'
       - 'feat/desktop-global-shortcuts'
+      - 'chore/ci-exe-hardening'
   workflow_dispatch:
 
 permissions:
