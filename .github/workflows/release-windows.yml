@@ -179,32 +179,39 @@ jobs:
           done
           ls -la /tmp/wv2
 
-      - name: 'Measure (b): embedBootstrapper variant build + size (x64, separate target dir)'
+      - name: 'Measure (b): embedBootstrapper variant build + size (x64)'
         if: matrix.arch == 'x64'
+        continue-on-error: true
         working-directory: apps/desktop-tauri
         shell: bash
         timeout-minutes: 25
         run: |
-          set -euo pipefail
-          # Build into a separate CARGO_TARGET_DIR so we never clobber the
-          # baseline setup.exe the install smoke below consumes. The conf
-          # override is passed inline to `tauri build --config`; tauri.conf.json
-          # on disk is NOT modified.
-          export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/apps/desktop-tauri/src-tauri/target-embed"
+          set -uo pipefail
+          # Measurement step (data collection, not a gate). Reuse the warm default
+          # target dir so this is an incremental relink+rebundle (fast) instead of a
+          # clean rebuild; the conf override is passed inline to `tauri build --config`,
+          # tauri.conf.json on disk is NOT modified. A failure here must NOT fail the
+          # release job — it only costs the (b) number, and the baseline installer the
+          # smoke consumes is the one from the earlier normal build.
           echo "::group::tauri build --config embedBootstrapper"
           ./node_modules/.bin/tauri build --ci --bundles nsis \
             --config '{"bundle":{"windows":{"nsis":{"webviewInstallMode":{"embedBootstrapper":true}}}}}' 2>&1 | tr '\r' '\n' | tee /tmp/tauri-embed.log
           code=${PIPESTATUS[0]}
-          if [ "$code" != "0" ]; then
-            echo "::error title=embed-build-failed::tauri build --config embedBootstrapper exited $code"
-            tail -n 30 /tmp/tauri-embed.log
-            exit "$code"
-          fi
           echo "::endgroup::"
-          installer=$(find "$CARGO_TARGET_DIR" -path '*bundle/nsis/*-setup.exe' -type f | head -n1)
+          if [ "$code" != "0" ]; then
+            echo "::warning title=embed-build-failed::tauri build --config embedBootstrapper exited $code (non-fatal measurement)"
+            tail -n 30 /tmp/tauri-embed.log
+            exit 0
+          fi
+          installer=$(find apps/desktop-tauri/src-tauri/target -path '*bundle/nsis/*-setup.exe' -type f | head -n1)
           sz=$(stat -c %s "$installer")
           mb=$(awk "BEGIN{printf \"%.2f\", $sz/1048576}")
           echo "::notice title=wv2-embedBootstrapper::embedBootstrapper setup.exe = $mb MB ($(basename "$installer"))"
+          # Restore the baseline (downloadBootstrapper) bundle for the install/canary
+          # smoke below: rebuild once more without the override (incremental, fast).
+          echo "::group::restore baseline bundle for smoke"
+          ./node_modules/.bin/tauri build --ci --bundles nsis 2>&1 | tr '\r' '\n' | tail -5
+          echo "::endgroup::"
 
       # ------------------------------------------------------------------
       # Smoke tests (Wave 12 C). See docs/wave12/windows-smoke.md for design.
