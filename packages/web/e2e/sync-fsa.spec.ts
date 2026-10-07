@@ -50,7 +50,7 @@ test.describe('Wave10 FSA 同步文件夹通道（fake directory handle）', () 
     // (b) 外部写入一个全新文档（模拟对端落盘）→ 轮询拉取进资料库。
     const remoteDoc = {
       format: 'knowledge-block-notes',
-      version: 3,
+      version: 4,
       id: 'remote-doc-1',
       title: '对端文档',
       board: { createdAt: 1000, updatedAt: 2000 },

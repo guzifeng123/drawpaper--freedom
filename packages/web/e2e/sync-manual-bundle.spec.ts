@@ -173,7 +173,7 @@ test.describe('Wave11 阶段 B 手动备份包 + 冲突副本', () => {
     await waitBoot(page);
     const v3 = JSON.stringify({
       format: 'knowledge-block-notes',
-      version: 3,
+      version: 4,
       id: 'single-import-doc',
       title: '单文件导入',
       board: { createdAt: 1000, updatedAt: 2000 },
@@ -190,7 +190,7 @@ test.describe('Wave11 阶段 B 手动备份包 + 冲突副本', () => {
       sync: { vv: {} },
     });
     const res = await page.evaluate((text) => window.__drawpaper__!.importKbnoteText(text), v3);
-    expect(res).toMatchObject({ ok: true, version: 3 });
+    expect(res).toMatchObject({ ok: true, version: 4 });
     await expect.poll(() => page.evaluate(() => window.__drawpaper__!.getState().doc.title)).toBe('单文件导入');
     await expect.poll(() => nodeText(page)).toContain('单文件导入的块');
   });

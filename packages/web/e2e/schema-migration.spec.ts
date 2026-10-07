@@ -61,17 +61,17 @@ test.beforeEach(async ({ page }) => {
   await page.waitForTimeout(800);
 });
 
-test('importing a v1 doc auto-migrates to v3 with notes', async ({ page }) => {
+test('importing a v1 doc auto-migrates to v4 with notes', async ({ page }) => {
   const res = await page.evaluate((text) => window.__drawpaper__!.importKbnoteText(text), v1Doc());
   expect(res.ok).toBe(true);
   if (res.ok) {
-    expect(res.version).toBe(3);
+    expect(res.version).toBe(4);
     expect(res.migrationNotes.length).toBeGreaterThan(0);
   }
   // 当前文档已切换为迁移后的 v1 doc
   const state = await page.evaluate(() => window.__drawpaper__!.getState());
   expect(state.doc.id).toBe('doc_v1_e2e');
-  expect(state.doc.version).toBe(3);
+  expect(state.doc.version).toBe(4);
   expect(state.doc.links).toEqual([]);
 });
 

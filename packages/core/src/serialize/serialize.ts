@@ -1,7 +1,7 @@
 import type { KBNoteDoc } from '../model/index.js';
 import { CURRENT_DOC_VERSION, DOC_FORMAT } from '../model/index.js';
 import { safeParseKBNoteDoc } from '../model/index.js';
-import { migrateV2ToV3 } from '../sync/migrate.js';
+import { migrateV2ToV3, migrateV3ToV4 } from '../sync/migrate.js';
 
 /**
  * serialize 模块：.kbnote 序列化 / 解析 / 版本迁移。
@@ -73,12 +73,14 @@ export type MigrationStep = (raw: unknown) => unknown;
 export const MIGRATION_REGISTRY: Record<number, MigrationStep> = {
   1: migrateV1ToV2,
   2: migrateV2ToV3,
+  3: migrateV3ToV4,
 };
 
 /** 每个迁移步的人类可读说明（migrationNotes 展示给用户）。 */
 export const MIGRATION_NOTES: Record<number, string> = {
   1: 'v1→v2：新增 links/points 字段',
   2: 'v2→v3：注入同步元数据（版本向量/字段时钟/墓碑集），开启跨设备合并',
+  3: 'v3→v4：资产引用规范化（去重/去空），启用内容寻址去重',
 };
 
 export interface ParseKBNoteResult {

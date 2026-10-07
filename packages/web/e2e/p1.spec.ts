@@ -82,7 +82,7 @@ test('AI：mock 返回 add-edge 建议 → 合入后边新增', async ({ page })
   );
   await page.evaluate(() => {
     window.__drawpaper__!.loadFixture({
-      format: 'knowledge-block-notes', version: 3, id: 'doc1', title: 't',
+      format: 'knowledge-block-notes', version: 4, id: 'doc1', title: 't',
       board: { createdAt: 0, updatedAt: 0 },
       nodes: [
         { id: 'n_1', type: 'text', x: 200, y: 200, width: 200, height: 60, content: { format: 'tiptap-json', data: { type: 'doc', content: [] } }, parentId: null, pinned: false, locked: false, collapsed: false, tags: [], style: {} },

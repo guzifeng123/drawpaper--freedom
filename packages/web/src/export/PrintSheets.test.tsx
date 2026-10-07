@@ -6,7 +6,7 @@ import { PrintSheets } from './PrintSheets';
 function makeDoc(): KBNoteDoc {
   return {
     format: 'knowledge-block-notes',
-    version: 3,
+    version: 4,
     id: 'd1',
     title: '测试文档',
     board: { createdAt: 0, updatedAt: 0 },

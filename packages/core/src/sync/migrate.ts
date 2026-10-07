@@ -122,3 +122,37 @@ export function migrateV2ToV3(raw: unknown): unknown {
     sync,
   };
 }
+
+/**
+ * v3 → v4 确定性迁移（Wave16 F 路）。
+ *
+ * 目标：把 assetRefs 规范化为「去重、去空、稳定顺序」的字符串数组，并把 schema
+ * 版本抬到 4。内容寻址（文件名 = SHA-256 hex）的字节级重命名（旧 nanoid ref →
+ * 内容 hash）发生在 web 侧——那里才有 OPFS 字节与 Web Crypto；core 只做纯 JSON
+ * 规整，无法也不应读取 Blob。本步因此是幂等的：
+ *  - 重复执行结果不变（assetRefs 本就去重时原样保留）；
+ *  - 不丢资产（ref 字符串原样保留，只是去空/去重）。
+ */
+export function migrateV3ToV4(raw: unknown): unknown {
+  if (!isRecord(raw)) return raw;
+  const obj = raw as Record<string, unknown>;
+  let assetRefs: unknown = obj['assetRefs'];
+  if (Array.isArray(assetRefs)) {
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const ref of assetRefs) {
+      if (typeof ref !== 'string' || ref.length === 0) continue;
+      if (seen.has(ref)) continue;
+      seen.add(ref);
+      out.push(ref);
+    }
+    assetRefs = out;
+  } else {
+    assetRefs = [];
+  }
+  return {
+    ...obj,
+    version: 4,
+    assetRefs,
+  };
+}

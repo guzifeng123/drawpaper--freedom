@@ -23,7 +23,7 @@ function node(partial: Partial<BlockNode> & { id: string }): BlockNode {
 function doc(nodes: BlockNode[], edges: Edge[], title = 't'): KBNoteDoc {
   return {
     format: 'knowledge-block-notes',
-    version: 3,
+    version: 4,
     id: 'doc1',
     title,
     board: { createdAt: 0, updatedAt: 0 },

@@ -14,7 +14,7 @@ describe('factory: createDoc', () => {
   it('produces a valid empty doc with doc_ prefix and defaults', () => {
     const doc = createDoc('测试');
     expect(doc.format).toBe('knowledge-block-notes');
-    expect(doc.version).toBe(3);
+    expect(doc.version).toBe(4);
     expect(doc.sync).toEqual({ vv: {} });
     expect(doc.id.startsWith(ID_PREFIX.doc)).toBe(true);
     expect(doc.title).toBe('测试');
