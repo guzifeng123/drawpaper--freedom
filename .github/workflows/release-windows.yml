@@ -29,6 +29,7 @@ on:
       - 'feat/win-msi-bundle'
       - 'chore/win-smoke-gap-audit'
       - 'feat/win-diagnostics-webview2'
+      - 'feat/desktop-global-shortcuts'
   workflow_dispatch:
 
 permissions:
