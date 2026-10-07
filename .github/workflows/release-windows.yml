@@ -24,6 +24,10 @@ on:
       - 'feat/desktop-native-gaps'
       - 'chore/nsis-smoke2-guide'
       - 'fix/desktop-open-zoom'
+      # Wave15 C: diagnostics export + WebView2 offline evaluation. This is the
+      # ONLY whitelist entry added on this branch; it exists solely to trigger
+      # the Windows build so the new Rust smoke runs on the runner.
+      - 'feat/win-diagnostics-webview2'
   workflow_dispatch:
 
 permissions:
