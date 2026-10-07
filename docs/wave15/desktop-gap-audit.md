@@ -50,6 +50,19 @@
    纯可观测性，不改行为；浏览器路径 no-op（Rust 壳不跑在浏览器）。
    三条入口（冷启动 argv / 热启动单实例 / recent 菜单）共用此 helper，均覆盖。
 
+2. **`withGlobalTauri` 未开启，桌面桥在真实 webview 里整体失效**。
+   现象：`packages/web/src/host/tauri-host.ts` 刻意不引 `@tauri-apps/api`，而是直接用
+   `window.__TAURI__.core.invoke` / `.event.listen`；`welcome-doc.ts` 的
+   `detectTauriHost()` 也只认 `'__TAURI__' in window`。但 `tauri.conf.json` 的 `app`
+   节从未设 `withGlobalTauri`，而 Tauri 2 默认 **false**——于是真实 Windows webview 里
+   `window.__TAURI__` 是 undefined，整座桥（菜单→前端、save_export、打开文件、
+   **首次运行欢迎文档**）全部退化为 no-op。e2e 因为 mock 了 `__TAURI__` 所以全绿，
+   真机从未被 CI 触发到。
+   发现：冒烟②（清空数据目录后冷启动，断言 EBWebView leveldb 出现
+   `doc_welcome_v1` / `drawpaper:welcome-doc-v1`）连续两次红，定位即此。
+   修补：`tauri.conf.json` `app` 节加 `"withGlobalTauri": true`（一行配置，版本号不动）。
+   这是配置漏项级小缺口；它同时解锁了此前所有依赖桥的桌面功能。
+
 ### 大项（仅列单，本分支不实现）
 
 1. **冷启动 `app:open-file` 事件竞态**（已知边界）。setup() 阶段 emit 可能早于
