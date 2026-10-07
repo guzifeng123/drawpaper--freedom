@@ -732,12 +732,20 @@ jobs:
               Remove-Item -Path $root -Recurse -Force -ErrorAction SilentlyContinue
             }
           }
+          # Also wipe any pre-existing EBWebView anywhere under Local/Roaming so the
+          # welcome flag is truly gone regardless of where WebView2 put it.
+          foreach ($root in @($env:LOCALAPPDATA, $env:APPDATA)) {
+            if (Test-Path $root) {
+              Get-ChildItem -Path $root -Recurse -Directory -Filter 'EBWebView' -ErrorAction SilentlyContinue |
+                ForEach-Object { Write-Host "Wiping EBWebView: $($_.FullName)"; Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
+            }
+          }
 
-          # Locate EBWebView folders: under each data root AND next to the exe
-          # (some Tauri versions place the WebView2 user-data folder there).
+          # Locate EBWebView anywhere under Local/Roaming AND next to the exe —
+          # Tauri 2 may place the WebView2 user-data folder outside com.drawpaper.app.
           function Find-EBWebView {
             $dirs = @()
-            foreach ($root in ($dataRoots + $installDir)) {
+            foreach ($root in @($env:LOCALAPPDATA, $env:APPDATA, $installDir)) {
               if (-not (Test-Path $root)) { continue }
               $hit = Get-ChildItem -Path $root -Recurse -Directory -Filter 'EBWebView' -ErrorAction SilentlyContinue
               if ($hit) { $dirs += ($hit | ForEach-Object { $_.FullName }) }
