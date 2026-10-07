@@ -76,12 +76,12 @@ test('importing a v2 doc auto-migrates to v3 with sync metadata', async ({ page 
   const res = await page.evaluate((text) => window.__drawpaper__!.importKbnoteText(text), v2Doc());
   expect(res.ok).toBe(true);
   if (res.ok) {
-    expect(res.version).toBe(3);
+    expect(res.version).toBe(4);
     expect(res.migrationNotes.length).toBeGreaterThan(0);
   }
   const state = await page.evaluate(() => window.__drawpaper__!.getState());
   expect(state.doc.id).toBe('doc_v2_e2e');
-  expect(state.doc.version).toBe(3);
+  expect(state.doc.version).toBe(4);
   // 确定性迁移戳：clientId 由 docId 派生，lamport 取自 board.updatedAt
   // @ts-expect-error 运行时存在
   expect(state.doc.sync.nodes.n_1.f.content).toEqual([1696000000000, 'seed:doc_v2_e2e']);
@@ -90,7 +90,7 @@ test('importing a v2 doc auto-migrates to v3 with sync metadata', async ({ page 
 test('two devices migrating the same v2 file converge without false conflicts', async ({ page }) => {
   const check = await page.evaluate((text) => window.__drawpaper__!.v3MigrationCheck(text), v2Doc());
   expect(check.ok).toBe(true);
-  expect(check.version).toBe(3);
+  expect(check.version).toBe(4);
   expect(check.migratedDeepEqual).toBe(true);
   expect(check.mergedConflictCount).toBe(0);
 });
@@ -106,5 +106,5 @@ test('importing a v9 doc is rejected and leaves the current doc intact', async (
 
   const after = await page.evaluate(() => window.__drawpaper__!.getState());
   expect(after.doc.id).toBe('doc_v2_e2e');
-  expect(after.doc.version).toBe(3);
+  expect(after.doc.version).toBe(4);
 });

@@ -89,5 +89,5 @@ test('importing a v9 doc is rejected and leaves the current doc intact', async (
   // 当前文档仍是迁移后的 v1 doc，未被污染
   const after = await page.evaluate(() => window.__drawpaper__!.getState());
   expect(after.doc.id).toBe('doc_v1_e2e');
-  expect(after.doc.version).toBe(3);
+  expect(after.doc.version).toBe(4);
 });
