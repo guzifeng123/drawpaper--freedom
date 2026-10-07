@@ -266,7 +266,7 @@ fn detect_webview2_runtime_version() -> String {
     // WebView2 Evergreen Runtime 的 CLSID。
     let clsid = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
     // 64 位系统上运行时写在 WOW6432Node（32 位视图）；HKCU 对应用户安装。
-    let candidates: &[(&str, winreg::Hive)] = &[
+    let candidates: &[(String, winreg::Hive)] = &[
         (
             format!(r"SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{clsid}"),
             HKEY_LOCAL_MACHINE,
