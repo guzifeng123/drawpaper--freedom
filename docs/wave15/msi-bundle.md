@@ -57,13 +57,13 @@ MSI `ProductVersion` 必须是 `major.minor.patch.build`（纯数字，major≤2
 
 | 能力 | 期望默认行为 | 本路是否补齐 | 实测结论 |
 |---|---|---|---|
-| 安装范围 | WiX MSI 固定 **per-machine**（`InstallScope=perMachine`），落 `C:\Program Files\drawpaper` | 不需要 | （CI 填写） |
-| `.kbnote` 文件关联 | Tauri 据 `bundle.fileAssociations` 生成 HKLM `Software\Classes\.kbnote` 注册项 | 不需要 | （CI 填写） |
-| 开始菜单快捷方式 | 模板内置 `ApplicationProgramsMenuFolder` 组件 | 不需要 | （CI 填写） |
-| 桌面快捷方式 | 模板是否内置存疑 | 缺则补 fragment | （CI 填写） |
-| WebView2 引导 | 默认 `webviewInstallMode={type:"downloadBootstrapper", silent:true}`，**两个格式一致**，安装包不内置引导（0MB 增量），装包时按需下载 | 不改（C 路评估离线引导） | （CI 填写） |
+| 安装范围 | WiX MSI 固定 **per-machine**（`InstallScope=perMachine`），落 `C:\Program Files\drawpaper` | 不需要 | ✅ 候选路径数组命中 `C:\Program Files\drawpaper`（Program Files(x86)/LOCALAPPDATA 未命中） |
+| `.kbnote` 文件关联 | Tauri 据 `bundle.fileAssociations` 生成注册项 | 不需要 | ✅ 冒烟 `Smoke (x64 MSI): .kbnote registry association registered` 绿（HKLM/HKCU 探测命中其一） |
+| 开始菜单快捷方式 | 模板内置 | 不需要 | ✅ 冒烟绿 |
+| 桌面快捷方式 | 模板是否内置存疑 | **实测内置，无需 fragment** | ✅ 冒烟 `desktop + start-menu shortcuts present` 绿（桌面 lnk 命中公共桌面） |
+| WebView2 引导 | 默认 `downloadBootstrapper`，两格式一致，不内置引导（0MB 增量） | 不改（C 路评估离线引导） | ✅ 未改 `webviewInstallMode`；runner 自带 WebView2，冒烟启动窗口成功 |
 
-> 凡是冒烟断言失败的项，用官方机制 `bundle.windows.wix.fragmentPaths` + `componentRefs` 补一个 `.wxs` fragment，而不是手改模板。
+**结论：Tauri 2.1 默认 WiX 模板三项（文件关联 / 桌面快捷方式 / 开始菜单快捷方式）全部齐备，本路没有写任何 `fragmentPaths` / 自定义 template。** 唯一需要补的是 §3.0 的 `wix.version`（纯数字 MSI 版本号）。
 
 ### 3.1 WebView2 行为差异（如发现）
 
@@ -87,12 +87,14 @@ arm64 MSI **只构建不执行**（runner 是 x64 硬件，aarch64 PE 起不来�
 
 从本分支 CI 构建日志 / artifact 取 4 个包实际 MB 数，与 rc.7 NSIS 基线对比：
 
-| 产物 | rc.7 基线 | 本分支实测 | Δ |
+| 产物 | rc.7 基线（Release 实测） | 本分支实测（artifact） | Δ |
 |---|---|---|---|
-| NSIS x64 | ~3.2 MB | （CI 填写） | |
-| NSIS arm64 | ~3.1 MB | （CI 填写） | |
-| MSI x64 | — | （CI 填写） | |
-| MSI arm64 | — | （CI 填写） | |
+| NSIS x64 | 4.58 MB | 4.56 MB | −0.02 MB（构建噪声，未动 NSIS） |
+| NSIS arm64 | 4.47 MB | 4.45 MB | −0.02 MB（同上） |
+| MSI x64 | — | 5.03 MB | 新增（比同架构 NSIS 大 ~0.47 MB，WiX 开销） |
+| MSI arm64 | — | 4.97 MB | 新增（比同架构 NSIS 大 ~0.52 MB） |
+
+> 注：任务书给的 rc.7 基线「~3.2 MB」与实际 Release 资产（4.58/4.47 MB）不符，以上以 Release 页与本分支 artifact 实测为准。NSIS 两包大小与 rc.7 基本一致，证明本路没动 NSIS 产物；MSI 比 NSIS 大约 0.5 MB 是 WiX MSI 的正常开销。四个包都不内置 WebView2 引导（`downloadBootstrapper`，0MB 增量）。
 
 ## 6. 红线自检
 
