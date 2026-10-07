@@ -1688,23 +1688,57 @@ jobs:
           Write-Host "zh-CN MSI = $($msi.FullName) ($([math]::Round($msi.Length/1MB,2)) MB)"
 
           # 3) Silent per-machine install; 0 or 3010 == success.
-          $log = Join-Path $env:RUNNER_TEMP 'drawpaper-msi-zhcn-install.log'
-          Write-Host "Running: msiexec /i <zh-CN msi> /qn /norestart /lv* <log>"
-          $p = Start-Process -FilePath 'msiexec.exe' `
-            -ArgumentList '/i', "`"$($msi.FullName)`"", '/qn', '/norestart', '/lv*', "`"$log`"" `
-            -PassThru
-          for ($w = 0; $w -lt 180; $w++) {
-            Start-Sleep -Seconds 1
-            $p.Refresh()
-            if ($p.HasExited) { break }
+          #    Settle first: the en-US round's msiexec /x above may still be
+          #    finalising asynchronously when this step starts; hitting a busy
+          #    Windows Installer (1618) here fails the install for a transient
+          #    reason. Drain any lingering msiexec, then retry once on the
+          #    documented transient busy code.
+          function Get-MsiCodeName([int]$c) {
+            switch ($c) {
+              0    { return 'ERROR_SUCCESS' }
+              1603 { return 'ERROR_INSTALL_FAILURE(1603)' }
+              1618 { return 'ERROR_INSTALL_ALREADY_RUNNING(1618)' }
+              1625 { return 'ERROR_INSTALL_REJECTED(1625)' }
+              1638 { return 'ERROR_PRODUCT_VERSION(1638)' }
+              3010 { return 'SUCCESS_REBOOT_REQUIRED(3010)' }
+              default { return "EXIT_$c" }
+            }
           }
-          if (-not $p.HasExited) { Write-Error 'Smoke FAIL (zh-CN): msiexec /i did not exit within 180s' }
-          Write-Host "msiexec /i exit code = $($p.ExitCode)"
-          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+          Write-Host "Settling: draining any lingering msiexec.exe (en-US round teardown)..."
+          for ($s = 0; $s -lt 30; $s++) {
+            $busy = Get-Process -Name 'msiexec' -ErrorAction SilentlyContinue
+            if (-not $busy) { break }
+            Start-Sleep -Seconds 1
+          }
+          Start-Sleep -Seconds 3
+
+          $log = Join-Path $env:RUNNER_TEMP 'drawpaper-msi-zhcn-install.log'
+          $installed = $false
+          foreach ($attempt in 1..2) {
+            Write-Host "[attempt $attempt] Running: msiexec /i <zh-CN msi> /qn /norestart /lv* <log>"
+            $p = Start-Process -FilePath 'msiexec.exe' `
+              -ArgumentList '/i', "`"$($msi.FullName)`"", '/qn', '/norestart', '/lv*', "`"$log`"" `
+              -PassThru
+            for ($w = 0; $w -lt 180; $w++) {
+              Start-Sleep -Seconds 1
+              $p.Refresh()
+              if ($p.HasExited) { break }
+            }
+            if (-not $p.HasExited) { Write-Error 'Smoke FAIL (zh-CN): msiexec /i did not exit within 180s' }
+            Write-Host "msiexec /i exit code = $($p.ExitCode) ($(Get-MsiCodeName $p.ExitCode))"
+            if ($p.ExitCode -eq 0 -or $p.ExitCode -eq 3010) { $installed = $true; break }
+            if ($p.ExitCode -eq 1618 -and $attempt -eq 1) {
+              Write-Host "Installer busy (1618); waiting 15s and retrying once..."
+              Start-Sleep -Seconds 15
+              continue
+            }
+            break
+          }
+          if (-not $installed) {
             Write-Host "::group::zh-CN MSI install log tail"
             Get-Content $log -Tail 50 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
             Write-Host "::endgroup::"
-            Write-Error "Smoke FAIL (zh-CN): msiexec /i exited $($p.ExitCode) (expected 0 or 3010)"
+            Write-Error "Smoke FAIL (zh-CN): msiexec /i failed (see code above; expected 0 or 3010)"
           }
 
           # 4) Assert per-machine install dir + drawpaper.exe present.
