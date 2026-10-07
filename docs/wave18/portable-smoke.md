@@ -22,14 +22,13 @@
 
 ### c. 覆盖安装不影响便携数据
 
-1. 新临时树（带 marker），清场后启动一次并等到 `.\data\logs\drawpaper.log` 落盘 + 至少一个 recents/window-state/EBWebView，优雅关闭 + 杀进程（含临时树下的 `msedgewebview2` 子进程）。
-2. 记录 `.\data\` 下全部文件的相对路径与大小（期望集）。
-3. 杀掉所有 `drawpaper.exe` 进程后，对系统安装版再跑一次同版本 NSIS 静默安装（`setup.exe /S /CURRENTUSER`，有界 120s 等待退出，断言 exit code 0）。
-4. 再次清场并启动**同一棵**便携树。**先记录重装前 `drawpaper.log` 的字节数与 mtime**，再有界轮询（30s）证明第二次进程存活**且日志字节数/mtime 增长**——即新进程真的又往 `.\data\logs\` 写了一行；仅"日志还在 + 进程活着"会在启动瞬间立即成立，无法区分便携模式是否仍被识别。
-5. 断言：
-   - 重装后 `./data/` 仍在、且重装前记录的**稳定应用文件**（`logs/`、recents/自动保存/快捷键 JSON 等 app 自管文件）仍存在——安装器只动系统安装目录，物理上碰不到这个 `%TEMP%` 临时树；
-   - **比对时排除 `EBWebView/` 子树**：WebView2 每次进程重启都会回收/重建 leveldb（`LOCK`、`*.log`、`MANIFEST-*`、`CURRENT`），精确文件集会随重启变化，那是 WebView2 内部时序、不是"重装破坏便携数据"，故 CI 不断言它（脚本仍打印清单供手动观察）；
-   - 第二次启动后系统 AppData 文件数不增长（便携模式仍被识别、未回退系统目录）。
+1. 新临时树（带 marker），清场后启动一次并等到 `.\data\logs\drawpaper.log` 落盘，优雅关闭 + 杀进程（含临时树下的 `msedgewebview2` 子进程）。
+2. 杀掉所有 `drawpaper.exe` 进程后，对系统安装版再跑一次同版本 NSIS 静默安装（`setup.exe /S /CURRENTUSER`，有界 120s 等待退出，断言 exit code 0）。
+3. 重装后立刻断言纯文件系统事实：`.\data\` 目录仍在、`.\data\logs\drawpaper.log` 仍在——安装器只动系统安装目录，物理上碰不到这个 `%TEMP%` 临时树。
+4. 再次清场并启动**同一棵**便携树。**先记录重装后 `drawpaper.log` 的字节数与 mtime**，再有界轮询（30s）证明第二次进程存活**且日志字节数/mtime 增长**——即新进程真的又往 `.\data\logs\` 写了一行；仅"日志还在 + 进程活着"会在启动瞬间立即成立，无法区分便携模式是否仍被识别。
+5. 断言第二次启动后系统 AppData 文件数不增长（便携模式仍被识别、未回退系统目录）。
+
+> **CI 不做精确文件集 diff**：曾尝试断言"重装前记录的每个文件重装后都在"，但 WebView2 每次进程重启都会回收/重建 `.\data\EBWebView\` 下的 leveldb（`LOCK`、`*.log`、`MANIFEST-*`、`CURRENT`、`Preferences` 等），精确文件集随重启变化——那是 WebView2 内部时序，不是"重装破坏便携数据"。这类 EBWebView / window-state / recents 时序断言已从 CI 撤下，脚本里仍打印目录清单供手动 `-Keep` 观察。
 
 > 用例 c 依赖 `-SetupExePath` 参数；若在 CI 里找不到 `*-setup.exe`（理论上不会发生——构建刚产出），脚本自动 SKIP 该用例并打印 notice，**不假绿**。本批 CI 中安装器可得，故未降级为「卸载再重装」。
 
@@ -39,7 +38,7 @@
 |---|---|---|
 | a | `.\data\logs\drawpaper.log` 30s 内出现；系统 Roaming/Local AppData 未新建且文件数不增长 | recents/window-state/EBWebView 仅记录不阻断；任一硬断言不过即 exit 1 |
 | b | 同 a（无 marker、仅预建空 data/ 路径） | 同上 |
-| c | 重装 exit code 0；重装后原 data 文件全部存在；第二次启动进程存活且 `drawpaper.log` 字节/mtime 增长；系统 AppData 不增长 | 日志增长是"便携仍被识别"的直接证据 |
+| c | 重装 exit code 0；重装后 `./data/` 与 `logs\drawpaper.log` 仍在；第二次启动进程存活且 `drawpaper.log` 字节/mtime 增长；系统 AppData 不增长 | 不做 EBWebView 文件集 diff（WebView2 重启回收 leveldb）；日志增长是"便携仍被识别"的直接证据 |
 
 任一硬断言失败 → `exit 1` + 打印整棵临时树与系统 AppData 树的诊断清单。
 

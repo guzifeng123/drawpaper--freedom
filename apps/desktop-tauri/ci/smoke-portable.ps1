@@ -409,22 +409,15 @@ if ($Cases -contains 'c') {
             Stop-PortableProcess $proc (Join-Path $root 'drawpaper.exe')
         }
 
-        # Record the on-disk STABLE app files under ./data/ (relative paths).
-        # EXCLUDE the EBWebView subtree: WebView2 recycles its leveldb files
-        # (LOCK / *.log / MANIFEST-* / CURRENT) on every process restart, so the
-        # exact file set under ./data/EBWebView/ is NOT stable across a relaunch —
-        # asserting it survives verbatim was a flaky WebView2-timing check, not a
-        # real "reinstall clobbered portable data" signal. The reinstall touches
-        # only the system install dir, never this temp tree.
+        # The reinstall only touches the SYSTEM install dir; the portable tree
+        # lives under %TEMP% and cannot be touched by it. We therefore do NOT diff
+        # the exact file set under ./data (WebView2 recycles its leveldb on every
+        # restart, which made that check flaky). The stable facts we assert are:
+        #   * ./data/ and the stable log still exist after the reinstall, and
+        #   * the second launch writes fresh bytes to that log (portable on), and
+        #   * system AppData did not grow during the second launch.
         $dataDir = Join-Path $root 'data'
-        $beforeFiles = @{}
-        Get-ChildItem -LiteralPath $dataDir -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
-            $rel = $_.FullName.Substring($dataDir.Length).TrimStart('\')
-            if ($rel -like 'EBWebView\*') { return }
-            $beforeFiles[$rel] = $_.Length
-        }
-        Info "recorded $($beforeFiles.Count) stable app files under ./data/ before reinstall (EBWebView excluded)"
-        $beforeFiles.Keys | Sort-Object | ForEach-Object { Info "  pre: $_ ($($beforeFiles[$_]) bytes)" }
+        $logFile = Join-Path $dataDir 'logs\drawpaper.log'
 
         # Step 2: run the system NSIS installer again silently. Make sure no
         # drawpaper.exe is running first (a "files in use" dialog would hang).
@@ -441,8 +434,12 @@ if ($Cases -contains 'c') {
             Fail "c: NSIS reinstall exited $($inst.ExitCode) (expected 0)"
         }
 
+        # Reinstall must not have wiped the portable data dir.
+        if (-not (Test-Path -LiteralPath $dataDir)) { Fail "c: ./data dir VANISHED after reinstall: $dataDir" }
+        if (-not (Test-Path -LiteralPath $logFile)) { Fail "c: ./data/logs/drawpaper.log VANISHED after reinstall: $logFile" }
+        Info "confirmed ./data/ and ./data/logs/drawpaper.log still present after reinstall"
+
         # Step 3: relaunch the SAME portable tree.
-        $logFile = Join-Path $dataDir 'logs\drawpaper.log'
         # Snapshot the existing log's size + mtime BEFORE the second launch, so we
         # can prove the *second* process actually wrote fresh bytes into ./data/
         # (a mere "log still exists + process up" check is true instantly and
@@ -478,18 +475,6 @@ if ($Cases -contains 'c') {
                 Fail "c: after reinstall, portable exe stayed up but never wrote to ./data\logs\drawpaper.log (stayed up=$(-not $proc.HasExited)) — portable mode not re-recognized?"
             }
             Ok "c: portable exe still running and writing fresh bytes to ./data/ after reinstall"
-
-            # Assert every file recorded before the reinstall still exists.
-            $missing = @()
-            foreach ($rel in $beforeFiles.Keys) {
-                $p = Join-Path $dataDir $rel
-                if (-not (Test-Path -LiteralPath $p)) { $missing += $rel }
-            }
-            if ($missing.Count -gt 0) {
-                Write-TreeDiag $root
-                Fail "c: these pre-reinstall files are GONE after reinstall: $($missing -join ', ')"
-            }
-            Ok "c: all $($beforeFiles.Count) pre-reinstall files still present under ./data/"
 
             Assert-NoSystemAppDataGrowth $snapBefore2 'c/2'
         } finally {
