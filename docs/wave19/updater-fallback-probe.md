@@ -90,6 +90,10 @@ drawpaper.exe --update-check-probe <endpoint>
 
 ## 依赖
 
-`reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }`
-是新增的**直接**依赖；reqwest 0.13 已在依赖树里（经 tauri-plugin-updater 间接
-引入），这里只打开 `blocking` + `rustls` 两个 feature，不引入新的传递依赖。
+探针的 HTTP 层用 `std::net::TcpStream`（标准库、零外部依赖），**不**用
+reqwest::blocking——后者在本壳 Windows GUI-subsystem、未启动 Tauri runtime 的
+无头上下文里会原生崩溃（CI 上实测 exit 0xC00004xx，`panic=abort`）。TcpStream
+带 4s 连接超时 + 8s 读超时，足够探测「可达/超时/连接拒绝」这条 CI 关心的回退
+分支；真实 HTTPS + 公钥验签仍由 updater 插件在菜单流程里负责，探针只走到决策点。
+Cargo.toml **未新增任何直接依赖**（reqwest 仅经 tauri-plugin-updater 间接存在，本
+路未在直接依赖里加它）。

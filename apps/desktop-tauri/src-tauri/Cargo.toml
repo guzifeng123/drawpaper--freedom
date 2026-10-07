@@ -49,13 +49,6 @@ tauri-plugin-global-shortcut = "2"
 # Wave13 behavior). The pubkey lives in tauri.conf plugins.updater.pubkey; the
 # matching private key is a GitHub secret (TAURI_SIGNING_KEY), never in-repo.
 tauri-plugin-updater = "2"
-# Wave19 C: headless `--update-check-probe` does ONE blocking GET with an 8s
-# timeout (no retry, no hang). reqwest 0.13 is already in the tree via
-# tauri-plugin-updater (which already pulls in rustls + ring); we only add the
-# `blocking` feature on the same crate and let Cargo unify the existing TLS
-# backend — no new crypto crate, no aws-lc-rs. The pure decision logic itself
-# lives in update_probe.rs and is tauri-free / network-free.
-reqwest = { version = "0.13", default-features = false, features = ["blocking"] }
 # Wave13: decode the base64 export bytes (PDF/PNG/SVG/MD) passed by the frontend
 # through the `save_export` command.
 base64 = "0.22"

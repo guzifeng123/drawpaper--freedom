@@ -212,37 +212,73 @@ pub fn probe_cli(endpoint: &str) -> i32 {
     0
 }
 
-/// 一次阻塞 GET，带 8s 总超时 + 4s 连接超时，把 reqwest 的 Result 归约成
-/// [`FetchOutcome`]。出错（超时/连接拒绝/DNS）一律映射成 Unreachable/Timeout，不 panic。
-/// 显式 `.no_proxy()`：CI 探测打 loopback，绝不走系统代理（避免代理环境下的不确定性）。
+/// 一次阻塞 GET，带 4s 连接超时 + 8s 总超时，把网络结果归约成 [`FetchOutcome`]。
+///
+/// 用 `std::net::TcpStream`（标准库、零外部依赖）而不是 reqwest::blocking：
+/// reqwest::blocking 在本壳的 Windows GUI-subsystem、未启动 Tauri runtime 的无头
+/// 上下文里会原生崩溃（CI 上 exit 0xC00004xx，panic=abort）。TcpStream 足够
+/// 探测「可达/超时/连接拒绝」这一 CI 关心的回退分支；真实 HTTPS+验签由 updater
+/// 插件在菜单流程里负责。出错（超时/连接拒绝/DNS/非 http 方案）一律映射成
+/// Unreachable/Timeout，不 panic。
 fn fetch_once(url: &str) -> FetchOutcome {
-    let client = match reqwest::blocking::Client::builder()
-        .connect_timeout(Duration::from_secs(4))
-        .timeout(Duration::from_secs(8))
-        .no_proxy()
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            log::warn!("probe: build client failed: {e}");
-            return FetchOutcome::Unreachable;
-        }
+    let Some((host, port, path)) = parse_http_url(url) else {
+        return FetchOutcome::Unreachable;
     };
-    match client.get(url).send() {
-        Ok(resp) => {
-            let status = resp.status().as_u16();
-            // 读 body 失败不致命：当作非 200 走 Other / 由上层归类。
-            let body = resp.text().unwrap_or_default();
-            FetchOutcome::HttpResponse { status, body }
-        }
-        Err(e) => {
-            if e.is_timeout() {
-                FetchOutcome::Timeout
-            } else {
-                FetchOutcome::Unreachable
-            }
-        }
+    let addr = match format!("{host}:{port}").parse::<std::net::SocketAddr>() {
+        Ok(a) => a,
+        Err(_) => return FetchOutcome::Unreachable,
+    };
+    let mut stream = match std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(4)) {
+        Ok(s) => s,
+        Err(e) if is_timeout_error(&e) => return FetchOutcome::Timeout,
+        Err(_) => return FetchOutcome::Unreachable,
+    };
+    stream.set_read_timeout(Some(Duration::from_secs(8))).ok();
+    stream.set_write_timeout(Some(Duration::from_secs(4))).ok();
+    let req = format!(
+        "GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\nUser-Agent: drawpaper-updater-probe\r\n\r\n"
+    );
+    use std::io::Write;
+    if stream.write_all(req.as_bytes()).is_err() {
+        return FetchOutcome::Unreachable;
     }
+    use std::io::Read;
+    let mut buf = Vec::new();
+    if stream.read_to_end(&mut buf).is_err() {
+        return FetchOutcome::Unreachable;
+    }
+    let text = String::from_utf8_lossy(&buf);
+    // 解析状态行：HTTP/1.1 200 OK / HTTP/1.0 404 Not Found
+    let status = text
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .and_then(|code| code.parse::<u16>().ok())
+        .unwrap_or(0);
+    // 取空行之后的 body（极简：HTTP/1.1 的 body 从第一个 CRLFCRLF 后开始）。
+    let body = text.split("\r\n\r\n").nth(1).unwrap_or("").to_string();
+    FetchOutcome::HttpResponse { status, body }
+}
+
+/// 极简单绝对 http(s) URL 解析：抽出 (host, port, path)。只支持 http://host[:port]/path。
+fn parse_http_url(url: &str) -> Option<(String, u16, String)> {
+    let rest = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://"))?;
+    let authority_path: Vec<&str> = rest.splitn(2, '/').collect();
+    let authority = authority_path[0];
+    let path = authority_path.get(1).map(|p| format!("/{p}")).unwrap_or_else(|| "/".to_string());
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((h, p)) => (h.to_string(), p.parse().ok()?),
+        None => (authority.to_string(), 80),
+    };
+    if host.is_empty() {
+        return None;
+    }
+    Some((host, port, path))
+}
+
+fn is_timeout_error(e: &std::io::Error) -> bool {
+    use std::io::ErrorKind;
+    matches!(e.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock)
 }
 
 #[cfg(test)]
@@ -406,5 +442,23 @@ mod tests {
             FallbackReason::Unreachable
         );
         assert_eq!(reason_from_error_text("some unknown thing"), FallbackReason::Other);
+    }
+
+    #[test]
+    fn parses_http_url_into_host_port_path() {
+        assert_eq!(
+            parse_http_url("http://127.0.0.1:1/"),
+            Some(("127.0.0.1".into(), 1, "/".into()))
+        );
+        assert_eq!(
+            parse_http_url("https://example.com/releases/latest/download/latest.json"),
+            Some(("example.com".into(), 443, "/releases/latest/download/latest.json".into()))
+        );
+        assert_eq!(
+            parse_http_url("http://localhost:8080/foo"),
+            Some(("localhost".into(), 8080, "/foo".into()))
+        );
+        // 非 http(s) 方案 → None → Unreachable
+        assert_eq!(parse_http_url("ftp://example.com/x"), None);
     }
 }
