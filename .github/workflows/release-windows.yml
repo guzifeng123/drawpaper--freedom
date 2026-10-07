@@ -24,6 +24,7 @@ on:
       - 'feat/desktop-native-gaps'
       - 'chore/nsis-smoke2-guide'
       - 'fix/desktop-open-zoom'
+      - 'chore/win-smoke-gap-audit'
   workflow_dispatch:
 
 permissions:
