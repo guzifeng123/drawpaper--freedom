@@ -562,6 +562,67 @@ jobs:
           }
           Write-Host "Smoke OK: process alive and main window title contains 'drawpaper'"
 
+      - name: 'Smoke (x64): global shortcuts register without crashing'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Resolve install dir the same way the install step does.
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'drawpaper'),
+            (Join-Path $env:ProgramFiles 'drawpaper')
+          )
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'drawpaper') }
+          $installDir = $null
+          foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
+          if (-not $installDir) { Write-Error 'Smoke FAIL: install dir not found for global-shortcut smoke' }
+          $exe = Join-Path $installDir 'drawpaper.exe'
+          if (-not (Test-Path $exe)) { $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName }
+          Write-Host "Launching $exe"
+          $proc = Start-Process -FilePath $exe -PassThru
+
+          # The Rust side logs an anchor on startup:
+          #   "global-shortcuts: registered N of M bindings"
+          # We assert the process stays alive AND the anchor shows up in
+          # drawpaper.log. We do NOT simulate the actual hotkey press from CI
+          # (that requires focus, which is a manual QA item).
+          $dataRoots = @($env:APPDATA, $env:LOCALAPPDATA) | ForEach-Object { Join-Path $_ 'com.drawpaper.app' }
+          $anchor = 'global-shortcuts: registered'
+          $found = $false
+          for ($i = 1; $i -le 25; $i++) {
+            Start-Sleep -Seconds 1
+            # Process must stay alive (a panic during shortcut registration would kill it).
+            $p = Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $p) { break }
+            foreach ($root in $dataRoots) {
+              $logCand = Join-Path $root 'logs\drawpaper.log'
+              if (-not (Test-Path $logCand)) {
+                $alt = Get-ChildItem -Path $root -Recurse -Filter 'drawpaper.log' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($alt) { $logCand = $alt.FullName }
+              }
+              if (Test-Path $logCand) {
+                # Copy first: the appender may hold the log open.
+                $copy = Join-Path $env:TEMP ('gssh-logcopy-' + [guid]::NewGuid().ToString('N') + '.log')
+                Copy-Item $logCand $copy -Force -ErrorAction SilentlyContinue
+                $content = Get-Content -Raw $copy -ErrorAction SilentlyContinue
+                if ($content -and $content.Contains($anchor)) { $found = $true; break }
+              }
+            }
+            if ($found) { break }
+            if (($i % 5) -eq 0) { Write-Host ("t={0,2}s anchorFound={1}" -f $i, $found) }
+          }
+
+          # Cleanup before the next step.
+          Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$installDir*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+
+          if (-not $p) { Write-Error 'Smoke FAIL: drawpaper process died during/after global-shortcut registration (check drawpaper.log for panic)' }
+          if (-not $found) { Write-Error "Smoke FAIL: drawpaper.log did not contain '$anchor' within 25s (registration may have failed silently; see log dump)" }
+          Write-Host "Smoke OK: process survived global-shortcut registration and log anchor seen"
+
       - name: 'Smoke (x64): second launch absorbed by running instance (single-instance)'
         if: matrix.arch == 'x64'
         shell: pwsh
