@@ -1907,8 +1907,8 @@ jobs:
             ForEach-Object { Write-Host ("  {0}  ({1} bytes)" -f $_.Name, $_.Length) }
           if (-not $enMsi) { Write-Error 'zh-CN probe: en-US MSI not found' }
           if (-not $zhMsi) { Write-Host "::error title=zhcn-msi-missing::expected *_x64_zh-CN.msi not found in bundle/msi" ; Write-Error 'zh-CN probe: zh-CN MSI not found' }
-          Write-Host "::error title=zhcn-props::en-US ProductCode=$(Get-MsiProperty $enMsi.FullName 'ProductCode') ProductLanguage=$(Get-MsiProperty $enMsi.FullName 'ProductLanguage') UpgradeCode=$(Get-MsiProperty $enMsi.FullName 'UpgradeCode')"
-          Write-Host "::error title=zhcn-props::zh-CN ProductCode=$(Get-MsiProperty $zhMsi.FullName 'ProductCode') ProductLanguage=$(Get-MsiProperty $zhMsi.FullName 'ProductLanguage') UpgradeCode=$(Get-MsiProperty $zhMsi.FullName 'UpgradeCode')"
+          Write-Host "::notice title=zhcn-props::en-US ProductCode=$(Get-MsiProperty $enMsi.FullName 'ProductCode') ProductLanguage=$(Get-MsiProperty $enMsi.FullName 'ProductLanguage') UpgradeCode=$(Get-MsiProperty $enMsi.FullName 'UpgradeCode')"
+          Write-Host "::notice title=zhcn-props::zh-CN ProductCode=$(Get-MsiProperty $zhMsi.FullName 'ProductCode') ProductLanguage=$(Get-MsiProperty $zhMsi.FullName 'ProductLanguage') UpgradeCode=$(Get-MsiProperty $zhMsi.FullName 'UpgradeCode')"
 
           # 1) Precondition: en-US round must have deregistered + removed dir.
           $pre = Join-Path $env:ProgramFiles 'drawpaper'
@@ -1928,7 +1928,8 @@ jobs:
             -PassThru
           for ($w = 0; $w -lt 180; $w++) { Start-Sleep -Seconds 1; $p.Refresh(); if ($p.HasExited) { break } }
           if (-not $p.HasExited) { Write-Host "::error title=zhcn-install::msiexec did not exit within 180s" ; Write-Error 'zh-CN probe: install msiexec timeout 180s' }
-          Write-Host "::error title=zhcn-install::exitcode=$($p.ExitCode)"
+          Write-Host "::notice title=zhcn-install::exitcode=$($p.ExitCode)"
+          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { Write-Host "::error title=zhcn-install::unexpected exitcode=$($p.ExitCode) (want 0 or 3010)" ; Write-Error "zh-CN install failed, exitcode=$($p.ExitCode)" }
           # Definitive install outcome line + scope/dir hints.
           Get-Content $log -ErrorAction SilentlyContinue |
             Where-Object { $_ -match 'Installation success or error status|InstallScope|InstallDir|ProductCode|Adding schedule|Deleting|Created Install|Note: 1:|returned actual|value 3|MainEngineThread' } |
@@ -1948,9 +1949,9 @@ jobs:
               if ($found) { $exe = $found.FullName; break }
             }
           }
-          Write-Host "::error title=zhcn-assert::drawpaper.exe found at = [$exe]"
+          Write-Host "::notice title=zhcn-assert::drawpaper.exe found at = [$exe]"
           if (-not $exe) { Write-Host "::error title=zhcn-assert::drawpaper.exe not found anywhere under Program Files/LOCALAPPDATA" ; Write-Error 'zh-CN probe: exe not found after install exit 0' }
-          Write-Host "::error title=zhcn-assert::installed ProductVersion=$((Get-Item $exe).VersionInfo.ProductVersion)"
+          Write-Host "::notice title=zhcn-assert::installed ProductVersion=$((Get-Item $exe).VersionInfo.ProductVersion)"
           $installDir = Split-Path $exe -Parent
 
           # 4) Uninstall zh-CN; emit exit code + log tail.
@@ -1963,11 +1964,12 @@ jobs:
             -ArgumentList '/x', "`"$($zhMsi.FullName)`"", '/qn', '/norestart', '/lv*', "`"$ulog`"" `
             -PassThru
           for ($w = 0; $w -lt 120; $w++) { Start-Sleep -Seconds 1; $u.Refresh(); if ($u.HasExited) { break } }
-          Write-Host "::error title=zhcn-uninstall::exitcode=$($u.ExitCode)"
+          Write-Host "::notice title=zhcn-uninstall::exitcode=$($u.ExitCode)"
+          if ($u.ExitCode -ne 0 -and $u.ExitCode -ne 3010) { Write-Host "::error title=zhcn-uninstall::unexpected exitcode=$($u.ExitCode) (want 0 or 3010)" ; Write-Error "zh-CN uninstall failed, exitcode=$($u.ExitCode)" }
           Get-Content $ulog -Tail 60 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "::notice title=zhcn-uninstall-log::$_" }
           $removed = $false
           for ($i = 1; $i -le 60; $i++) { Start-Sleep -Seconds 1; if (-not (Test-Path $installDir)) { $removed = $true; break } }
-          Write-Host "::error title=zhcn-uninstall::dir-removed=$removed"
+          Write-Host "::notice title=zhcn-uninstall::dir-removed=$removed"
           $regAfter = Find-DrawpaperUninstallEntries
           Write-Host "Uninstall entries for drawpaper AFTER zh-CN uninstall: $($regAfter.Count)"
           $regAfter | ForEach-Object { Write-Host "::notice title=zhcn-reg-after::$_" }
@@ -1994,7 +1996,7 @@ jobs:
             Where-Object { $_.FullName -match '[\\/]bundle[\\/]msi[\\/]' } | Sort-Object Name
           Write-Host ("MSI files under bundle/msi ({0}):" -f $msis.Count)
           foreach ($m in $msis) {
-            Write-Host "::error title=msi-file::$($m.Name) = $($m.Length) bytes"
+            Write-Host "::notice title=msi-file::$($m.Name) = $($m.Length) bytes"
           }
           if ($msis.Count -lt 1) { Write-Error 'No MSI files found under bundle/msi' }
 

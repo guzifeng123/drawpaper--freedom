@@ -4,7 +4,9 @@
 
 ## 未发布（Unreleased）
 
-（暂无）
+### Windows 安装包
+
+- **WiX MSI 新增 zh-CN 中文 UI culture 双语包**：`bundle.windows.wix.language = ["en-US", "zh-CN"]` 后，x64 / arm64 各产出 en-US 与 zh-CN 两个 MSI，Windows 安装包总数从 4 增至 6（NSIS×2 + MSI×4），`SHA256SUMS.txt` 同步为 6 条。企业批量部署可二选一部署英文（ProductLanguage 1033）或中文（2052）静默安装包；NSIS 安装向导的中/英语言选择不受影响。详见 `docs/wave18/msi-bilingual.md`。
 
 ## 0.1.0-rc.10（2026-10-08）
 
