@@ -666,26 +666,40 @@ jobs:
 
           $outZip = Join-Path $env:TEMP 'dp-diag.zip'
           Remove-Item $outZip -ErrorAction SilentlyContinue
-          Write-Host "Running: drawpaper.exe --diag-export $outZip"
-          $p = Start-Process -FilePath $exe -ArgumentList '--diag-export', $outZip -PassThru
-          for ($w = 0; $w -lt 60; $w++) {
-            Start-Sleep -Seconds 1
-            $p.Refresh()
-            if ($p.HasExited) { break }
-          }
-          if (-not $p.HasExited) {
-            Write-Error 'Smoke FAIL: drawpaper.exe --diag-export did not exit within 60s'
-          }
-          Write-Host "diag-export exit code = $($p.ExitCode)"
-          if ($p.ExitCode -ne 0) { Write-Error "Smoke FAIL: --diag-export exited $($p.ExitCode)" }
+          # Clear any residual drawpaper process from the prior single-instance smoke.
+          Get-Process drawpaper -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep -Seconds 1
+
+          # GUI-subsystem exe: Start-Process redirect can lose the handle, so wrap
+          # with cmd /c to capture the Rust eprintln diagnostics ([diag-export] ...).
+          $outLog = Join-Path $env:TEMP 'dp-diag.out'
+          Remove-Item $outLog -ErrorAction SilentlyContinue
+          Write-Host "Running: cmd /c `"$exe`" --diag-export `"$outZip`" > `"$outLog`" 2>&1"
+          cmd /c "`"$exe`" --diag-export `"$outZip`" > `"$outLog`" 2>&1"
+          $code = $LASTEXITCODE
+          Write-Host "::group::diag-export captured stdout/stderr"
+          if (Test-Path $outLog) { Get-Content $outLog | ForEach-Object { Write-Host "  | $_" } } else { Write-Host "  (no output file)" }
+          Write-Host "::endgroup::"
+          Write-Host "diag-export exit code = $code"
+          if ($code -ne 0) { Write-Error "Smoke FAIL: --diag-export exited $code" }
           if (-not (Test-Path $outZip)) { Write-Error 'Smoke FAIL: diag zip not produced' }
-          $zipMb = [math]::Round((Get-Item $outZip).Length / 1MB, 3)
-          Write-Host "diag zip = $outZip ($zipMb MB)"
+          $zipLen = (Get-Item $outZip).Length
+          Write-Host "diag zip = $outZip ($zipLen bytes)"
+          # Print first bytes to confirm it is a real ZIP (PK\x03\x04) before Expand.
+          $fs = [System.IO.File]::OpenRead($outZip)
+          $buf = New-Object byte[] 8; [void]$fs.Read($buf,0,8); $fs.Close()
+          $hex = ($buf | ForEach-Object { $_.ToString('x2') }) -join ' '
+          Write-Host "zip header bytes: $hex"
 
           # Extract and assert.
           $extract = Join-Path $env:TEMP 'dp-diag-extract'
           Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
-          Expand-Archive -Path $outZip -DestinationPath $extract -Force
+          try {
+            Expand-Archive -Path $outZip -DestinationPath $extract -Force -ErrorAction Stop
+          } catch {
+            Write-Host "Expand-Archive failed: $_"
+            Write-Error "Smoke FAIL: Expand-Archive could not unpack the zip crate output"
+          }
           Write-Host "::group::Extracted diag zip entries"
           Get-ChildItem $extract -Recurse -File | ForEach-Object {
             Write-Host ("  - {0}  ({1} bytes)" -f $_.FullName.Substring($extract.Length+1), $_.Length)
