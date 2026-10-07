@@ -29,7 +29,31 @@ publish job（仅 tag 触发）下载全部 4 个，`SHA256SUMS.txt` 一行一�
 
 ## 3. WiX 模板默认行为核实（以 CI 实测为准）
 
-Tauri 2.1 的 MSI 由 WiX Toolset v3 打包，模板是 Tauri 内置的 handlebars `Product.wxs`。本路**没有自定义 `wix.template` / `fragmentPaths`**，先全量默认跑一遍，用 CI 冒烟逐项验证：
+Tauri 2.1 的 MSI 由 WiX Toolset v3 打包，模板是 Tauri 内置的 handlebars `Product.wxs`。本路先用全默认跑，用 CI 冒烟逐项验证；实测缺什么再用官方 fragment 补。
+
+### 3.0 MSI 版本号（首个实测坑，已解决）
+
+首次实跑双架构都在 `tauri build` 阶段直接红：
+
+```
+Error failed to bundle project: optional pre-release identifier in app version
+must be numeric-only and cannot be greater than 65535 for msi target
+```
+
+MSI `ProductVersion` 必须是 `major.minor.patch.build`（纯数字，major≤255，build≤65535），**不接受 semver 的 `rc.` 这种非数字 prerelease 段**。app 版本是 `0.1.0-rc.7`，NSIS 不挑剔直接过，MSI 直接拒绝。
+
+按红线不改 app 版本字段，改用官方 MSI-only 覆盖 `bundle.windows.wix.version`（[Tauri 配置](https://schema.tauri.app/config/2)：`WixConfig.version`，缺省时才从 app version 推导）：
+
+```jsonc
+"windows": {
+  "nsis": { ... },   // 不动
+  "wix": { "version": "0.1.0.7" }   // 仅 MSI 包 ProductVersion
+}
+```
+
+即 `0.1.0-rc.N` → MSI `0.1.0.N`。**app 对外版本仍是 `0.1.0-rc.7`**（exe 版本资源、关于框、NSIS 包名都不变）；改 rc 号时需要同步把这里的 build 段 +1。
+
+### 3.1 默认行为逐项核实
 
 | 能力 | 期望默认行为 | 本路是否补齐 | 实测结论 |
 |---|---|---|---|
