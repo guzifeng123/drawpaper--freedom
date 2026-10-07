@@ -159,11 +159,22 @@ function Stop-PortableProcess([System.Diagnostics.Process]$proc, [string]$portab
 }
 
 # Kill EVERY drawpaper.exe on the box (used before a reinstall and at exit).
+# Also kills any orphaned msedgewebview2.exe children left behind when a prior
+# step force-killed the installed drawpaper: those children keep flushing
+# leveldb into the SYSTEM app-data dir, which would perturb our file-count
+# isolation snapshot (false "system AppData grew" flake). At this point in CI we
+# own the runner; no other WebView2 app is alive.
 function Stop-AllDrawpaper {
     Get-Process -ErrorAction SilentlyContinue |
         Where-Object { $_.ProcessName -eq 'drawpaper' } |
         ForEach-Object {
             Info "killing leftover drawpaper PID $($_.Id)"
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        }
+    Get-Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.ProcessName -eq 'msedgewebview2' } |
+        ForEach-Object {
+            Info "killing orphaned msedgewebview2 PID $($_.Id)"
             Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
         }
 }
@@ -301,6 +312,10 @@ Write-Host "Cases requested: $($Cases -join ', ')"
 Write-Host "WaitSeconds: $WaitSeconds"
 
 # Global baseline snapshot of system AppData (for a final growth sweep).
+# Kill any prior-step drawpaper / orphaned webview2 first so their death-flush
+# does not land between this snapshot and the per-case snapshots.
+Stop-AllDrawpaper
+Start-Sleep -Seconds 1
 $GlobalBefore = Get-SystemAppDataSnapshot
 
 $ranCases = @()
@@ -313,14 +328,16 @@ if ($Cases -contains 'a') {
     New-Item -ItemType File -Force -Path $marker | Out-Null
     Info "wrote marker: $marker"
 
+    # Hermetic baseline: kill any prior drawpaper + orphaned system webview2
+    # BEFORE taking the "before" snapshot, so their death-flush cannot appear as
+    # "new files" in the "after" snapshot. The single-instance plugin keys off the
+    # app identifier GLOBALLY, so a lingering system drawpaper would absorb our
+    # portable launch and the exe would exit instantly with no ./data log.
+    Stop-AllDrawpaper
+    Start-Sleep -Seconds 1
     $snapBefore = Get-SystemAppDataSnapshot
     $proc = $null
     try {
-        # The single-instance plugin keys off the app identifier GLOBALLY (not
-        # off the redirected data dir). A lingering system-installed drawpaper
-        # from a prior CI step would absorb our portable launch into its existing
-        # process and this exe would exit instantly with no ./data log. Kill all
-        # drawpaper before every launch so each case is hermetic.
         Stop-AllDrawpaper
         Info "launching portable exe..."
         $proc = Start-Process -FilePath (Join-Path $root 'drawpaper.exe') -PassThru
@@ -341,10 +358,12 @@ if ($Cases -contains 'b') {
     New-Item -ItemType Directory -Force -Path (Join-Path $root 'data') | Out-Null
     Info "pre-created empty data/ dir (no marker file)"
 
+    Stop-AllDrawpaper   # hermetic baseline before snapshot (see case a note)
+    Start-Sleep -Seconds 1
     $snapBefore = Get-SystemAppDataSnapshot
     $proc = $null
     try {
-        Stop-AllDrawpaper   # hermetic launch (see case a note)
+        Stop-AllDrawpaper
         Info "launching portable exe..."
         $proc = Start-Process -FilePath (Join-Path $root 'drawpaper.exe') -PassThru
         Assert-PortableDataFlowing $root 'b'
@@ -369,6 +388,8 @@ if ($Cases -contains 'c') {
         $root = New-PortableTree
         $marker = Join-Path $root 'drawpaper.portable'
         New-Item -ItemType File -Force -Path $marker | Out-Null
+        Stop-AllDrawpaper
+        Start-Sleep -Seconds 1
         $snapBefore1 = Get-SystemAppDataSnapshot
         $proc = $null
         try {
@@ -416,6 +437,8 @@ if ($Cases -contains 'c') {
         $logMtimeBefore = if ($logBefore) { $logBefore.LastWriteTimeUtc } else { [datetime]::MinValue }
         Info "log before 2nd launch: $logLenBefore bytes, mtime $logMtimeBefore"
 
+        Stop-AllDrawpaper
+        Start-Sleep -Seconds 1
         $snapBefore2 = Get-SystemAppDataSnapshot
         $proc = $null
         try {

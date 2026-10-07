@@ -1337,12 +1337,15 @@ jobs:
           # Self-contained script (a marker+isolation / b data-dir trigger / c
           # reinstall). It kills all drawpaper before each launch, bounded-polls,
           # and does a final global process sweep so the uninstall step below is
-          # never blocked by a leftover portable process.
-          $psArgs = @('-ExecutionPolicy','Bypass','-File','apps/desktop-tauri/ci/smoke-portable.ps1','-ExePath',$exe,'-WaitSeconds','15')
-          if ($setup) { $psArgs += @('-SetupExePath', $setup.FullName) }
-          Write-Host "Running: powershell $($psArgs -join ' ')"
-          & powershell @psArgs
-          if ($LASTEXITCODE -ne 0) { Write-Error "Smoke FAIL: smoke-portable.ps1 exited $LASTEXITCODE" }
+          # never blocked by a leftover portable process. Run it in this pwsh
+          # process; its own `exit 0/1` sets the step result directly.
+          $script = 'apps/desktop-tauri/ci/smoke-portable.ps1'
+          Write-Host "Running: $script -ExePath $exe -WaitSeconds 15$(if ($setup) { ' -SetupExePath <setup.exe>' })"
+          if ($setup) {
+            & $script -ExePath $exe -WaitSeconds 15 -SetupExePath $setup.FullName
+          } else {
+            & $script -ExePath $exe -WaitSeconds 15
+          }
           Write-Host "Smoke OK: portable-mode cases passed"
 
       - name: 'Smoke (x64): silent uninstall, install dir removed'
