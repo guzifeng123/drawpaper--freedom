@@ -2,6 +2,14 @@
 
 本文件按「用户可见能力」分组归纳各版本，不逐条罗列提交。每个版本标题为语义化版本号，预发布版后缀 `-rc.N` / `-beta.N` / `-alpha.N`。
 
+## 未发布（Unreleased）
+
+纯 CI/工程加固，无用户可见行为变化（release-windows，x64）：
+
+- **native-autosave 自检接入 CI 冒烟**：安装后调用隐藏无头 CLI `drawpaper.exe --native-autosave-selftest <临时目录>`，断言镜像文件逐字节正确（测试文档 JSON v4、`assets/abc123def` 假资产字节）、路径穿越与绝对路径写入被拒绝、无任何 `evil*.kbnote` 落盘，并同目录重跑验证幂等。
+- **NSIS 静默卸载冒烟加严**：两轮静默卸载后轮询仍未消失时，先兜底清理残留 drawpaper / 卸载器进程并复查 10s，仍残留才判红——消化高负载 runner 上的偶发假红，真失败依旧红。
+- 更新器无网回退（防火墙阻断出站后经菜单触发检查更新，断言日志锚点与 Releases 页回退）与诊断菜单导出（原生保存对话框路径）两条 UI 回归以 best-effort 步骤接入（失败仅琥珀不阻断）；GitHub hosted ARM64 runner 现状评估见 `docs/wave18/arm64-runner-assessment.md`，本波不新增 arm64 实跑 job。
+
 ## 0.1.0-rc.9
 
 Windows 桌面原生打磨波：冷启动外部文件打开竞态收口、原生文件夹自动保存镜像、全局快捷键，以及桌面文档与现状全面对齐。
