@@ -839,6 +839,13 @@ fn open_external_path(app: &tauri::AppHandle, p: &Path) {
             let state = app.state::<AppState>();
             *state.current_path.lock().unwrap() = Some(p.to_path_buf());
             push_recent(&state, app, p);
+            // Wave15 D: observability. The error branch already logs; log a
+            // success line too so release-windows smoke can assert (via
+            // drawpaper.log) that Rust received and processed the argv[1] /
+            // recent / single-instance file-open — independent of whether the
+            // webview listener was mounted in time (cold-start race, see
+            // docs/wave15/desktop-gap-audit.md).
+            log::info!("open-file (external): {path_s} (name={name})");
             let _ = app.emit(
                 "app:open-file",
                 serde_json::json!({
