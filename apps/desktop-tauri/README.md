@@ -112,16 +112,17 @@ cd apps/desktop-tauri
 > 注意 `--bundles` 接的是**逗号分隔、不带空格**的 `nsis,msi`（CI 用的就是这种写法）。
 > 本目录的 npm script `build` / `build:nsis` / `build:msi` 已经把参数封好，日常直接用脚本即可。
 
-## 安装包矩阵（4 个产物）
+## 安装包矩阵（6 个产物）
 
-一次 `release-windows` 构建（x64 + arm64 矩阵）产出四个安装包，publish job 把它们挂到同一个
+一次 `release-windows` 构建（x64 + arm64 矩阵）产出六个安装包（NSIS×2 + MSI×4：MSI 按
+en-US / zh-CN 两种 UI culture 各出一份），publish job 把它们挂到同一个
 GitHub Release，并生成 `SHA256SUMS.txt` 与（配好签名私钥后）`latest.json`。详见
-`../../docs/wave15/msi-bundle.md`。
+`../../docs/wave15/msi-bundle.md` 与 `../../docs/wave18/msi-bilingual.md`。
 
 | 架构 | NSIS（推荐，个人用户） | WiX MSI（企业批量部署） |
 |---|---|---|
-| x64 | `drawpaper_<ver>_x64-setup.exe` | `drawpaper_<ver>_x64_en-US.msi` |
-| arm64 | `drawpaper_<ver>_arm64-setup.exe` | `drawpaper_<ver>_arm64_en-US.msi` |
+| x64 | `drawpaper_<ver>_x64-setup.exe` | `drawpaper_<ver>_x64_en-US.msi` + `drawpaper_<ver>_x64_zh-CN.msi` |
+| arm64 | `drawpaper_<ver>_arm64-setup.exe` | `drawpaper_<ver>_arm64_en-US.msi` + `drawpaper_<ver>_arm64_zh-CN.msi` |
 
 **NSIS**（`bundle.windows.nsis`）：
 
@@ -135,18 +136,25 @@ GitHub Release，并生成 `SHA256SUMS.txt` 与（配好签名私钥后）`lates
 **WiX MSI**（`bundle.windows.wix`）：
 
 - 固定**按机器安装**到 `C:\Program Files\drawpaper`（`InstallScope=perMachine`，需要管理员）。
-- 安装界面只有英文（`en-US` culture，产物名带 `_en-US`）。
-- `wix.version: "0.1.0.8"` 是**数字版本号覆盖**：MSI `ProductVersion` 必须是
-  `major.minor.patch.build` 纯数字，不接受 semver 的 `rc.` 段（`0.1.0-rc.8` → MSI `0.1.0.8`）；
-  app 对外版本仍是 `0.1.0-rc.8`，改 rc 号时要同步把这里 build 段 +1。原因见
+- 安装界面 culture 双语：`wix.language: ["en-US", "zh-CN"]` 时每个架构各出两个 MSI，
+  文件名后缀分别带 `_en-US` / `_zh-CN`（WixUIExtension 内置 zh-CN 本地化，无需自定义
+  fragment；两种 culture 同 ProductCode，同机二选一部署，不能并存）。详见
+  `../../docs/wave18/msi-bilingual.md`。
+- `wix.version: "0.1.0.10"` 是**数字版本号覆盖**：MSI `ProductVersion` 必须是
+  `major.minor.patch.build` 纯数字，不接受 semver 的 `rc.` 段（`0.1.0-rc.10` → MSI `0.1.0.10`）；
+  app 对外版本仍是 `0.1.0-rc.10`，改 rc 号时要同步把这里 build 段 +1。原因见
   `../../docs/wave15/msi-bundle.md` §3.0。
-- 企业静默部署 / 卸载：
+- 企业静默部署 / 卸载（按 UI culture 二选一）：
   ```powershell
+  # en-US（英文向导）
   msiexec /i drawpaper_<ver>_x64_en-US.msi /qn /norestart /lv* install.log   # 部署（0 或 3010 都算成功）
-  msiexec /x drawpaper_<ver>_x64_en-US.msi /qn /norestart                      # 卸载
+  msiexec /x drawpaper_<ver>_x64_en-US.msi /qn /norestart                  # 卸载
+  # zh-CN（中文向导）：同 ProductCode，同机与 en-US 包二选一
+  msiexec /i drawpaper_<ver>_x64_zh-CN.msi /qn /norestart /lv* install.log
+  msiexec /x drawpaper_<ver>_x64_zh-CN.msi /qn /norestart
   ```
 
-**`SHA256SUMS.txt`**：publish job 对四个包各算一行 `<sha256>  <basename>`，用户把四个安装包
+**`SHA256SUMS.txt`**：publish job 对六个包（NSIS×2 + MSI×4）各算一行 `<sha256>  <basename>`，用户把六个安装包
 和它放同一目录，`sha256sum -c SHA256SUMS.txt` 即可校验（Windows 下也可以用
 `Get-FileHash` 逐个人比对）。
 
