@@ -83,16 +83,16 @@ git push origin v0.1.0-rc.7
 
 改完后本地跑一遍 `pnpm -r build` 确认 PWA 仍能构建，再走 §2 打 tag。
 
-## 6. 自动更新为何默认关闭
+## 6. 更新器现状（Wave15 A 已接入，待配 secret 后生效）
 
-本期**未启用 Tauri 自动更新**，原因：
+Wave15 A 起，Windows 桌面壳**已接入官方 `tauri-plugin-updater` v2**：「帮助 → 检查更新…」改为纯用户手动触发的原生更新流程，零后台检查（启动不查、无定时器、不自动下载）。有新版则原生对话框确认后下载验签安装并重启；无更新 / 离线 / 端点未就绪 / 任意报错一律回退为打开 Releases 网页。
 
-1. 仓库没有 `TAURI_SIGNING_PRIVATE_KEY`（签名私钥）；
-2. 没有静态托管 `latest.json` 的更新服务器。
+**当前还差最后一步才真正生效**：
 
-`tauri-plugin-updater` 在没有有效公钥时会让 `tauri build` 直接失败，因此 `Cargo.toml` 里故意不引入该插件。本版用户升级方式为：手动下载新的 NSIS 安装包覆盖安装。
+1. 仓库 Settings → Secrets 里还没配 `TAURI_SIGNING_KEY`（updater 签名私钥，由 Wave15 A 生成，公钥已在 `tauri.conf.json`）；
+2. 因此 tag 构建暂时**不出 `.sig`、不生成 `latest.json`**，应用内检查会 404 回退网页。
 
-接入自动更新的完整 checklist（生成密钥对、公钥填入 `tauri.conf.json`、私钥存 GitHub Secrets、release 产出 `.sig`、前端 `Updater.check()` 指向 Releases 静态地址）见 **[`docs/p2-tauri-ci.md` §3](./p2-tauri-ci.md#3-自动更新updater--故意不启用)**。
+在维护者把私钥加为 GitHub secret 之前，用户升级方式仍是手动下载新的 NSIS 安装包覆盖安装。完整流程与密钥引导见 **[`docs/wave15/updater.md`](./wave15/updater.md)**。
 
 ## 7. 回滚方式
 
@@ -140,23 +140,21 @@ git push origin v0.1.0-rc.7
 
 > 在拿到证书之前，不要在 CI 里留任何占位 secret 引用；未签名就保持现状并在 Release 正文说明「未签名，首次运行需点仍要运行」。
 
-## 10. 自动更新启用清单（Tauri Updater）—— 未来接入用
+## 10. 更新器清单（Tauri Updater）—— Wave15 A 已落地，待配 secret
 
-> §6 解释了为什么本期故意不启用。本节是**完整的接入 checklist**，纯文档，执行时再按此操作。
+> 本节原为「未来接入 checklist」。Wave15 A 已把代码与 CI 链路落地，**只剩「把私钥加为 GitHub secret」这一运维动作**。状态对照如下（详情见 [`docs/wave15/updater.md`](./wave15/updater.md)）。
 
-1. **生成 updater 签名密钥对（一次性）**
-   ```bash
-   pnpm tauri signer generate -w ~/.tauri/drawpaper.key
-   ```
-   产物：`drawpaper.key`（私钥）+ 终端打印的公钥字符串。**私钥离线保存好，丢失则所有已发版用户永远收不到更新。**
-2. **公钥填入 `tauri.conf.json`**：在 `plugins.updater.pubkey` 填第 1 步打印的公钥字符串；同时在 `plugins.updater.endpoints` 填更新检查地址（指向 GitHub Releases 上的 `latest.json` 静态 URL，例如 `https://github.com/<org>/drawpaper--freedom/releases/latest/download/latest.json`）。
-3. **引入 updater 插件**：`apps/desktop-tauri/src-tauri/Cargo.toml` 加入 `tauri-plugin-updater`，并在 `lib.rs` 注册插件（当前刻意未加，见 §6）。
-4. **私钥存 GitHub Secrets**：
-   - `TAURI_SIGNING_PRIVATE_KEY`：`drawpaper.key` 文件内容（多行，原样）。
-   - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`：生成时设置的口令（无口令则留空）。
-5. **CI 产出入 `.sig`**：用 `tauri-apps/tauri-action`（而非直接调 `tauri` CLI）打包，它会自动用上述 secret 给每个 NSIS 产物生成同名 `.sig` 文件；publish job 把 `.sig` 一并上传到 Release。
-6. **产出 `latest.json`**：publish job 在创建 Release 后，按 Tauri updater 格式生成 `latest.json`（含 `version`、`notes`、`pub_date`、`platforms.windows-x86_64.url` / `platforms.windows-aarch64.url` 与对应签名），作为 Release asset 上传；它是用户端 `Updater.check()` 拉取的清单。
-7. **前端调用**：在设置页加「检查更新」按钮，调用 `tauri-plugin-updater` 的 `check()` → 发现新版本 → `downloadAndInstall()` → 重启。
-8. **验证**：先发一个 RC tag，确认 Release 上有两个 `.exe` + 两个 `.sig` + `latest.json` + `SHA256SUMS.txt`，旧版应用能在 20s 内检测到新版本。
+| # | 步骤 | 状态 |
+|---|---|---|
+| 1 | 生成 updater 签名密钥对 | ✅ 已做。公钥已写入 `tauri.conf.json`；私钥在仓库外 `~/drawpaper-tauri-updater.key`（`600`）。 |
+| 2 | 公钥 + endpoints 填入 `tauri.conf.json` `plugins.updater` | ✅ 已做。endpoints = `https://github.com/guzifeng123/drawpaper--freedom/releases/latest/download/latest.json`。**`bundle` 段未动。** |
+| 3 | 引入 `tauri-plugin-updater` 并在 `lib.rs` 注册 | ✅ 已做。`help:check-update` 改为手动原生流程（纯用户触发，零后台）。 |
+| 4 | 私钥存 GitHub Secrets | ⏳ **待维护者手动操作**：新建 secret `TAURI_SIGNING_KEY`，值为私钥文件全部内容。本路密钥无口令，**无需** `TAURI_SIGNING_KEY_PASSWORD`。 |
+| 5 | CI 产出 `.sig` | ✅ 已接入。build job 检测到 `TAURI_SIGNING_KEY` 时自动给每个 NSIS 产物出 `.sig`；缺失则跳过签名、安装包照常。 |
+| 6 | publish job 生成 `latest.json` 并上传 | ✅ 已接入（仅 tag push 跑）。把 `.exe` + `.sig` + `latest.json` + `SHA256SUMS.txt` 挂到 Release。`.sig` 缺失时跳过 latest.json，不阻断发布。 |
+| 7 | 检查更新入口 | ✅ 已做（菜单「帮助 → 检查更新…」，Rust 侧原生对话框，非前端按钮）。 |
+| 8 | 验证 | ⏳ 待第一个带签名 tag 验证：Release 上应有两个 `.exe` + 两个 `.sig` + `latest.json` + `SHA256SUMS.txt`，旧版应用点「检查更新…」能原生发现新版。 |
 
-> 再次强调：`TAURI_SIGNING_PRIVATE_KEY*`（updater 签名）与 §9 的 `CERTIFICATE_BASE64`（Authenticode 代码签名）是两套密钥，前者用于「更新包是否被篡改」，后者用于「安装包是否被 Windows 信任」。
+> 当前（未配 secret）实际行为：应用点「检查更新…」会因 Release 上还没有 `latest.json` 而检查失败，**自动回退为打开 Releases 网页**——与 rc.7 体验一致，需手动下载新安装包覆盖安装。
+
+> 再次强调：updater 签名（`TAURI_SIGNING_KEY`，验证「更新包是否被篡改」）与 §9 的 Authenticode 代码签名（`CERTIFICATE_BASE64`，让 Windows 信任安装包）是两套密钥，不要混用。
