@@ -29,15 +29,9 @@ on:
       - 'feat/win-msi-bundle'
       - 'chore/win-smoke-gap-audit'
       - 'feat/win-diagnostics-webview2'
-<<<<<<< HEAD
-<<<<<<< HEAD
       - 'feat/desktop-coldstart-race'
-=======
       - 'feat/desktop-folder-autosave'
->>>>>>> origin/feat/desktop-folder-autosave
-=======
       - 'feat/desktop-global-shortcuts'
->>>>>>> origin/feat/desktop-global-shortcuts
   workflow_dispatch:
 
 permissions:
