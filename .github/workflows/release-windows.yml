@@ -24,6 +24,7 @@ on:
       - 'feat/desktop-native-gaps'
       - 'chore/nsis-smoke2-guide'
       - 'fix/desktop-open-zoom'
+      - 'feat/win-msi-bundle'
   workflow_dispatch:
 
 permissions:
