@@ -37,6 +37,7 @@ import {
 } from '@/export';
 import { registerExportActions } from '@/export/export-actions-bridge';
 import { initDesktopBridge } from '@/host/desktop-bridge';
+import { initNativeAutosave } from '@/host/native-autosave-adapter';
 import { CloseGuardDialog } from '@/panels/CloseGuardDialog';
 
 /**
@@ -160,6 +161,12 @@ export default function App() {
   // Wave12：桌面桥接——原生菜单路由 / 动态窗口标题 / 关闭守卫。浏览器环境 no-op。
   useEffect(() => {
     return initDesktopBridge();
+  }, []);
+
+  // Wave17：原生文件夹自动保存——Tauri 且已配置目录时把 .kbnote+assets 镜像落盘；
+  // 浏览器/未配置整体 no-op，现有 OPFS 自动保存零变化。
+  useEffect(() => {
+    return initNativeAutosave();
   }, []);
 
   // 定时备份调度：backupEnabled 开启且 dirty 时每 10 分钟下载一份 .kbnote 备份。

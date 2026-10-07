@@ -24,6 +24,12 @@ import { pickRealDirectory, isFsaDirectorySupported } from './directory-handle';
 import type { WebDavConfig } from './webdav';
 import { exportAllToKbpackBlob, downloadBlob, importKbpackBundle } from './kbpack-transfer';
 import { ConflictCopiesDialog } from './ConflictCopiesDialog';
+import {
+  isNativeAutosaveRuntime,
+  getNativeAutosaveDir,
+  pickNativeAutosaveFolder,
+  clearNativeAutosaveFolder,
+} from '@/host/native-autosave-adapter';
 
 /**
  * 设置 → 同步面板（Wave10 阶段 B 两通道；Wave11 阶段 A WebDAV 端到端加密；
@@ -68,12 +74,17 @@ export function SyncSettingsDialog({
   const [conflictOpen, setConflictOpen] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
+  // Wave17：桌面自动保存文件夹（仅 Tauri 内显示；浏览器整组渲染 null）。
+  const nativeAutosaveOn = isNativeAutosaveRuntime();
+  const [nativeDir, setNativeDir] = React.useState<string | null>(null);
+
   const fsaSupported = isFsaDirectorySupported();
 
   // 打开面板时：若首次 → 出引导弹层；顺带刷新冲突副本计数。
   React.useEffect(() => {
     if (!open) return;
     void ui.refreshConflictCopies();
+    if (nativeAutosaveOn) void getNativeAutosaveDir().then(setNativeDir);
     let seen = false;
     try {
       seen = localStorage.getItem(ONBOARD_KEY) === '1';
@@ -210,6 +221,48 @@ export function SyncSettingsDialog({
                 <div data-testid="sync-conflict-count">{ui.conflictCount}</div>
               </div>
             </div>
+
+            {/* Wave17：桌面自动保存文件夹（仅 Tauri 桌面端显示；浏览器整组 null）。
+                与「同步通道」互不强耦合——这是一条独立的本地磁盘 durability mirror，
+                把 .kbnote+assets 镜像到用户选定的真实文件夹（Explorer 可见 / 可被
+                OneDrive 同步），不影响既有 OPFS/IndexedDB 自动保存。 */}
+            {nativeAutosaveOn ? (
+              <div className="flex flex-col gap-2 rounded border p-3" data-testid="native-autosave-section">
+                <div className="text-xs font-medium">自动保存到本机文件夹</div>
+                <div className="text-[11px] text-muted-foreground">
+                  {nativeDir
+                    ? `已开启，文档与附件镜像到：${nativeDir}`
+                    : '未开启：文档目前只保存在应用本地存储中。选一个真实文件夹后，每次编辑都会自动写入。'}
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={async () => {
+                      const dir = await pickNativeAutosaveFolder();
+                      if (dir) setNativeDir(dir);
+                    }}
+                    data-testid="native-autosave-pick"
+                  >
+                    <Folder className="h-4 w-4" /> {nativeDir ? '更换文件夹' : '选择文件夹'}
+                  </Button>
+                  {nativeDir ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-destructive"
+                      onClick={async () => {
+                        await clearNativeAutosaveFolder();
+                        setNativeDir(null);
+                      }}
+                      data-testid="native-autosave-clear"
+                    >
+                      <Trash2 className="h-4 w-4" /> 取消自动保存
+                    </Button>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
 
             {/* 冲突副本入口 */}
             <Button
