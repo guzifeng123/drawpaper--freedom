@@ -1507,7 +1507,9 @@ jobs:
           # Closed loopback port = immediate ECONNREFUSED -> unreachable -> fallback.
           $endpoint = 'http://127.0.0.1:1/'
           $outLog = Join-Path $env:TEMP ('dp-updater-probe-' + [guid]::NewGuid().ToString('N') + '.log')
+          $diagFile = Join-Path $env:TEMP 'drawpaper-updater-probe.txt'
           Remove-Item $outLog -ErrorAction SilentlyContinue
+          Remove-Item $diagFile -ErrorAction SilentlyContinue
           # Same outer-quote wrapping trick as the native-autosave selftest smoke.
           $argLine = '/c "' + '"' + $exe + '" --update-check-probe "' + $endpoint + '" > "' + $outLog + '" 2>&1"'
           Write-Host "Running: cmd.exe $argLine"
@@ -1523,20 +1525,23 @@ jobs:
           }
           $code = $cp.ExitCode
           Write-Host "updater-probe exit code = $code"
-          # Give the redirected log a moment to flush after the process exits
-          # (GUI-subsystem stdout pipe can lag the process exit by a beat).
-          $logText = ''
+          # The exe writes its stage anchors + decision to $diagFile (authoritative,
+          # disk-backed; stdout capture from a GUI-subsystem process is unreliable).
+          # Poll it briefly so we catch a late flush.
+          $diagText = ''
           for ($w = 0; $w -lt 10; $w++) {
-            $logText = if (Test-Path $outLog) { Get-Content -Raw $outLog } else { '' }
-            if ($logText -match 'decision=') { break }
+            $diagText = if (Test-Path $diagFile) { Get-Content -Raw $diagFile } else { '' }
+            if ($diagText -match 'decision=') { break }
             Start-Sleep -Seconds 1
           }
-          Write-Host "::group::updater-probe captured stdout/stderr"
-          Write-Host "  | $logText"
+          $logText = if (Test-Path $outLog) { Get-Content -Raw $outLog } else { '' }
+          Write-Host "::group::updater-probe diag file + stdout/stderr"
+          Write-Host "  | diag: $diagText"
+          Write-Host "  | stdout: $logText"
           Write-Host "::endgroup::"
-          if ($code -ne 0) { Write-Error "Smoke FAIL: updater-probe exited $code (expected 0 for a deliberate fallback decision)" }
-          if ($logText -notmatch 'decision=fallback-releases') {
-            Write-Error "Smoke FAIL: updater-probe output missing 'decision=fallback-releases' (got: $logText)"
+          if ($code -ne 0) { Write-Error "Smoke FAIL: updater-probe exited $code (expected 0 for a deliberate fallback decision); diag=$diagText" }
+          if ($diagText -notmatch 'decision=fallback-releases') {
+            Write-Error "Smoke FAIL: updater-probe diag missing 'decision=fallback-releases' (diag: $diagText; stdout: $logText)"
           }
           Write-Host "Smoke OK: updater-probe unreachable endpoint -> fallback-releases, exit 0, no hang"
 

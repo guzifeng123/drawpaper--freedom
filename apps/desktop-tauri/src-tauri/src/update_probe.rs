@@ -192,11 +192,23 @@ pub fn reason_from_error_text(err: &str) -> FallbackReason {
 /// 无头 CLI：直连 `endpoint`，一次 GET、8s 超时、不重试，走到决策就退出。
 ///
 /// 返回进程退出码（见模块头注释）。stdout 打印一行 `decision=...`。
+/// 同时把同一行写到 `%TEMP%\drawpaper-updater-probe.txt`，作为 CI 冒烟的
+/// 权威读取源（GUI-subsystem 进程的 stdout 管道在 hosted runner 上可能不稳）。
 pub fn probe_cli(endpoint: &str) -> i32 {
+    // 阶段锚点：万一卡在 fetch 阶段，CI 能从诊断文件看到卡在哪一步。
+    let diag = std::env::temp_dir().join("drawpaper-updater-probe.txt");
+    let _ = std::fs::write(&diag, "stage=started\n");
     let outcome = fetch_once(endpoint);
+    let _ = std::fs::write(&diag, format!("stage=fetch-done outcome={:?}\n", outcome));
     let current = env!("CARGO_PKG_VERSION");
     let decision = classify(outcome, current);
-    println!("{}", decision.as_stdout_line());
+    let line = decision.as_stdout_line();
+    println!("{}", line);
+    // 追加最终决策行到诊断文件（权威读取源）。
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&diag) {
+        let _ = writeln!(f, "{}", line);
+    }
     0
 }
 
