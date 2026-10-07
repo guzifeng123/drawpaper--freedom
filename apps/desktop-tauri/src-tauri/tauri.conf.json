@@ -31,7 +31,8 @@
   "bundle": {
     "active": true,
     "targets": [
-      "nsis"
+      "nsis",
+      "msi"
     ],
     "publisher": "drawpaper contributors",
     "copyright": "MIT",

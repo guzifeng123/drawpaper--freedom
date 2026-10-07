@@ -41,10 +41,10 @@ jobs:
         include:
           - arch: x64
             rust_target: x86_64-pc-windows-msvc
-            extra_args: '--bundles nsis'
+            extra_args: '--bundles nsis,msi'
           - arch: arm64
             rust_target: aarch64-pc-windows-msvc
-            extra_args: '--bundles nsis --target aarch64-pc-windows-msvc'
+            extra_args: '--bundles nsis,msi --target aarch64-pc-windows-msvc'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -75,7 +75,7 @@ jobs:
       - name: Build web frontend
         run: pnpm -r build
 
-      - name: Tauri build (NSIS, ${{ matrix.arch }})
+      - name: Tauri build (NSIS + MSI, ${{ matrix.arch }})
         working-directory: apps/desktop-tauri
         shell: bash
         run: |
@@ -585,12 +585,311 @@ jobs:
           }
           Write-Host "Smoke OK: install dir removed after silent uninstall"
 
+      # ------------------------------------------------------------------
+      # MSI smoke tests (Wave 15 B). Runs ONLY on x64 and ONLY after the NSIS
+      # uninstall step above has restored a clean machine. The WiX MSI is a
+      # per-machine package (InstallScope=perMachine), so msiexec /qn lands
+      # under C:\Program Files\drawpaper on the (admin) runner — a different
+      # directory from the per-user NSIS install, so the two never overlap.
+      # arm64 MSI is built but NOT executed (no ARM runner); gated below.
+      # ------------------------------------------------------------------
+      - name: 'Smoke (x64): silent MSI install, exe present, ProductVersion matches tauri.conf'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 6
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # 1) Expected version straight from tauri.conf.json.
+          $tauriConf = Get-Content -Raw 'apps/desktop-tauri/src-tauri/tauri.conf.json' | ConvertFrom-Json
+          $expectedVersion = $tauriConf.version
+          Write-Host "tauri.conf.json version (raw) = '$expectedVersion'"
+
+          # 2) Locate the WiX MSI produced by `tauri build --bundles nsis,msi`.
+          $msi = Get-ChildItem -Path 'apps/desktop-tauri/src-tauri/target' -Recurse -Filter '*.msi' -File |
+            Where-Object { $_.FullName -match '[\\/]bundle[\\/]msi[\\/]' } |
+            Select-Object -First 1
+          if (-not $msi) { Write-Error 'Smoke FAIL: *.msi not found under target/**/bundle/msi' }
+          Write-Host "MSI = $($msi.FullName) ($([math]::Round($msi.Length/1MB,2)) MB)"
+
+          # 3) Silent per-machine install with a verbose log. /norestart keeps
+          #    the runner from rebooting; 3010 == "success, reboot recommended"
+          #    which we treat as success.
+          $log = Join-Path $env:RUNNER_TEMP 'drawpaper-msi-install.log'
+          Write-Host "Running: msiexec /i <msi> /qn /norestart /lv* <log>"
+          $p = Start-Process -FilePath 'msiexec.exe' `
+            -ArgumentList '/i', "`"$($msi.FullName)`"", '/qn', '/norestart', '/lv*', "`"$log`"" `
+            -PassThru
+          for ($w = 0; $w -lt 180; $w++) {
+            Start-Sleep -Seconds 1
+            $p.Refresh()
+            if ($p.HasExited) { break }
+          }
+          Write-Host "msiexec exited = $($p.HasExited)"
+          if (-not $p.HasExited) { Write-Error 'Smoke FAIL: msiexec did not exit within 180s' }
+          Write-Host "msiexec exit code = $($p.ExitCode)"
+          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) {
+            Write-Host "::group::MSI install log tail"
+            Get-Content $log -Tail 50 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+            Write-Host "::endgroup::"
+            Write-Error "Smoke FAIL: msiexec /i exited $($p.ExitCode) (expected 0 or 3010)"
+          }
+
+          # 4) Discover install dir. Tauri WiX MSI is perMachine -> Program Files
+          #    on x64. Probe Program Files / Program Files(x86) / LOCALAPPDATA and
+          #    PRINT every hit so a landing change is obvious from the log.
+          $candidates = @(
+            (Join-Path $env:ProgramFiles 'drawpaper'),
+            (Join-Path ${env:ProgramFiles(x86)} 'drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper')
+          )
+          $script:msiInstallDir = $null
+          foreach ($c in $candidates) {
+            if ($c) {
+              $exists = Test-Path $c
+              Write-Host "  candidate: $c => exists=$exists"
+              if ($exists -and -not $script:msiInstallDir) { $script:msiInstallDir = $c }
+            }
+          }
+          if (-not $script:msiInstallDir) {
+            Write-Host "::group::Leftover drawpaper dirs"
+            Get-ChildItem $env:ProgramFiles -Filter 'drawpaper*' -Directory -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
+            Get-ChildItem (Join-Path $env:LOCALAPPDATA 'Programs') -Filter 'drawpaper*' -Directory -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
+            Write-Host "::endgroup::"
+            Write-Error 'Smoke FAIL: MSI install dir not found (Program Files / Program Files(x86) / LOCALAPPDATA\Programs)'
+          }
+          Write-Host "MSI install dir (matched) = $($script:msiInstallDir)"
+
+          # 5) Locate drawpaper.exe.
+          $exe = Join-Path $script:msiInstallDir 'drawpaper.exe'
+          if (-not (Test-Path $exe)) {
+            $exe = Get-ChildItem $script:msiInstallDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName
+          }
+          if (-not $exe -or -not (Test-Path $exe)) { Write-Error "Smoke FAIL: drawpaper.exe not found under $($script:msiInstallDir)" }
+          Write-Host "App exe = $exe"
+
+          # 6) Version assertion with the SAME numeric-token normalization the
+          #    NSIS smoke uses (Windows can rewrite a pre-release tag).
+          $productVersion = (Get-Item $exe).VersionInfo.ProductVersion
+          Write-Host "Installed exe ProductVersion (raw) = '$productVersion'"
+          Write-Host "tauri.conf version           (raw) = '$expectedVersion'"
+          function Get-NumTokens([string]$v) {
+            if (-not $v) { return @() }
+            return @([regex]::Matches($v, '\d+') | ForEach-Object { [int]$_.Value })
+          }
+          $exp = Get-NumTokens $expectedVersion
+          $got = Get-NumTokens $productVersion
+          Write-Host ("Normalized numeric tokens - expected: [{0}]" -f ($exp -join '.'))
+          Write-Host ("Normalized numeric tokens - got:      [{0}]" -f ($got -join '.'))
+          $max = [Math]::Max($exp.Count, $got.Count)
+          while ($exp.Count -lt $max) { $exp += 0 }
+          while ($got.Count -lt $max) { $got += 0 }
+          $mismatch = @(Compare-Object $exp $got -SyncWindow 0)
+          if ($mismatch.Count -ne 0) {
+            Write-Error ("Smoke FAIL: MSI version mismatch. tauri.conf='$expectedVersion' vs ProductVersion='$productVersion'")
+          }
+          Write-Host "Smoke OK: MSI installed exe present and numeric version tokens match"
+
+      - name: 'Smoke (x64 MSI): .kbnote registry association registered (HKCU/HKLM)'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Per-machine MSI should write HKLM\Software\Classes\.kbnote. Probe
+          # both hives (mirrors the NSIS smoke) and accept a non-empty default.
+          $hives = @(
+            'HKLM:\Software\Classes\.kbnote',
+            'HKCU:\Software\Classes\.kbnote'
+          )
+          $hit = $null
+          foreach ($h in $hives) {
+            $exists = Test-Path $h
+            $default = ''
+            if ($exists) {
+              try {
+                $item = Get-Item -Path $h -ErrorAction Stop
+                $default = [string]$item.GetValue('')
+              } catch { $default = '' }
+            }
+            Write-Host ("  probe {0} => exists={1} default='{2}'" -f $h, $exists, $default)
+            if ($exists -and $default.Trim() -ne '') { $hit = $h; break }
+          }
+          if (-not $hit) {
+            Write-Host "::group::HKCU/HKLM Classes\.kbnote dump"
+            foreach ($h in $hives) {
+              if (Test-Path $h) {
+                Write-Host "  $h :"
+                Get-ItemProperty -Path $h -ErrorAction SilentlyContinue | Format-List | Out-String | Write-Host
+              } else {
+                Write-Host "  $h : (missing)"
+              }
+            }
+            Write-Host "::endgroup::"
+            Write-Error 'Smoke FAIL (MSI): .kbnote registry association not found (HKLM or HKCU) with non-empty default'
+          }
+          Write-Host "Smoke OK (MSI): .kbnote file association registered at $hit (ProgID default non-empty)"
+
+      - name: 'Smoke (x64 MSI): desktop + start-menu shortcuts present'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 2
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Per-machine install writes to COMMON desktop + common Start Menu.
+          # Probe both user and common locations; at least one desktop lnk and
+          # at least one start-menu lnk must exist (same contract as NSIS).
+          $desktopUser = [Environment]::GetFolderPath('Desktop')
+          $desktopCommon = [Environment]::GetFolderPath('CommonDesktopDirectory')
+          Write-Host ("  user desktop   = '{0}'" -f $desktopUser)
+          Write-Host ("  public desktop = '{0}'" -f $desktopCommon)
+          $desktopHits = @()
+          foreach ($d in @($desktopUser, $desktopCommon)) {
+            if ($d -and (Test-Path $d)) {
+              $lnk = Join-Path $d 'drawpaper.lnk'
+              Write-Host ("    probe {0} => exists={1}" -f $lnk, (Test-Path $lnk))
+              if (Test-Path $lnk) { $desktopHits += $lnk }
+            }
+          }
+          $smRoots = @(
+            (Join-Path $env:ProgramData 'Microsoft\Windows\Start Menu\Programs'),
+            (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs')
+          )
+          $smHits = @()
+          foreach ($r in $smRoots) {
+            Write-Host ("  start menu root: {0} => exists={1}" -f $r, (Test-Path $r))
+            if (Test-Path $r) {
+              $found = Get-ChildItem -Path $r -Recurse -Filter 'drawpaper*.lnk' -File -ErrorAction SilentlyContinue
+              if ($found) { $smHits += $found.FullName }
+            }
+          }
+          Write-Host ("Desktop shortcut hits ({0}):" -f $desktopHits.Count)
+          $desktopHits | ForEach-Object { Write-Host "  - $_" }
+          Write-Host ("Start-menu shortcut hits ({0}):" -f $smHits.Count)
+          $smHits | ForEach-Object { Write-Host "  - $_" }
+          if ($desktopHits.Count -lt 1) {
+            Write-Error 'Smoke FAIL (MSI): no drawpaper.lnk found on user or public desktop'
+          }
+          if ($smHits.Count -lt 1) {
+            Write-Error 'Smoke FAIL (MSI): no drawpaper*.lnk found under user or common Start Menu Programs'
+          }
+          Write-Host "Smoke OK (MSI): desktop and start-menu shortcuts present"
+
+      - name: 'Smoke (x64 MSI): launch exe, main window title contains drawpaper, then kill'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @(
+            (Join-Path $env:ProgramFiles 'drawpaper'),
+            (Join-Path ${env:ProgramFiles(x86)} 'drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper')
+          )
+          $installDir = $null
+          foreach ($c in $candidates) { if ($c -and (Test-Path $c)) { $installDir = $c; break } }
+          if (-not $installDir) { Write-Error 'Smoke FAIL (MSI): install dir not found at launch time' }
+          $exe = Join-Path $installDir 'drawpaper.exe'
+          if (-not (Test-Path $exe)) { $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName }
+          Write-Host "Launching $exe"
+          $proc = Start-Process -FilePath $exe -PassThru
+          Write-Host ("Start-Process returned pid={0}" -f $proc.Id)
+          $ok = $false
+          for ($i = 1; $i -le 20; $i++) {
+            Start-Sleep -Seconds 1
+            $p = Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($p) {
+              for ($s = 1; $s -le 3; $s++) {
+                $p.Refresh()
+                $title = $p.MainWindowTitle
+                Write-Host ("t={0,2}s sample={1} pid={2} MainWindowTitle='{3}'" -f $i, $s, $p.Id, $title)
+                if ($title -and ($title.ToLower().Contains('drawpaper'))) { $ok = $true; break }
+                Start-Sleep -Milliseconds 300
+              }
+            } else {
+              Write-Host ("t={0,2}s: drawpaper process not found yet" -f $i)
+            }
+            if ($ok) { break }
+          }
+          Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$installDir*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          if (-not $ok) {
+            Write-Error 'Smoke FAIL (MSI): drawpaper process did not present a main window whose title contains "drawpaper" within 20s'
+          }
+          Write-Host "Smoke OK (MSI): process alive and main window title contains 'drawpaper'"
+
+      - name: 'Smoke (x64 MSI): silent uninstall, install dir removed'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 4
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @(
+            (Join-Path $env:ProgramFiles 'drawpaper'),
+            (Join-Path ${env:ProgramFiles(x86)} 'drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper')
+          )
+          $installDir = $null
+          foreach ($c in $candidates) { if ($c -and (Test-Path $c)) { $installDir = $c; break } }
+          if (-not $installDir) {
+            Write-Host "MSI install dir already absent; nothing to uninstall"
+            exit 0
+          }
+          Write-Host "Install dir = $installDir"
+          # Best-effort kill of any running app / WebView2 children so the MSI
+          # does not hit a files-in-use dialog.
+          Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$installDir*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+
+          # Re-locate the MSI to uninstall by product code path too, but the
+          # simplest deterministic handle is the original .msi file on disk.
+          $msi = Get-ChildItem -Path 'apps/desktop-tauri/src-tauri/target' -Recurse -Filter '*.msi' -File |
+            Where-Object { $_.FullName -match '[\\/]bundle[\\/]msi[\\/]' } | Select-Object -First 1
+          if (-not $msi) { Write-Error 'Smoke FAIL (MSI): cannot find .msi for uninstall' }
+          $log = Join-Path $env:RUNNER_TEMP 'drawpaper-msi-uninstall.log'
+          Write-Host "Running: msiexec /x <msi> /qn /norestart /lv* <log>"
+          $u = Start-Process -FilePath 'msiexec.exe' `
+            -ArgumentList '/x', "`"$($msi.FullName)`"", '/qn', '/norestart', '/lv*', "`"$log`"" `
+            -PassThru
+          for ($w = 0; $w -lt 120; $w++) {
+            Start-Sleep -Seconds 1
+            $u.Refresh()
+            if ($u.HasExited) { break }
+          }
+          Write-Host "msiexec /x exited = $($u.HasExited)"
+          if ($u.HasExited) { Write-Host "msiexec /x exit code = $($u.ExitCode)" }
+          # Poll for dir removal up to 60s.
+          $removed = $false
+          for ($i = 1; $i -le 60; $i++) {
+            Start-Sleep -Seconds 1
+            if (-not (Test-Path $installDir)) { $removed = $true; break }
+          }
+          if (-not $removed) {
+            Write-Host "::group::Remaining files under $installDir"
+            Get-ChildItem $installDir -Recurse -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
+            Write-Host "::group::MSI uninstall log tail"
+            Get-Content $log -Tail 40 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host $_ }
+            Write-Host "::endgroup::"
+            Write-Error 'Smoke FAIL (MSI): install dir still present 60s after msiexec /x'
+          }
+          Write-Host "Smoke OK (MSI): install dir removed after silent uninstall"
+
       - name: Upload NSIS installer artifact
         uses: actions/upload-artifact@v4
         with:
           name: nsis-${{ matrix.arch }}
           path: |
             apps/desktop-tauri/src-tauri/target/**/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload MSI installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: msi-${{ matrix.arch }}
+          path: |
+            apps/desktop-tauri/src-tauri/target/**/release/bundle/msi/*.msi
           if-no-files-found: error
           retention-days: 30
 
@@ -608,8 +907,7 @@ jobs:
         # download-artifact@v4: name a single artifact per step. v4 does NOT
         # support the v3 "download all unnamed artifacts into one dir" pattern;
         # without `name` it fans each artifact into its own subdir, which is
-        # fragile here. Two explicit downloads to two distinct paths is the
-        # deterministic form.
+        # fragile here. Explicit downloads to distinct paths are deterministic.
         uses: actions/download-artifact@v4
         with:
           name: nsis-x64
@@ -621,30 +919,44 @@ jobs:
           name: nsis-arm64
           path: artifacts/nsis-arm64
 
+      - name: Download MSI installers (x64)
+        uses: actions/download-artifact@v4
+        with:
+          name: msi-x64
+          path: artifacts/msi-x64
+
+      - name: Download MSI installers (arm64)
+        uses: actions/download-artifact@v4
+        with:
+          name: msi-arm64
+          path: artifacts/msi-arm64
+
       - name: List installers
         run: |
           echo "::group::Installers collected"
-          find artifacts -type f -name '*.exe' -print
+          find artifacts -type f \( -name '*.exe' -o -name '*.msi' \) -print | sort
           echo "::endgroup::"
 
       - name: Generate SHA256SUMS.txt
-        # One line per installer: "<sha256>  <basename>". Basename (no arch
-        # subdir) so a user who downloads both exes + the sums file into one
-        # folder can run `sha256sum -c SHA256SUMS.txt` directly.
+        # One line per installer (NSIS *-setup.exe AND WiX *.msi):
+        # "<sha256>  <basename>". Basename (no arch subdir) so a user who
+        # downloads all four installers + the sums file into one folder can run
+        # `sha256sum -c SHA256SUMS.txt` directly.
         run: |
           set -euo pipefail
           cd artifacts
           : > SHA256SUMS.txt
           # shellcheck disable=SC2044
-          for exe in $(find nsis-x64 nsis-arm64 -name '*-setup.exe' -type f | sort); do
-            hash="$(sha256sum "$exe" | cut -d' ' -f1)"
-            base="$(basename "$exe")"
+          for f in $(find nsis-x64 nsis-arm64 msi-x64 msi-arm64 \( -name '*-setup.exe' -o -name '*.msi' \) -type f | sort); do
+            hash="$(sha256sum "$f" | cut -d' ' -f1)"
+            base="$(basename "$f")"
             printf '%s  %s\n' "$hash" "$base" >> SHA256SUMS.txt
           done
           echo "::group::SHA256SUMS.txt"
           cat SHA256SUMS.txt
           echo "::endgroup::"
-          test "$(wc -l < SHA256SUMS.txt)" -ge 2
+          # Four installers: NSIS x64/arm64 + MSI x64/arm64.
+          test "$(wc -l < SHA256SUMS.txt)" -ge 4
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -658,15 +970,23 @@ jobs:
           files: |
             artifacts/nsis-x64/**/*.exe
             artifacts/nsis-arm64/**/*.exe
+            artifacts/msi-x64/**/*.msi
+            artifacts/msi-arm64/**/*.msi
             artifacts/SHA256SUMS.txt
           generate_release_notes: false
           body: |
             ## drawpaper ${{ github.ref_name }}（预发布）
 
-            Windows 桌面安装包（NSIS，Win10/11）。本地优先：所有数据留在本机，无账号、无云同步。
+            Windows 桌面安装包（Win10/11，NSIS 与 WiX MSI 双格式 × x64/ARM64）。本地优先：所有数据留在本机，无账号、无云同步。
 
+            **NSIS（推荐，与以往版本一致）**
             - `drawpaper_*_x64-setup.exe` — 64 位 Intel/AMD
             - `drawpaper_*_arm64-setup.exe` — ARM64（Copilot+、Surface Pro X 等）
-            - `SHA256SUMS.txt` — 两个安装包的 SHA-256 校验和（下载后 `sha256sum -c SHA256SUMS.txt` 校验）。
+
+            **WiX MSI（企业 / 批量部署场景）**
+            - `drawpaper_*_x64_en-US.msi` — 64 位 Intel/AMD（按机器安装到 Program Files）
+            - `drawpaper_*_arm64_en-US.msi` — ARM64
+
+            - `SHA256SUMS.txt` — 四个安装包的 SHA-256 校验和（下载后 `sha256sum -c SHA256SUMS.txt` 校验）。
 
             本版为预发布（RC），尚未启用自动更新：升级请手动下载新安装包覆盖安装。详见仓库 `CHANGELOG.md` 与 `docs/RELEASE.md`。
