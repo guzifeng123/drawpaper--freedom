@@ -1,61 +1,103 @@
-# Wave 18 — WiX MSI 双语 culture 双包（en-US + zh-CN）：**结论「不做」（已回退）**
+# Wave 18/19 — WiX MSI 双语 culture 双包（en-US + zh-CN）：**已启用（rc.10 重启后通过）**
 
-> 状态：本波尝试给 WiX MSI 加 zh-CN 中文 UI culture。**构建侧成功**，但 x64 zh-CN 安装/卸载
-> 冒烟两次失败，且匿名 CI 日志正文不可读、无法在止损窗口内定位根因。按止损指令**回退到
-> rc.9 的英文 MSI 单文化矩阵**（NSIS×2 + MSI en-US×2 = 4 包）。分支上仅保留 push 白名单探针，
-> `wix.language` 已撤除，未合入任何出包改动。
-> 基线：`0ef0ff5`（rc.9）。分支：`feat/msi-bilingual`。
+> 状态：本波最终**成功**。`bundle.windows.wix.language = ["en-US", "zh-CN"]` 后，x64 / arm64
+> 各产 en-US + zh-CN 两个 MSI，加上 NSIS×2 共 **6 个 Windows 安装包**；x64 zh-CN 静默装 /
+> ProductVersion 断言 / 静默卸**全绿**。
+>
+> 这段文档最初在 Wave 18 N 路写的是「不做」（盲猜根因、匿名日志不可读、止损回退）。
+> Wave 19 A 路在新分支 `fix/msi-zhcn-smoke` 上用「诊断打到 check-run annotations」的手法拿到
+> 了真实根因，推翻了旧结论。下面以 Wave19 A 的实测证据为准。
+> 基线：`fea7e73`（rc.10）。分支：`fix/msi-zhcn-smoke`。
 
-## 1. 做了什么（已回退的尝试）
+## 1. 配置键（Tauri 2 / WiX v3）
 
-`bundle.windows.wix` 增加 `"language": ["en-US", "zh-CN"]`（schema 已核实：
-`WixLanguage = string | string[] | map`，数组即每种 culture 一个包，语言键即文件名后缀，
-见 <https://v2.tauri.app/distribute/windows-installer/>）。`wix.version: "0.1.0.9"` 与 app
-`0.1.0-rc.9` 全程零改动；NSIS 一行未动。
+`apps/desktop-tauri/src-tauri/tauri/tauri.conf.json` → `bundle.windows.wix`：
 
-配套在 `release-windows.yml`：把 en-US 轮选包 pin 到 `*_x64_en-US.msi`、新增 x64 zh-CN
-静默装/卸冒烟、上传前打印 MSI 名+大小、`SHA256SUMS` 行数断言改 6。
+```json
+"wix": {
+  "version": "0.1.0.10",
+  "language": ["en-US", "zh-CN"]
+}
+```
 
-## 2. 实测证据（CI 权威门）
+- `wix.language` 的 schema 是 `WixLanguage = string | string[] | map`（数组即每种 culture 一个
+  MSI，语言键直接成为文件名后缀）。见 <https://schema.tauri.app/config/2> 与
+  <https://v2.tauri.app/distribute/windows-installer/>。
+- `wix.version: "0.1.0.10"`（数字 ProductVersion 覆盖）与 app `0.1.0-rc.10` **全程零改动**；
+  NSIS 配置一行未动。
+- **不需要自定义 fragment / `.wxl`**：WixUIExtension v3.14 自带 zh-CN（ProductLanguage 2052）
+  本地化，开箱构建即过。Wave18 的「疑似缺语言包」假设被证伪。
 
-| 项 | 结果 |
+## 2. 实测产物（run #130，commit 624e79c）
+
+`List MSI artifacts` 步骤打印的完整文件名 + 大小：
+
+| 文件名 | 大小（bytes） |
 |---|---|
-| `Tauri build (NSIS + MSI, x64)` | ✅ 绿 —— **双语 MSI 成功产出，无需自定义 fragment / .wxl**（WixUIExtension 内置 zh-CN 本地化开箱可用，构建未报任何语言包缺失） |
-| arm64 build job | ✅ 绿；上传 `msi-arm64` artifact = **11.6 MB**（约 = 2 × ~5.8 MB，对应 en-US + zh-CN 两个 arm64 MSI） |
-| en-US MSI 整轮冒烟（装→注册表→快捷方式→启动标题→卸净） | ✅ 全绿，与 rc.9 基线一致 |
-| NSIS 冒烟 | ✅ 未受影响（`*-setup.exe`×2 正常） |
-| **新增 `Smoke (x64 MSI zh-CN): silent install + uninstall`** | ❌ **两次失败** |
-| web-ci（feat/** 自动触发） | ✅ 绿 |
+| `drawpaper_0.1.0-rc.10_x64_en-US.msi` | 6,496,256 |
+| `drawpaper_0.1.0-rc.10_x64_zh-CN.msi` | 6,496,256 |
+| `drawpaper_0.1.0-rc.10_arm64_en-US.msi` | 6,373,376 |
+| `drawpaper_0.1.0-rc.10_arm64_zh-CN.msi` | 6,373,376 |
 
-失败 run：
-- `#110` run id `37657688949`（commit `0c9a8be`，首版双语）：x64 zh-CN 冒烟红叉，其后上传步骤全部跳过。
-- `#113` run id `37660508380`（commit `09555b5`，加「安装前排空 msiexec + 1618 繁忙单次重试」）：
-  **仍在同一步骤红叉**。说明不是瞬时 1618 busy。
+加 NSIS：`drawpaper_0.1.0-rc.10_x64-setup.exe`、`drawpaper_0.1.0-rc.10_arm64-setup.exe`，
+共 **6 包**，`SHA256SUMS.txt` = 6 行（publish job 硬断言 `-eq 6`）。
 
-x64 job 总时长从 `#110` 的 12m32s 增至 `#113` 的 17m46s——zh-CN 的 `msiexec /i` 实际跑起来了
-（不是「找不到 `*_x64_zh-CN.msi`」那种秒败），但既未通过安装退出码断言，也未通过卸载目录清理断言。
+MSI 属性（COM 读 Property 表实测）：
 
-## 3. 为什么停手（不硬凑）
+- en-US：ProductCode `{F9A50531-062B-4520-BAEF-3CAA7332DE60}`，ProductLanguage **1033**
+- zh-CN：ProductCode `{60E19AB2-707F-4B38-82B2-97C89D522DD1}`，ProductLanguage **2052**
+- 两者 **UpgradeCode 相同** `{6CB9B379-977E-564A-AE1B-603E96D8C8F2}`
 
-- **不是**「WiX 3.14 内置 zh-CN 语言包缺失 / 必须自定义 fragment 才能生成中文 MSI」——
-  构建步骤两次都绿，zh-CN MSI 确实产出。
-- 但 zh-CN MSI 在 x64 runner 上**静默装/卸冒烟不通过**（en-US 同包同流程全绿）。二者仅 UI culture
-  与 ProductLanguage 不同，疑似同 ProductCode 顺序装-卸交互 / 或该 culture 包在英文系统上的安装行为
-  差异。
-- 仓库匿名 `api.github.com` 限流、job 日志正文匿名不可见，**止损窗口内拿不到 msiexec 退出码与
-  install log tail**，无法在不再烧 CI 周期的前提下确认根因。
-- 按「严禁硬凑、严禁假绿」原则，**不**把一个冒烟未通过的 zh-CN MSI 当成可用产物发布。
+> 即：Tauri 给每种 culture 生成**不同的 ProductCode**（Wave18 假设的「同 ProductCode 冲突」
+> 被证伪），但共享 UpgradeCode。同机二选一部署，不能并存。
 
-## 4. 回退内容（现状 = rc.9 英文矩阵）
+## 3. 真正的根因（Wave18 失败、Wave19 通过的差别）
 
-- `tauri.conf.json`：撤掉 `wix.language`，恢复 `wix = { "version": "0.1.0.9" }`。
-- `release-windows.yml`：撤掉 zh-CN 冒烟步骤、en-US 选包 pin、List MSI 步骤、SHA256SUMS=6 断言、
-  release body 双语清单；**仅保留** push 白名单 `- 'feat/msi-bilingual'`（分支触发器）。
-- `apps/desktop-tauri/README.md`、`CHANGELOG.md`：恢复基线（英文 MSI 矩阵，4 包）。
-- 产物回到：NSIS×2 + MSI en-US×2 = **4 个 Windows 安装包**，`SHA256SUMS.txt` 4 行。
+Wave18 N 路两次红叉（runs #110 / #113），加 settle + 1618-retry 仍败——**那不是根因**。
 
-## 5. 后续（若重启此波）
+Wave19 A 第 1 轮（run #127）把 msiexec 退出码、ProductCode、install log 尾部、Uninstall
+注册表项轮询全部打到 `::error` / `::notice`（check-run annotations，匿名 GitHub API 可读），
+拿到决定性证据：
 
-需要一次**有日志权限**的环境复现：直接看 zh-CN 那次 `msiexec /i` 的真实退出码（1603? 1638?）
-与 install log tail，再决定是否需要：拆 ProductCode（每 culture 独立 GUID）、或 zh-CN 自定义
-`.wxl` fragment。当前证据不足以支撑直接发 zh-CN 包。
+- zh-CN `msiexec /i` **exitcode = 0（安装成功）**；
+- 但断言步骤硬编码检查 `C:\Program Files\drawpaper` —— **目录不存在**，于是失败。
+
+第 2 轮（run #130）把断言从「硬编码 Program Files」改成**广域搜盘**（Program Files /
+Program Files (x86) / `%LOCALAPPDATA%\Programs` 下找 `drawpaper.exe`），立刻定位：
+
+> zh-CN MSI 实际装到了 **per-user** 路径 `C:\Users\runneradmin\AppData\Local\Programs\drawpaper\drawpaper.exe`，
+> ProductVersion = `0.1.0-rc.10`，卸载后 `dir-removed=True`（干净）。
+
+即：**安装/卸载一直是好的**，Wave18 的断言路径写错了（WiX 模板在该 CI 上下文里走 per-user
+InstallScope，不落 Program Files）。改成与 en-US 轮一致的多候选发现后，zh-CN 装 / 版本 / 卸
+真过。
+
+## 4. 静默部署说明（企业）
+
+两种 culture 的 MSI 二选一部署（同 ProductCode 族，同机不并存）：
+
+```powershell
+# en-US（英文向导，ProductLanguage 1033）
+msiexec /i drawpaper_<ver>_x64_en-US.msi /qn /norestart /lv* install.log
+msiexec /x drawpaper_<ver>_x64_en-US.msi /qn /norestart
+
+# zh-CN（中文向导，ProductLanguage 2052）
+msiexec /i drawpaper_<ver>_x64_zh-CN.msi /qn /norestart /lv* install.log
+msiexec /x drawpaper_<ver>_x64_zh-CN.msi /qn /norestart
+# 退出码 0 或 3010（需要重启）都算成功
+```
+
+## 5. NSIS 不受影响
+
+`bundle.windows.nsis` 一行未动；NSIS 7 步冒烟（静默装 / .kbnote 注册表 / 快捷方式 / 启动标题 /
+全局快捷键 / 二次启动吸收 / 卸载）与既有全部冒烟零回退。NSIS 仍按 `installMode: both` +
+`displayLanguageSelector` 自带中/英向导语言选择，与 MSI 的 culture 双包是两套独立机制。
+
+## 6. 分支与红线自检
+
+- 只推 `fix/msi-zhcn-smoke`（白名单自加一行）；未碰 develop / main / tag。
+- 版本红线零改动：app `0.1.0-rc.10`、`wix.version` `0.1.0.10`。
+- 改动面：`tauri.conf.json` 的 `bundle.windows.wix` 段、`release-windows.yml`（白名单 + MSI
+  选包 pin / zh-CN 探针步骤 / List MSI / SHA256SUMS=6 / release body）、本文件、
+  `apps/desktop-tauri/README.md` MSI 语言相关句、`CHANGELOG.md` 未发布段。
+- 未改任何 Rust / Cargo / packages / NSIS 步骤 / ci/*.ps1。

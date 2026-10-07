@@ -33,6 +33,7 @@ on:
       - 'feat/desktop-folder-autosave'
       - 'feat/desktop-global-shortcuts'
       - 'feat/msi-bilingual'
+      - 'fix/msi-zhcn-smoke'
       - 'chore/portable-smoke-ci'
       - 'chore/ci-exe-hardening'
       - 'chore/arm64-runner-smoke'
@@ -1580,10 +1581,13 @@ jobs:
           Write-Host "tauri.conf.json version (raw) = '$expectedVersion'"
 
           # 2) Locate the WiX MSI produced by `tauri build --bundles nsis,msi`.
-          $msi = Get-ChildItem -Path 'apps/desktop-tauri/src-tauri/target' -Recurse -Filter '*.msi' -File |
+          #    Wave19 A: wix.language=[en-US,zh-CN] -> two MSIs per arch land in
+          #    the same bundle/msi dir. Pin the en-US culture explicitly (a bare
+          #    *.msi + Select -First 1 would be ambiguous once both cultures exist).
+          $msi = Get-ChildItem -Path 'apps/desktop-tauri/src-tauri/target' -Recurse -Filter '*_x64_en-US.msi' -File |
             Where-Object { $_.FullName -match '[\\/]bundle[\\/]msi[\\/]' } |
             Select-Object -First 1
-          if (-not $msi) { Write-Error 'Smoke FAIL: *.msi not found under target/**/bundle/msi' }
+          if (-not $msi) { Write-Error 'Smoke FAIL: *_x64_en-US.msi not found under target/**/bundle/msi' }
           Write-Host "MSI = $($msi.FullName) ($([math]::Round($msi.Length/1MB,2)) MB)"
 
           # 3) Silent per-machine install with a verbose log. /norestart keeps
@@ -1819,9 +1823,11 @@ jobs:
 
           # Re-locate the MSI to uninstall by product code path too, but the
           # simplest deterministic handle is the original .msi file on disk.
-          $msi = Get-ChildItem -Path 'apps/desktop-tauri/src-tauri/target' -Recurse -Filter '*.msi' -File |
+          # Wave19 A: bilingual MSIs coexist in bundle/msi; this step uninstalls
+          # whatever the en-US install round above registered, so pin en-US.
+          $msi = Get-ChildItem -Path 'apps/desktop-tauri/src-tauri/target' -Recurse -Filter '*_x64_en-US.msi' -File |
             Where-Object { $_.FullName -match '[\\/]bundle[\\/]msi[\\/]' } | Select-Object -First 1
-          if (-not $msi) { Write-Error 'Smoke FAIL (MSI): cannot find .msi for uninstall' }
+          if (-not $msi) { Write-Error 'Smoke FAIL (MSI): cannot find *_x64_en-US.msi for uninstall' }
           $log = Join-Path $env:RUNNER_TEMP 'drawpaper-msi-uninstall.log'
           Write-Host "Running: msiexec /x <msi> /qn /norestart /lv* <log>"
           $u = Start-Process -FilePath 'msiexec.exe' `
@@ -1850,6 +1856,127 @@ jobs:
           }
           Write-Host "Smoke OK (MSI): install dir removed after silent uninstall"
 
+      # ------------------------------------------------------------------
+      # Wave19 A: zh-CN culture MSI smoke, HEAVILY instrumented so the
+      # diagnostics are visible via check-run annotations (::error/::notice),
+      # which the anonymous GitHub API can read without log access. Runs ONLY
+      # on x64, strictly after the en-US round above fully uninstalled.
+      # en-US and zh-CN share ProductCode/UpgradeCode; we poll the Uninstall
+      # registry keys to confirm en-US is really deregistered before zh-CN.
+      # ------------------------------------------------------------------
+      - name: 'Smoke (x64 MSI zh-CN): silent install + uninstall, instrumented'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Get-MsiProperty([string]$path, [string]$prop) {
+            $wi = New-Object -ComObject WindowsInstaller.Installer
+            $db = $wi.GetType().InvokeMember('OpenDatabase','InvokeMethod',$null,$wi,@($path,0))
+            $view = $db.GetType().InvokeMember('OpenView','InvokeMethod',$null,$db,@("SELECT Value FROM Property WHERE Property = '$prop'"))
+            $view.GetType().InvokeMember('Execute','InvokeMethod',$null,$view,$null)
+            $rec = $view.GetType().InvokeMember('Fetch','InvokeMethod',$null,$view,$null)
+            if ($null -eq $rec) { return $null }
+            return $rec.GetType().InvokeMember('StringData','GetProperty',$null,$rec,1)
+          }
+          function Find-DrawpaperUninstallEntries {
+            $k = @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall',
+                   'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+                   'HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall')
+            $hits = @()
+            foreach ($root in $k) {
+              Get-ChildItem $root -ErrorAction SilentlyContinue | ForEach-Object {
+                $p = Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+                if ($p.DisplayName -like '*drawpaper*') {
+                  $hits += ("{0} | DisplayName='{1}' | PSChildName={2}" -f $root, $p.DisplayName, $_.PSChildName)
+                }
+              }
+            }
+            return $hits
+          }
+
+          # 0) Inventory both culture MSIs: ProductCode/ProductLanguage/UpgradeCode.
+          $msiDir = 'apps/desktop-tauri/src-tauri/target'
+          $enMsi = Get-ChildItem -Path $msiDir -Recurse -Filter '*_x64_en-US.msi' -File |
+            Where-Object { $_.FullName -match '[\\/]bundle[\\/]msi[\\/]' } | Select-Object -First 1
+          $zhMsi = Get-ChildItem -Path $msiDir -Recurse -Filter '*_x64_zh-CN.msi' -File |
+            Where-Object { $_.FullName -match '[\\/]bundle[\\/]msi[\\/]' } | Select-Object -First 1
+          Write-Host "ALL MSIs under bundle/msi:"
+          Get-ChildItem -Path $msiDir -Recurse -Filter '*.msi' -File |
+            Where-Object { $_.FullName -match '[\\/]bundle[\\/]msi[\\/]' } |
+            ForEach-Object { Write-Host ("  {0}  ({1} bytes)" -f $_.Name, $_.Length) }
+          if (-not $enMsi) { Write-Error 'zh-CN probe: en-US MSI not found' }
+          if (-not $zhMsi) { Write-Host "::error title=zhcn-msi-missing::expected *_x64_zh-CN.msi not found in bundle/msi" ; Write-Error 'zh-CN probe: zh-CN MSI not found' }
+          Write-Host "::notice title=zhcn-props::en-US ProductCode=$(Get-MsiProperty $enMsi.FullName 'ProductCode') ProductLanguage=$(Get-MsiProperty $enMsi.FullName 'ProductLanguage') UpgradeCode=$(Get-MsiProperty $enMsi.FullName 'UpgradeCode')"
+          Write-Host "::notice title=zhcn-props::zh-CN ProductCode=$(Get-MsiProperty $zhMsi.FullName 'ProductCode') ProductLanguage=$(Get-MsiProperty $zhMsi.FullName 'ProductLanguage') UpgradeCode=$(Get-MsiProperty $zhMsi.FullName 'UpgradeCode')"
+
+          # 1) Precondition: en-US round must have deregistered + removed dir.
+          $pre = Join-Path $env:ProgramFiles 'drawpaper'
+          if (Test-Path $pre) {
+            Write-Host "::error title=zhcn-pre::install dir still present before zh-CN: $pre"
+            Write-Error "zh-CN probe: $pre still present (en-US round did not clean up)"
+          }
+          $regHits = Find-DrawpaperUninstallEntries
+          Write-Host "Uninstall entries for drawpaper BEFORE zh-CN install: $($regHits.Count)"
+          $regHits | ForEach-Object { Write-Host "::notice title=zhcn-reg-before::$_" }
+
+          # 2) Silent install zh-CN; emit exit code + log tail as annotations.
+          $log = Join-Path $env:RUNNER_TEMP 'zhcn-install.log'
+          Write-Host "Running: msiexec /i <zh-CN msi> /qn /norestart /lv* <log>"
+          $p = Start-Process -FilePath 'msiexec.exe' `
+            -ArgumentList '/i', "`"$($zhMsi.FullName)`"", '/qn', '/norestart', '/lv*', "`"$log`"" `
+            -PassThru
+          for ($w = 0; $w -lt 180; $w++) { Start-Sleep -Seconds 1; $p.Refresh(); if ($p.HasExited) { break } }
+          if (-not $p.HasExited) { Write-Host "::error title=zhcn-install::msiexec did not exit within 180s" ; Write-Error 'zh-CN probe: install msiexec timeout 180s' }
+          Write-Host "::notice title=zhcn-install::exitcode=$($p.ExitCode)"
+          if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { Write-Host "::error title=zhcn-install::unexpected exitcode=$($p.ExitCode) (want 0 or 3010)" ; Write-Error "zh-CN install failed, exitcode=$($p.ExitCode)" }
+          # Definitive install outcome line + scope/dir hints.
+          Get-Content $log -ErrorAction SilentlyContinue |
+            Where-Object { $_ -match 'Installation success or error status|InstallScope|InstallDir|ProductCode|Adding schedule|Deleting|Created Install|Note: 1:|returned actual|value 3|MainEngineThread' } |
+            Select-Object -Last 25 | ForEach-Object { Write-Host "::notice title=zhcn-install-key::$_" }
+
+          # 3) Assert install: broad forensic search for where drawpaper.exe landed.
+          $cands = @(
+            (Join-Path $env:ProgramFiles 'drawpaper'),
+            (${env:ProgramFiles(x86)} + '\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper')
+          )
+          foreach ($c in $cands) { Write-Host "::notice title=zhcn-dir-cand::Test-Path [$c] = $(Test-Path $c)" }
+          $exe = $null
+          foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, (Join-Path $env:LOCALAPPDATA 'Programs'))) {
+            if (Test-Path $root) {
+              $found = Get-ChildItem -Path $root -Recurse -Filter 'drawpaper.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($found) { $exe = $found.FullName; break }
+            }
+          }
+          Write-Host "::notice title=zhcn-assert::drawpaper.exe found at = [$exe]"
+          if (-not $exe) { Write-Host "::error title=zhcn-assert::drawpaper.exe not found anywhere under Program Files/LOCALAPPDATA" ; Write-Error 'zh-CN probe: exe not found after install exit 0' }
+          Write-Host "::notice title=zhcn-assert::installed ProductVersion=$((Get-Item $exe).VersionInfo.ProductVersion)"
+          $installDir = Split-Path $exe -Parent
+
+          # 4) Uninstall zh-CN; emit exit code + log tail.
+          Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$installDir*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          $ulog = Join-Path $env:RUNNER_TEMP 'zhcn-uninstall.log'
+          Write-Host "Running: msiexec /x <zh-CN msi> /qn /norestart /lv* <log>"
+          $u = Start-Process -FilePath 'msiexec.exe' `
+            -ArgumentList '/x', "`"$($zhMsi.FullName)`"", '/qn', '/norestart', '/lv*', "`"$ulog`"" `
+            -PassThru
+          for ($w = 0; $w -lt 120; $w++) { Start-Sleep -Seconds 1; $u.Refresh(); if ($u.HasExited) { break } }
+          Write-Host "::notice title=zhcn-uninstall::exitcode=$($u.ExitCode)"
+          if ($u.ExitCode -ne 0 -and $u.ExitCode -ne 3010) { Write-Host "::error title=zhcn-uninstall::unexpected exitcode=$($u.ExitCode) (want 0 or 3010)" ; Write-Error "zh-CN uninstall failed, exitcode=$($u.ExitCode)" }
+          Get-Content $ulog -Tail 60 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "::notice title=zhcn-uninstall-log::$_" }
+          $removed = $false
+          for ($i = 1; $i -le 60; $i++) { Start-Sleep -Seconds 1; if (-not (Test-Path $installDir)) { $removed = $true; break } }
+          Write-Host "::notice title=zhcn-uninstall::dir-removed=$removed"
+          $regAfter = Find-DrawpaperUninstallEntries
+          Write-Host "Uninstall entries for drawpaper AFTER zh-CN uninstall: $($regAfter.Count)"
+          $regAfter | ForEach-Object { Write-Host "::notice title=zhcn-reg-after::$_" }
+          if (-not $removed) { Write-Error 'zh-CN probe: install dir still present 60s after uninstall' }
+          Write-Host "Smoke OK (zh-CN): install/uninstall probe complete"
+
       - name: Upload NSIS installer artifact
         uses: actions/upload-artifact@v4
         with:
@@ -1861,6 +1988,18 @@ jobs:
           # exists, so the upload never fails on unsigned branch runs.
           if-no-files-found: error
           retention-days: 30
+
+      - name: List MSI artifacts to upload (name + size evidence)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msis = Get-ChildItem -Path 'apps/desktop-tauri/src-tauri/target' -Recurse -Filter '*.msi' -File |
+            Where-Object { $_.FullName -match '[\\/]bundle[\\/]msi[\\/]' } | Sort-Object Name
+          Write-Host ("MSI files under bundle/msi ({0}):" -f $msis.Count)
+          foreach ($m in $msis) {
+            Write-Host "::notice title=msi-file::$($m.Name) = $($m.Length) bytes"
+          }
+          if ($msis.Count -lt 1) { Write-Error 'No MSI files found under bundle/msi' }
 
       - name: Upload MSI installer artifact
         uses: actions/upload-artifact@v4
@@ -2259,8 +2398,13 @@ jobs:
           echo "::group::SHA256SUMS.txt"
           cat SHA256SUMS.txt
           echo "::endgroup::"
-          # Four installers: NSIS x64/arm64 + MSI x64/arm64.
-          test "$(wc -l < SHA256SUMS.txt)" -ge 4
+          # Wave19 A: bilingual MSI -> 6 installers total, hard-pinned:
+          #   NSIS x64/arm64                              = 2 (*-setup.exe)
+          #   MSI  x64/arm64 x 2 cultures (en-US, zh-CN) = 4 (*.msi)
+          #   = 2 + 4 = 6. Fail loudly if the culture matrix drifts.
+          n_lines="$(wc -l < SHA256SUMS.txt)"
+          echo "SHA256SUMS lines = $n_lines (expected 6)"
+          test "$n_lines" -eq 6
 
       - name: Generate latest.json (Tauri updater manifest)
         # Wave15 A: builds the static updater manifest the desktop shell pulls
@@ -2338,9 +2482,9 @@ jobs:
             - `latest.json` + `*.sig` — 应用内「帮助 → 检查更新…」原生更新清单与签名（仅在配置了 updater 签名私钥后生效；未配置时应用自动回退到本网页手动下载）。
 
             **WiX MSI（企业 / 批量部署场景）**
-            - `drawpaper_*_x64_en-US.msi` — 64 位 Intel/AMD（按机器安装到 Program Files）
-            - `drawpaper_*_arm64_en-US.msi` — ARM64
+            - `drawpaper_*_x64_en-US.msi` / `drawpaper_*_x64_zh-CN.msi` — 64 位 Intel/AMD（按机器安装到 Program Files；en-US / zh-CN 两种安装界面 culture，二选一部署）
+            - `drawpaper_*_arm64_en-US.msi` / `drawpaper_*_arm64_zh-CN.msi` — ARM64
 
-            - `SHA256SUMS.txt` — 四个安装包（NSIS×2 + MSI×2）的 SHA-256 校验和（下载后 `sha256sum -c SHA256SUMS.txt` 校验）。
+            - `SHA256SUMS.txt` — 六个安装包（NSIS×2 + MSI×4：x64/arm64 × en-US/zh-CN）的 SHA-256 校验和（下载后 `sha256sum -c SHA256SUMS.txt` 校验）。
 
             升级方式：若本版已带 `latest.json`，旧版应用点「帮助 → 检查更新…」即可原生更新；否则手动下载新安装包覆盖安装（用户数据不动）。详见仓库 `CHANGELOG.md` 与 `docs/RELEASE.md`。
