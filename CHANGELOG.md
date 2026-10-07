@@ -12,6 +12,7 @@
 ### Windows 安装包
 
 - **WiX MSI 新增 zh-CN 中文 UI culture 双语包**：`bundle.windows.wix.language = ["en-US", "zh-CN"]` 后，x64 / arm64 各产出 en-US 与 zh-CN 两个 MSI，Windows 安装包总数从 4 增至 6（NSIS×2 + MSI×4），`SHA256SUMS.txt` 同步为 6 条。企业批量部署可二选一部署英文（ProductLanguage 1033）或中文（2052）静默安装包；NSIS 安装向导的中/英语言选择不受影响。详见 `docs/wave18/msi-bilingual.md`。
+- **更新器无网/异常回退接入无头确定性测试**（Wave19 C，Windows EXE）：把「检查更新」失败/离线/404 → 回退 Releases 网页的决策逻辑抽成 tauri-free 纯函数（`apps/desktop-tauri/src-tauri/src/update_probe.rs`），菜单回退分支与新隐藏 CLI `drawpaper.exe --update-check-probe <endpoint>` 共用同一份分类；CLI 在 builder 前拦截，一次 8s 超时 GET、不重试、不弹窗不下载，stdout 打 `decision=...` 行、退出码 0 含预期回退。release-windows x64 加一条必红冒烟（对封闭 loopback 端口跑探针，30s 内退出、exit 0、stdout 含 `decision=fallback-releases`），404/畸形清单/版本比较由纯函数单测覆盖。零后台：仅显式 CLI/菜单点击触发，无启动检查、无定时器、无轮询。
 
 ## 0.1.0-rc.10（2026-10-08）
 

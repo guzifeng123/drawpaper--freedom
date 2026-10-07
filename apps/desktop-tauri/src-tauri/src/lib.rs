@@ -42,6 +42,9 @@ mod startup;
 mod native_autosave;
 // Wave17 L: 桌面全局快捷键（纯逻辑见 shortcuts.rs；本文件只做 Tauri 接线）。
 mod shortcuts;
+// Wave19 C: 更新器无网/异常回退的无头测试缝（纯决策函数 + --update-check-probe，
+// 见 update_probe.rs）。菜单失败/回退分支与该 CLI 共用同一套原因分类。
+mod update_probe;
 
 /// GitHub repository URL — shared by 帮助→项目主页 / 检查更新 / About.
 const GITHUB_REPO: &str = "https://github.com/guzifeng123/drawpaper--freedom";
@@ -563,13 +566,19 @@ fn run_manual_update_check(app: &tauri::AppHandle) {
             Ok(Some(u)) => u,
             // Ok(None) -> already on the latest version; Err -> offline / 404 /
             // no latest.json yet / signature / parse error. Both fall back.
+            // Wave19 C: 失败原因走与 `--update-check-probe` 同一份纯分类函数，
+            // 保证菜单回退分支就是 CI 探测的那个决策。
             Ok(None) => {
-                log::info!("updater: already on the latest version");
+                log::info!("updater: already on the latest version (up-to-date -> releases page)");
                 open_releases_page(&app);
                 return;
             }
             Err(e) => {
-                log::warn!("updater check failed, falling back to Releases web page: {e}");
+                let reason = update_probe::reason_from_error_text(&e.to_string());
+                log::warn!(
+                    "updater check failed (reason={}), falling back to Releases web page: {e}",
+                    reason.as_str()
+                );
                 open_releases_page(&app);
                 return;
             }
@@ -1076,6 +1085,19 @@ pub fn run() {
             std::process::exit(native_autosave::selftest_cli(dir));
         } else {
             eprintln!("[native-autosave-selftest] missing <dir> argument");
+            std::process::exit(2);
+        }
+    }
+
+    // Wave19 C: 隐藏无头更新探测 `--update-check-probe <endpoint>`。在构建任何
+    // Tauri 插件之前拦截：不弹窗、不开 webview、不下载不安装，只发一次带 8s
+    // 超时的 GET，走到「决策」就退出（见 update_probe.rs）。CI 冒烟对一个不可达
+    // 端点跑它，证明回退分支不卡死、无弹窗、退出码与 stdout 可断言。
+    if let Some(pos) = argv.iter().position(|a| a == "--update-check-probe") {
+        if let Some(endpoint) = argv.get(pos + 1) {
+            std::process::exit(update_probe::probe_cli(endpoint));
+        } else {
+            eprintln!("[update-check-probe] missing <endpoint> argument");
             std::process::exit(2);
         }
     }
