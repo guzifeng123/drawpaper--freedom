@@ -4,6 +4,10 @@
 
 ## 未发布（Unreleased）
 
+### Windows 桌面端
+
+- **新增便携模式（U盘运行）**：在 `drawpaper.exe` 同目录放一个空标记文件 `drawpaper.portable`（或预先建好 `data\` 目录），启动后所有由宿主管理的数据——最近文件列表、窗口状态、时间戳备份、`drawpaper.log` 日志，以及 WebView2 的网页用户数据（EBWebView）——全部改写进 exe 旁的 `data\` 目录，与安装版写入 `%APPDATA%` 的数据完全互不干扰。标记缺失时维持原安装路径不变。`data\` 所在盘只读/不可写时自动回退系统目录并在启动日志说明原因，不崩溃。直接覆盖 exe 升级、`data\` 不动即可保留全部状态。详见 `docs/windows-user-guide.md`「便携版（U盘运行）」与 `docs/wave16/portable-mode.md`。
+
 ### 存储与资产
 
 - **资产按内容 hash 去重（content-addressed）**：图片 / 附件写入时按字节算 SHA-256，文件名即内容摘要——相同内容只存一份 blob，跨文档共享同一引用；跨设备同步 / 手动备份包对相同内容只传 / 只打包一份。schema 升到 v4，旧 nanoid 引用在打开时透明迁移为内容 hash（幂等、不丢资产）。

@@ -25,6 +25,11 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_log::{Target, TargetKind};
 
+/// Wave16-I: Windows portable-mode decision (pure function + fs probe). See
+/// `portable.rs`. Setting `app_directories_override` moves Tauri's path resolver
+/// itself, so every app-data call site in this file follows into `./data/`.
+mod portable;
+
 /// GitHub repository URL — shared by 帮助→项目主页 / 检查更新 / About.
 const GITHUB_REPO: &str = "https://github.com/guzifeng123/drawpaper--freedom";
 const GITHUB_RELEASES_LATEST: &str =
@@ -798,6 +803,32 @@ pub fn run() {
     // webview). It replaces the previous env_logger bootstrap; do NOT init a
     // second global logger here or the process will panic on setup.
 
+    // Wave16-I: Windows portable mode. Decide BEFORE building the app whether to
+    // redirect all app data next to the exe. The decision is a pure function fed
+    // by a one-shot filesystem probe; on redirect we set Tauri's
+    // `appDirectoriesOverride::Root`, which moves the path resolver itself, so
+    // every existing call site (recents, logs, window-state, backups, and the
+    // WebView2 user-data dir derived from app_local_data_dir) follows without a
+    // second set of path joins. No marker -> system dirs, behavior unchanged.
+    let exe_dir = portable::current_exe_dir();
+    let probe = portable::probe_exe_dir(&exe_dir);
+    let decision = portable::decide_portable(&probe);
+    // The global logger is not installed yet, so bootstrap via stderr; the log
+    // plugin repeats nothing here, but this line shows up in release console /
+    // CI captures when something looks off.
+    eprintln!(
+        "[drawpaper] portable={}: {}",
+        decision.portable, decision.reason
+    );
+
+    let mut context = tauri::generate_context!();
+    if let Some(root) = &decision.override_root {
+        context.config_mut().app.app_directories_override =
+            Some(tauri::utils::config::AppDirectoriesOverride::Root(
+                root.clone(),
+            ));
+    }
+
     tauri::Builder::default()
         // single-instance MUST be registered before any other plugin so it can
         // exit the second process before the rest of the app initializes.
@@ -928,6 +959,6 @@ pub fn run() {
             set_native_dirty,
             force_quit,
         ])
-        .run(tauri::generate_context!())
+        .run(context)
         .expect("error while running drawpaper desktop shell");
 }

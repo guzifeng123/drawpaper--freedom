@@ -57,6 +57,44 @@ Tauri 2 按 identifier `com.drawpaper.app` 决定目录名，Windows 上对应�
 
 文档本体本身（`.kbnote` 文件）由你通过「另存为」或同步通道放在任意目录，drawpaper 不会动你没绑定的文件。
 
+### 2.1 便携版（U盘运行，可选）
+
+drawpaper 也支持**不安装、直接拷到 U 盘/移动硬盘里跑**：所有数据都放在 exe 旁边的 `data\` 目录，和装在本机的版本**各写各的、互不干扰**。
+
+**怎么进入便携模式（二选一）：**
+
+1. 在 `drawpaper.exe` 同目录新建一个空文件，命名为 `drawpaper.portable`（内容随便留空即可）；**或者**
+2. 在 exe 同目录手动建一个 `data\` 文件夹。
+
+下次启动 drawpaper.exe 即进入便携模式。两个条件都没有 → 按安装版运行，数据仍在 `%APPDATA%\com.drawpaper.app\`，和以前一样。
+
+**便携模式下的目录结构：**
+
+```
+任意文件夹\
+├─ drawpaper.exe
+├─ drawpaper.portable        ← 你建的空标记（可选）
+└─ data\                     ← 便携数据全在这
+   ├─ drawpaper-recents.json  最近打开列表
+   ├─ window-state.json       窗口位置/大小
+   ├─ backups\*.kbnote       时间戳备份
+   ├─ logs\drawpaper.log      日志
+   └─ EBWebView\              WebView2 网页数据（画布/IndexedDB）
+```
+
+**特点：**
+
+- **与安装版互不干扰**：便携版读写 U盘上的 `data\`，安装版读写 `%APPDATA%`，两边数据各一份，不会串。
+- **升级不丢数据**：换新版本时只用新 `drawpaper.exe` 覆盖旧 exe，`data\` 整个保留，最近文件/窗口状态/备份/网页存储都在。
+- **换电脑即用**：把整个文件夹（含 `data\`）拷到另一台 Windows 机器，插上 U盘直接跑。
+
+**已知边界（请务必读）：**
+
+- 便携版**不写注册表、不注册 `.kbnote` 双击关联**。在资源管理器里双击 `.kbnote` 仍会唤起本机已安装的版本（或弹「打开方式」）；要打开便携版里的文档，请先开便携版，再用「文件 → 打开」。
+- WebView2 **运行时本身**是系统共享组件（Win11 自带、Win10 首启自动联网装一次），不在 `data\` 里；这不影响你的数据便携性。
+- 如果 `data\` 所在盘是**只读**的（CD-ROM、U盘锁死），drawpaper 写不进去，会自动**回退到本机 `%APPDATA%`** 运行，并在启动时说明原因——不会崩溃。
+- 设计细节见 [`wave16/portable-mode.md`](./wave16/portable-mode.md)。
+
 ## 3. `.kbnote` 文件关联
 
 安装包会把 `.kbnote` 扩展名注册给 drawpaper：
