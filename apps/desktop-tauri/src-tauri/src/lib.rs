@@ -25,6 +25,9 @@ use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_log::{Target, TargetKind};
 
+// Wave15 C: 诊断信息导出（纯 Rust，见 diagnostics.rs）。
+mod diagnostics;
+
 /// GitHub repository URL — shared by 帮助→项目主页 / 检查更新 / About.
 const GITHUB_REPO: &str = "https://github.com/guzifeng123/drawpaper--freedom";
 const GITHUB_RELEASES_LATEST: &str =
@@ -640,6 +643,9 @@ fn build_menu(handle: &tauri::AppHandle, state: &AppState) -> Menu<tauri::Wry> {
     // Wave13: 仅在用户点击时打开 releases/latest —— 零后台/启动网络请求。
     help.append(&item(handle, "help:check-update", "检查更新…")).unwrap();
     help.append(&item(handle, "help:open-data-dir", "打开数据目录")).unwrap();
+    // Wave15 C: 导出诊断信息（纯 Rust 全流程：原生 Save 对话框 → 收集 → zip，
+    // 完成后原生消息框反馈；取消不报错；零 web 改动）。
+    help.append(&item(handle, "help:export-diagnostics", "导出诊断信息…")).unwrap();
     help.append(&PredefinedMenuItem::separator(handle).unwrap()).unwrap();
     help.append(&item(handle, "help:home", "项目主页")).unwrap();
 
@@ -794,6 +800,19 @@ fn maybe_seed_startup_file(app: &tauri::AppHandle) {
 // ---------------------------------------------------------------------------
 
 pub fn run() {
+    // Wave15 C: 隐藏无头 CLI `--diag-export <zip>`。在构建任何 Tauri 插件
+    // （含 single-instance）之前拦截：不弹窗、不开 webview、不进主循环，
+    // 直接收集写出后以进程码退出。CI 冒烟与菜单共用 diagnostics::write_diagnostic_zip。
+    let argv: Vec<String> = std::env::args().collect();
+    if let Some(pos) = argv.iter().position(|a| a == "--diag-export") {
+        if let Some(out) = argv.get(pos + 1) {
+            std::process::exit(diagnostics::diag_export_cli(out));
+        } else {
+            eprintln!("[diag-export] missing <zip path> argument");
+            std::process::exit(2);
+        }
+    }
+
     // Wave13: tauri-plugin-log is the global `log` logger (file + stdout +
     // webview). It replaces the previous env_logger bootstrap; do NOT init a
     // second global logger here or the process will panic on setup.
@@ -869,6 +888,62 @@ pub fn run() {
                     if let Ok(dir) = app.path().app_data_dir() {
                         let _ = app.opener().reveal_item_in_dir(&dir);
                     }
+                    return;
+                }
+                // Wave15 C: 导出诊断信息。菜单回调是同步的，spawn 一个 async 任务
+                // 去 await 原生 Save 对话框 oneshot；取消即静默返回（不报错）。
+                if id == "help:export-diagnostics" {
+                    let app = app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let default_name = diagnostics::diagnostic_default_filename();
+                        let (tx, rx) = tokio::sync::oneshot::channel();
+                        app.dialog()
+                            .file()
+                            .set_title("导出诊断信息")
+                            .set_file_name(&default_name)
+                            .add_filter("ZIP 压缩包", &["zip"])
+                            .save_file(move |res| {
+                                let _ = tx.send(res);
+                            });
+                        let picked = match rx.await {
+                            Ok(p) => p,
+                            Err(_) => return,
+                        };
+                        let Some(picked) = picked else {
+                            // 用户取消 —— 不报错、不弹窗。
+                            return;
+                        };
+                        let out: std::path::PathBuf =
+                            match picked.into_path() { Ok(p) => p, Err(_) => return };
+                        let data_dir = app
+                            .path()
+                            .app_data_dir()
+                            .unwrap_or_else(|| std::path::PathBuf::from("."));
+                        let log_path =
+                            data_dir.join("logs").join("drawpaper.log");
+                        let result =
+                            diagnostics::write_diagnostic_zip(&data_dir, &log_path, &out);
+                        match result {
+                            Ok(report) => {
+                                let msg = format!(
+                                    "诊断信息已导出到：\n{}\n\n包内 {} 个条目，清单 {} 个文件。\n（不含任何 .kbnote 正文或 assets 资产字节）",
+                                    out.display(),
+                                    report.entry_names.len(),
+                                    report.manifest_count
+                                );
+                                app.dialog()
+                                    .message(msg)
+                                    .title("导出诊断信息")
+                                    .show(|_| {});
+                            }
+                            Err(e) => {
+                                app.dialog()
+                                    .message(format!("导出诊断信息失败：{e}"))
+                                    .title("导出诊断信息")
+                                    .show(|_| {});
+                            }
+                        }
+                    });
                     return;
                 }
 

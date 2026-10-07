@@ -78,6 +78,27 @@ jobs:
       - name: Build web frontend
         run: pnpm -r build
 
+      # Wave15 C: run the pure-Rust unit tests (diagnostics privacy walk / log
+      # tail cap / filename). Gates to x64: the runner CPU is x64, so the host
+      # triple tests compile and link natively. arm64 matrix skips (never faked).
+      - name: 'cargo test (x64): diagnostics privacy unit tests'
+        if: matrix.arch == 'x64'
+        working-directory: apps/desktop-tauri/src-tauri
+        shell: bash
+        timeout-minutes: 20
+        run: |
+          set -euo pipefail
+          # NOTE: no --locked — Wave15 C adds zip/winreg; Cargo.lock is refreshed
+          # by cargo in the runner workspace (we can't regenerate it locally,
+          # Linux has no cargo). The lockfile update is NOT committed on purpose.
+          cargo test 2>&1 | tr '\r' '\n' | tee /tmp/cargo-test.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" != "0" ]; then
+            echo "::error title=cargo-test::unit tests failed"
+            tail -n 40 /tmp/cargo-test.log
+            exit "$code"
+          fi
+
       - name: Tauri build (NSIS, ${{ matrix.arch }})
         working-directory: apps/desktop-tauri
         shell: bash
@@ -109,6 +130,75 @@ jobs:
             done
             exit "$code"
           fi
+
+      # ------------------------------------------------------------------
+      # Wave15 C: WebView2 离线策略实测取数。See docs/wave15/webview2-offline.md.
+      #   (a) baseline NSIS package size (current conf = downloadBootstrapper,
+      #       installs the runtime over the network at install time).
+      #   (b) embedBootstrapper variant size delta — built via `tauri build
+      #       --config` JSON override into a separate target dir, WITHOUT
+      #       touching the committed tauri.conf.json.
+      #   (c) Microsoft Evergreen Standalone (offline) Runtime installer sizes
+      #       for x64/x86/arm64 — the artifact Tauri `offlineInstaller` would
+      #       embed.
+      # ------------------------------------------------------------------
+      - name: 'Measure (a): baseline NSIS installer size'
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -Path 'apps/desktop-tauri/src-tauri/target' -Recurse -Filter '*-setup.exe' -File |
+            Where-Object { $_.FullName -match '[\\/]bundle[\\/]nsis[\\/]' } | Select-Object -First 1
+          $mb = [math]::Round($installer.Length / 1MB, 2)
+          Write-Host "::notice title=wv2-baseline-${{ matrix.arch }}::NSIS baseline setup.exe = $mb MB ($($installer.Name))"
+          Write-Host "BASELINE_NSIS_MB_${{ matrix.arch }}=$mb"
+
+      - name: 'Measure (c): download Evergreen Standalone Runtime installers, print sizes'
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/wv2
+          # Microsoft fwlinks: Evergreen Standalone (offline) installers.
+          #   x64 = LinkId 2124703, x86 = 2124701, arm64 = 2124699
+          declare -A LINKS=(
+            [x64]="https://go.microsoft.com/fwlink/p/?LinkId=2124703"
+            [x86]="https://go.microsoft.com/fwlink/p/?LinkId=2124701"
+            [arm64]="https://go.microsoft.com/fwlink/p/?LinkId=2124699"
+          )
+          for arch in x64 x86 arm64; do
+            out="/tmp/wv2/MicrosoftEdgeWebView2RuntimeInstaller${arch}.exe"
+            code=$(curl -L --silent --show-error --output "$out" --write-out '%{http_code}' "${LINKS[$arch]}")
+            sz=$(stat -c %s "$out" 2>/dev/null || echo 0)
+            mb=$(awk "BEGIN{printf \"%.2f\", $sz/1048576}")
+            echo "::notice title=wv2-standalone-$arch::HTTP $code, Evergreen Standalone $arch = $mb MB ($sz bytes)"
+          done
+          ls -la /tmp/wv2
+
+      - name: 'Measure (b): embedBootstrapper variant build + size (x64, separate target dir)'
+        if: matrix.arch == 'x64'
+        working-directory: apps/desktop-tauri
+        shell: bash
+        timeout-minutes: 25
+        run: |
+          set -euo pipefail
+          # Build into a separate CARGO_TARGET_DIR so we never clobber the
+          # baseline setup.exe the install smoke below consumes. The conf
+          # override is passed inline to `tauri build --config`; tauri.conf.json
+          # on disk is NOT modified.
+          export CARGO_TARGET_DIR="$GITHUB_WORKSPACE/apps/desktop-tauri/src-tauri/target-embed"
+          echo "::group::tauri build --config embedBootstrapper"
+          ./node_modules/.bin/tauri build --ci --bundles nsis \
+            --config '{"bundle":{"windows":{"nsis":{"webviewInstallMode":{"embedBootstrapper":true}}}}}' 2>&1 | tr '\r' '\n' | tee /tmp/tauri-embed.log
+          code=${PIPESTATUS[0]}
+          if [ "$code" != "0" ]; then
+            echo "::error title=embed-build-failed::tauri build --config embedBootstrapper exited $code"
+            tail -n 30 /tmp/tauri-embed.log
+            exit "$code"
+          fi
+          echo "::endgroup::"
+          installer=$(find "$CARGO_TARGET_DIR" -path '*bundle/nsis/*-setup.exe' -type f | head -n1)
+          sz=$(stat -c %s "$installer")
+          mb=$(awk "BEGIN{printf \"%.2f\", $sz/1048576}")
+          echo "::notice title=wv2-embedBootstrapper::embedBootstrapper setup.exe = $mb MB ($(basename "$installer"))"
 
       # ------------------------------------------------------------------
       # Smoke tests (Wave 12 C). See docs/wave12/windows-smoke.md for design.
@@ -522,6 +612,108 @@ jobs:
             Write-Error ("Smoke FAIL: expected exactly 1 drawpaper process after second launch, observed {0} (single-instance not holding?)" -f $count)
           }
           Write-Host "Smoke OK: second launch absorbed by running instance (process count = 1)"
+
+      - name: 'Smoke (x64): --diag-export privacy canary (no .kbnote/asset leak)'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Discover install dir the same way the prior steps do.
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'drawpaper'),
+            (Join-Path $env:ProgramFiles 'drawpaper')
+          )
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'drawpaper') }
+          $installDir = $null
+          foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
+          if (-not $installDir) {
+            foreach ($root in @((Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+              if ($root -and (Test-Path $root)) {
+                $hit = Get-ChildItem $root -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { $installDir = $hit.FullName; break }
+              }
+            }
+          }
+          if (-not $installDir) { Write-Error 'Smoke FAIL: install dir not found at diag-export smoke' }
+          $exe = Join-Path $installDir 'drawpaper.exe'
+          if (-not (Test-Path $exe)) { $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName }
+          Write-Host "App exe = $exe"
+
+          # Plant a canary: a .kbnote whose BODY is a unique secret string, plus
+          # an assets/ file with the same bytes. The diag export MUST never
+          # read/pack these bytes.
+          $dataDir = Join-Path $env:APPDATA 'com.drawpaper.app'
+          New-Item -ItemType Directory -Force -Path (Join-Path $dataDir 'assets') | Out-Null
+          $canary = "CANARY-7f3a9b2e4d5c-never-leak-body-" + [guid]::NewGuid().ToString('N')
+          Set-Content -Path (Join-Path $dataDir 'SECRET-canary.kbnote') -Value $canary -NoNewline -Encoding utf8
+          Set-Content -Path (Join-Path $dataDir 'assets' 'img.png') -Value $canary -NoNewline -Encoding utf8
+          Write-Host "Planted canary (body length=$($canary.Length)) at $dataDir"
+
+          $outZip = Join-Path $env:TEMP 'dp-diag.zip'
+          Remove-Item $outZip -ErrorAction SilentlyContinue
+          Write-Host "Running: drawpaper.exe --diag-export $outZip"
+          $p = Start-Process -FilePath $exe -ArgumentList '--diag-export', $outZip -PassThru
+          for ($w = 0; $w -lt 60; $w++) {
+            Start-Sleep -Seconds 1
+            $p.Refresh()
+            if ($p.HasExited) { break }
+          }
+          if (-not $p.HasExited) {
+            Write-Error 'Smoke FAIL: drawpaper.exe --diag-export did not exit within 60s'
+          }
+          Write-Host "diag-export exit code = $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { Write-Error "Smoke FAIL: --diag-export exited $($p.ExitCode)" }
+          if (-not (Test-Path $outZip)) { Write-Error 'Smoke FAIL: diag zip not produced' }
+          $zipMb = [math]::Round((Get-Item $outZip).Length / 1MB, 3)
+          Write-Host "diag zip = $outZip ($zipMb MB)"
+
+          # Extract and assert.
+          $extract = Join-Path $env:TEMP 'dp-diag-extract'
+          Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
+          Expand-Archive -Path $outZip -DestinationPath $extract -Force
+          Write-Host "::group::Extracted diag zip entries"
+          Get-ChildItem $extract -Recurse -File | ForEach-Object {
+            Write-Host ("  - {0}  ({1} bytes)" -f $_.FullName.Substring($extract.Length+1), $_.Length)
+          }
+          Write-Host "::endgroup::"
+
+          # 1) no *.kbnote entry.
+          $kbnote = Get-ChildItem $extract -Recurse -File -Filter '*.kbnote' -ErrorAction SilentlyContinue
+          if ($kbnote) { $kbnote | ForEach-Object { Write-Host "LEAK: $($_.FullName)" }; Write-Error 'Smoke FAIL: zip contains a *.kbnote entry' }
+          # 2) no assets/ entry.
+          $assets = Get-ChildItem $extract -Recurse -File | Where-Object { $_.FullName -match '[\\/]assets[\\/]' }
+          if ($assets) { $assets | ForEach-Object { Write-Host "LEAK: $($_.FullName)" }; Write-Error 'Smoke FAIL: zip contains an assets/ entry' }
+          # 3) canary body string zero hits across ALL extracted files.
+          $leak = Get-ChildItem $extract -Recurse -File | Select-String -SimpleMatch -Pattern $canary -List -ErrorAction SilentlyContinue
+          if ($leak) { $leak | ForEach-Object { Write-Host "LEAK in $($_.Path): $($_.Line)" }; Write-Error 'Smoke FAIL: canary body string found inside diagnostic zip!' }
+          Write-Host "Privacy OK: no *.kbnote, no assets/, canary string zero hits"
+
+          # 4) system.json fields.
+          $sysPath = Join-Path $extract 'system.json'
+          if (-not (Test-Path $sysPath)) { Write-Error 'Smoke FAIL: system.json missing' }
+          $sys = Get-Content -Raw $sysPath | ConvertFrom-Json
+          Write-Host ("system.json: version={0} os={1} os_version={2} arch={3} webview2={4} collected_at={5}" -f $sys.version, $sys.os, $sys.os_version, $sys.arch, $sys.webview2_runtime_version, $sys.collected_at)
+          if (-not $sys.version) { Write-Error 'Smoke FAIL: system.version empty' }
+          if (-not $sys.arch) { Write-Error 'Smoke FAIL: system.arch empty' }
+          if ($null -eq $sys.webview2_runtime_version) { Write-Error 'Smoke FAIL: system.webview2_runtime_version missing' }
+          if ($sys.webview2_runtime_version -eq 'unknown') { Write-Host '::warning title=wv2-detect::webview2_runtime_version came back unknown on the runner' }
+
+          # 5) manifest entries have exactly name/size/mtime.
+          $manPath = Join-Path $extract 'files-manifest.json'
+          if (-not (Test-Path $manPath)) { Write-Error 'Smoke FAIL: files-manifest.json missing' }
+          $man = Get-Content -Raw $manPath | ConvertFrom-Json
+          Write-Host ("files-manifest.json lists {0} file(s)" -f $man.Count)
+          $bad = @()
+          foreach ($e in $man) {
+            $props = @($e.PSObject.Properties.Name | Sort-Object)
+            if (($props -join ',') -ne 'name,size,mtime') { $bad += ($props -join ',') }
+          }
+          if ($bad.Count -gt 0) { Write-Error ("Smoke FAIL: manifest entries with unexpected fields: " + ($bad -join ' | ')) }
+          $names = $man | ForEach-Object { $_.name }
+          Write-Host "  manifest still lists canary by name (metadata-only): $($names -contains 'SECRET-canary.kbnote')"
+          Write-Host "Smoke OK: diag-export privacy canary passed"
 
       - name: 'Smoke (x64): silent uninstall, install dir removed'
         if: matrix.arch == 'x64'

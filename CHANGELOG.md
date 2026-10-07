@@ -2,6 +2,13 @@
 
 本文件按「用户可见能力」分组归纳各版本，不逐条罗列提交。每个版本标题为语义化版本号，预发布版后缀 `-rc.N` / `-beta.N` / `-alpha.N`。
 
+## 未发布（Unreleased）
+
+### Windows 桌面端
+
+- **新增「帮助 → 导出诊断信息」**：一键打包环境与日志为 `drawpaper-diagnostic-YYYYMMDD.zip`（纯 Rust，零网页改动）。包内含 `system.json`（app/OS/WebView2 Runtime 版本与架构）、日志尾部（约 256KB）、数据目录文件清单（仅路径/大小/时间）与说明；**绝不打包任何 `.kbnote` 正文或图片附件字节**，取消对话框不报错，成功/失败用原生消息框反馈。另提供隐藏无头命令 `drawpaper.exe --diag-export <zip>` 供 CI/排障直接调用。
+- **WebView2 离线安装实测**：在 Windows CI 实测三种安装策略的包体积（默认联网下载 / 内嵌引导 stub / 微软 Evergreen 独立运行时安装器），据实测数据决定是否内置离线运行时；离线 Windows 用户需先手动装 WebView2 Runtime（见用户指南 §4）。
+
 ## 0.1.0-rc.7
 
 同步正确性修复、Windows 桌面缺陷收口、触屏与多标签协作打磨，以及「直接下载 PDF」矢量化。
