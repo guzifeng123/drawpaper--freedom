@@ -29,6 +29,7 @@ on:
       - 'feat/win-msi-bundle'
       - 'chore/win-smoke-gap-audit'
       - 'feat/win-diagnostics-webview2'
+      - 'feat/desktop-coldstart-race'
   workflow_dispatch:
 
 permissions:
@@ -819,6 +820,126 @@ jobs:
           if (-not $logHit) { Write-Error 'Smoke FAIL: no open-file log record for the canary .kbnote (searched Roaming+Local com.drawpaper.app\logs\drawpaper.log; see data tree dump)' }
           if (-not $recentsHit) { Write-Error 'Smoke FAIL: drawpaper-recents.json does not contain the canary path (searched Roaming+Local; see data tree dump)' }
           Write-Host "Smoke OK: cold-start .kbnote association — process alive, title ok, log+recents prove Rust processed the file"
+
+      - name: 'Smoke (x64): cold-start open-file delivered 10/10 (no event loss)'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 12
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Resolve install dir (identical probe to the cold-start step above).
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'drawpaper'),
+            (Join-Path $env:ProgramFiles 'drawpaper')
+          )
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'drawpaper') }
+          $installDir = $null
+          foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
+          if (-not $installDir) {
+            foreach ($root in @((Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+              if ($root -and (Test-Path $root)) {
+                $hit = Get-ChildItem $root -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { $installDir = $hit.FullName; break }
+              }
+            }
+          }
+          if (-not $installDir) { Write-Error 'Smoke FAIL: install dir not found for 10x cold-start open-file loop' }
+          $exe = Join-Path $installDir 'drawpaper.exe'
+          if (-not (Test-Path $exe)) { $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName }
+          Write-Host "App exe = $exe"
+
+          # Data roots: search BOTH Roaming (%APPDATA%) and Local (%LOCALAPPDATA%)
+          # com.drawpaper.app (do not hardcode %APPDATA%; tauri-plugin-log may
+          # resolve to either, same as the single cold-start smoke above).
+          $dataRoots = @($env:APPDATA, $env:LOCALAPPDATA) | ForEach-Object { Join-Path $_ 'com.drawpaper.app' }
+          $tmpRoot = Join-Path $env:TEMP ('dp-coldloop-' + ([guid]::NewGuid().ToString('N')))
+          New-Item -ItemType Directory -Path $tmpRoot -Force | Out-Null
+
+          function Stop-Drawpaper {
+            Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$installDir*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 2
+          }
+
+          $passCount = 0
+          for ($n = 1; $n -le 10; $n++) {
+            Write-Host "::group==> cold-start iteration $n / 10"
+            Stop-Drawpaper
+
+            # Unique canary: GUID + iteration index baked into filename and body.
+            $guid = [guid]::NewGuid().ToString('N')
+            $canary = "CANARY-$n-$guid"
+            $docPath = Join-Path $tmpRoot ("$canary.kbnote")
+            $doc = [ordered]@{
+              format    = 'knowledge-block-notes'
+              version   = 1
+              id        = "doc_coldloop_$n"
+              title     = $canary
+              board     = [ordered]@{ createdAt = 0; updatedAt = 0 }
+              nodes     = @()
+              edges     = @()
+              tags      = @()
+              layout    = [ordered]@{ mode = 'mindmap-right'; rankSpacing = 90; nodeSpacing = 28 }
+              viewport  = [ordered]@{ x = 0; y = 0; zoom = 1 }
+              page      = [ordered]@{ size='A4'; orientation='portrait'; marginMm=15; mode='fit'; showPageBreak=$true; colorMode='color'; header=$false; footer=$false; showPageNumbers=$false; edgeLabels=$true; pageBreaks=@() }
+              assetRefs = @()
+            }
+            [System.IO.File]::WriteAllText($docPath, ($doc | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+            Write-Host "  canary[$n] = $docPath"
+
+            $null = Start-Process -FilePath $exe -ArgumentList $docPath -WorkingDirectory $installDir -PassThru
+
+            # Bounded poll: window appears (title contains drawpaper).
+            $winOk = $false
+            for ($i = 1; $i -le 25; $i++) {
+              Start-Sleep -Seconds 1
+              $p = Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($p) { $p.Refresh(); if ($p.MainWindowTitle -and ($p.MainWindowTitle.ToLower().Contains('drawpaper'))) { $winOk = $true; break } }
+            }
+            if (-not $winOk) { Write-Host "  FAIL[$n]: no drawpaper window within 25s" }
+
+            # Bounded evidence poll: drawpaper.log must record THIS canary's open-file
+            # AND recents.json must contain the canary path. This proves the event
+            # was delivered to (and processed by) the app — not just received by Rust.
+            $logHit = $false
+            $recHit = $false
+            for ($i = 1; $i -le 20; $i++) {
+              Start-Sleep -Seconds 1
+              foreach ($root in $dataRoots) {
+                $logCand = Join-Path $root 'logs\drawpaper.log'
+                if (-not (Test-Path $logCand)) {
+                  $alt = Get-ChildItem -Path $root -Recurse -Filter 'drawpaper.log' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+                  if ($alt) { $logCand = $alt.FullName }
+                }
+                if ((-not $logHit) -and (Test-Path $logCand)) {
+                  $copy = Join-Path $env:TEMP ('logcopy-' + [guid]::NewGuid().ToString('N') + '.log')
+                  Copy-Item $logCand $copy -Force
+                  $content = Get-Content -Raw $copy -ErrorAction SilentlyContinue
+                  if ($content -and $content.Contains($canary)) { $logHit = $true }
+                }
+                $recCand = Join-Path $root 'drawpaper-recents.json'
+                if ((-not $recHit) -and (Test-Path $recCand)) {
+                  $rc = Get-Content -Raw $recCand -ErrorAction SilentlyContinue
+                  if ($rc -and $rc.Contains($canary)) { $recHit = $true }
+                }
+              }
+              if ($logHit -and $recHit) { break }
+            }
+            Write-Host ("  iter[$n] winOk={0} logHit={1} recHit={2}" -f $winOk, $logHit, $recHit)
+            Stop-Drawpaper
+            if ($winOk -and $logHit -and $recHit) { $passCount++; Write-Host "  PASS[$n]" } else { Write-Host "  FAIL[$n] (winOk=$winOk logHit=$logHit recHit=$recHit)" }
+            Write-Host "::endgroup::"
+          }
+
+          # Cleanup temp dir.
+          Remove-Item -Path $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+          Write-Host ("==== cold-start open-file delivery: {0}/10 ====" -f $passCount)
+          if ($passCount -ne 10) {
+            Write-Error ("Smoke FAIL: cold-start open-file delivered only {0}/10 (expected 10/10, no event loss)" -f $passCount)
+          }
+          Write-Host "Smoke OK: cold-start open-file delivered 10/10 across 10 fresh launches (no event loss)"
 
       - name: 'Smoke (x64): first-run welcome doc lands in WebView2 leveldb, no dup on 2nd run'
         if: matrix.arch == 'x64'

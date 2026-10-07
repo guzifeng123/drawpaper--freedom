@@ -35,6 +35,9 @@ mod portable;
 // Wave15 C: 诊断信息导出（纯 Rust，见 diagnostics.rs）。
 mod diagnostics;
 
+// Wave17 J2: 冷启动外部文件打开事件的可靠投递队列（纯逻辑 + 单测，见 startup.rs）。
+mod startup;
+
 /// GitHub repository URL — shared by 帮助→项目主页 / 检查更新 / About.
 const GITHUB_REPO: &str = "https://github.com/guzifeng123/drawpaper--freedom";
 const GITHUB_RELEASES_LATEST: &str =
@@ -76,6 +79,10 @@ struct AppState {
     /// Wave12 close-guard: frontend-reported dirty flag for the bound native
     /// file. Frontend keeps this in sync via `set_native_dirty`.
     native_dirty: Mutex<bool>,
+    /// Wave17 J2: 待投递的外部打开 `.kbnote` 队列。冷启动 setup 阶段一次性 emit 会因
+    /// 前端监听尚未注册而丢失；这里把富载荷入队，由 setup 里 spawn 的有界重发泵反复
+    /// emit，直到前端成功加载后经 `bind_native_file(path)` 隐式 ack（见 startup.rs）。
+    startup: Mutex<startup::StartupQueueInner>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -385,10 +392,22 @@ fn set_window_title(window: tauri::WebviewWindow, title: String) -> Result<(), S
 /// Frontend tells the shell whether the current document is bound to a native
 /// `.kbnote` on disk. `Some(path)` = bound; `None` = IDB-only doc (closing it
 /// never prompts — IndexedDB auto-save is the durability net).
+///
+/// Wave17 J2: `Some(path)` is also the **implicit ack** for the cold-start open
+/// queue — the frontend only calls this right after successfully loading a doc
+/// via `app:open-file` (routeOpenFile → bindNativeFile). Removing the matching
+/// pending payload stops the bounded redelivery pump from re-emitting it.
 #[tauri::command]
 fn bind_native_file(state: tauri::State<'_, AppState>, path: Option<String>) {
     let mut bound = state.native_bound.lock().unwrap();
     *bound = path.is_some();
+    drop(bound);
+    if let Some(p) = &path {
+        let acknowledged = state.startup.lock().unwrap().ack(p);
+        if acknowledged {
+            log::info!("open-file ack (bind_native_file): {p}");
+        }
+    }
 }
 
 /// Frontend pushes the dirty flag of the bound native file. Combined with
@@ -848,19 +867,12 @@ fn open_external_path(app: &tauri::AppHandle, p: &Path) {
             // Wave15 D: observability. The error branch already logs; log a
             // success line too so release-windows smoke can assert (via
             // drawpaper.log) that Rust received and processed the argv[1] /
-            // recent / single-instance file-open — independent of whether the
-            // webview listener was mounted in time (cold-start race, see
-            // docs/wave15/desktop-gap-audit.md).
+            // recent / single-instance file-open. Wave17 J2: this line stays
+            // byte-identical (smoke greps `open-file` + the canary token); the
+            // delivery itself now goes through the bounded redelivery pump so
+            // cold-start no longer loses the event.
             log::info!("open-file (external): {path_s} (name={name})");
-            let _ = app.emit(
-                "app:open-file",
-                serde_json::json!({
-                    "path": path_s,
-                    "name": name,
-                    "text": text,
-                    "external": true,
-                }),
-            );
+            queue_and_emit_open_file(app, path_s, name, text);
         }
         Err(e) => {
             log::warn!("external .kbnote unreadable, dropping from recents: {path_s}: {e}");
@@ -892,6 +904,70 @@ fn open_recent_by_index(app: &tauri::AppHandle, n: usize) {
     open_external_path(app, &PathBuf::from(path));
 }
 
+/// Wave17 J2: enqueue a rich `app:open-file` payload and emit it immediately.
+///
+/// The immediate emit covers the already-warm cases (hot-start single-instance
+/// callback, File→打开最近 click) where the webview listener is already
+/// registered. The payload ALSO lands in the managed startup queue; the bounded
+/// redelivery pump (spawned in `setup`) re-emits on a fixed interval until the
+/// frontend acks via `bind_native_file(path)`. On cold start the immediate emit
+/// is lost (listener not registered yet — see docs/wave17/coldstart-race.md),
+/// but the pump catches up within one interval once the webview has loaded.
+fn queue_and_emit_open_file(app: &tauri::AppHandle, path: String, name: String, text: String) {
+    let seq = {
+        let state = app.state::<AppState>();
+        let mut guard = state.startup.lock().unwrap();
+        guard.enqueue(path.clone(), name.clone(), text.clone())
+    };
+    log::debug!("open-file queued seq={seq}: {path}");
+    let _ = app.emit(
+        "app:open-file",
+        serde_json::json!({
+            "path": path,
+            "name": name,
+            "text": text,
+            "external": true,
+        }),
+    );
+}
+
+/// Wave17 J2: the bounded redelivery pump. Spawned once in `setup`. Every 400ms
+/// it drains the startup queue (re-emitting each pending payload) until the
+/// frontend acks a path via `bind_native_file`, or the payload exceeds
+/// `startup::MAX_ATTEMPTS` attempts. Runs for the whole process lifetime so
+/// hot-start enqueues share the exact same delivery/ack channel as cold start.
+fn spawn_open_file_delivery_pump(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+            let (to_emit, dropped) = {
+                let state = app.state::<AppState>();
+                let mut guard = state.startup.lock().unwrap();
+                guard.retry_tick(startup::MAX_ATTEMPTS)
+            };
+            for d in dropped {
+                log::warn!(
+                    "open-file giving up after {} attempts: {}",
+                    startup::MAX_ATTEMPTS,
+                    d.path
+                );
+            }
+            for p in to_emit {
+                log::info!("open-file (redeliver seq={}): {}", p.seq, p.path);
+                let _ = app.emit(
+                    "app:open-file",
+                    serde_json::json!({
+                        "path": p.path,
+                        "name": p.name,
+                        "text": p.text,
+                        "external": true,
+                    }),
+                );
+            }
+        }
+    });
+}
+
 // ---------------------------------------------------------------------------
 // File-association launch: when Windows hands us a .kbnote path on the command
 // line (double-click), stash it in state and emit to the frontend.
@@ -899,13 +975,13 @@ fn open_recent_by_index(app: &tauri::AppHandle, n: usize) {
 
 fn maybe_seed_startup_file(app: &tauri::AppHandle) {
     let argv: Vec<String> = std::env::args().collect();
-    // argv[0] is the exe; a file association launch passes the path as argv[1].
-    if let Some(path) = argv.get(1) {
-        // Delegate to the shared rich-open helper: validates the `.kbnote`
-        // extension/existence, reads the file, binds current_path, pushes
-        // recents and emits the rich `app:open-file` payload — identical to the
-        // hot-start (single-instance) path so cold/hot launches behave the same.
-        open_external_path(app, Path::new(path));
+    // Wave17 J2: argv classification (is it really a .kbnote?) lives in the pure
+    // startup module so it is unit-tested. Delegate to the shared rich-open
+    // helper: validates the extension/existence, reads the file, binds
+    // current_path, pushes recents and enqueues+emits the rich `app:open-file`
+    // payload — identical to the hot-start (single-instance) path.
+    if let Some(path) = startup::classify_argv(&argv) {
+        open_external_path(app, &path);
     }
 }
 
@@ -1008,8 +1084,16 @@ pub fn run() {
                 *r = loaded;
             }
 
-            // Seed startup .kbnote (double-click association).
+            // Seed startup .kbnote (double-click association). This enqueues +
+            // immediately emits; on cold start the immediate emit races the
+            // not-yet-registered webview listener, so the bounded redelivery
+            // pump below guarantees the event is eventually delivered.
             maybe_seed_startup_file(&app.handle());
+
+            // Wave17 J2: spawn the bounded open-file redelivery pump so the
+            // seeded (and any later hot-start / menu) open-file payload is
+            // re-emitted until the frontend acks via bind_native_file.
+            spawn_open_file_delivery_pump(app.handle().clone());
 
             // Build native menu and route events to the frontend.
             let menu = build_menu(app.handle(), &app.state::<AppState>());
