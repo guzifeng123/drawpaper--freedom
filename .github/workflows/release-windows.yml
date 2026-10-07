@@ -179,8 +179,13 @@ jobs:
       - name: 'Measure (c): download Evergreen Standalone Runtime installers, print sizes'
         shell: bash
         timeout-minutes: 10
+        # Informational data collection only (records offline runtime sizes for
+        # the WebView2 bundling decision). Microsoft fwlinks occasionally drop
+        # the transfer on shared runners (curl exit 18); a failed download must
+        # never gate the release: retry, then warn and continue.
+        continue-on-error: true
         run: |
-          set -euo pipefail
+          set -uo pipefail
           mkdir -p /tmp/wv2
           # Microsoft fwlinks: Evergreen Standalone (offline) installers.
           #   x64 = LinkId 2124703, x86 = 2124701, arm64 = 2124699
@@ -191,12 +196,12 @@ jobs:
           )
           for arch in x64 x86 arm64; do
             out="/tmp/wv2/MicrosoftEdgeWebView2RuntimeInstaller${arch}.exe"
-            code=$(curl -L --silent --show-error --output "$out" --write-out '%{http_code}' "${LINKS[$arch]}")
+            code=$(curl -L --silent --show-error --retry 3 --retry-all-errors               --output "$out" --write-out '%{http_code}' "${LINKS[$arch]}" || echo "000")
             sz=$(stat -c %s "$out" 2>/dev/null || echo 0)
             mb=$(awk "BEGIN{printf \"%.2f\", $sz/1048576}")
             echo "::notice title=wv2-standalone-$arch::HTTP $code, Evergreen Standalone $arch = $mb MB ($sz bytes)"
           done
-          ls -la /tmp/wv2
+          ls -la /tmp/wv2 || true
 
       - name: 'Measure (b): embedBootstrapper variant build + size (x64)'
         if: matrix.arch == 'x64'
