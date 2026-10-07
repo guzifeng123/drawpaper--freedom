@@ -85,6 +85,9 @@ function Fail([string]$msg) {
     Write-Host "FAIL: $msg" -ForegroundColor Red
     Write-Host "=============================================================="
     Write-Host ""
+    # Emit a GitHub Actions workflow command so the reason survives as a
+    # check-run annotation (step logs themselves are not readable in this CI).
+    Write-Host "::error title=portable-smoke::$($msg -replace "`r?`n",' ')"
     exit 1
 }
 
@@ -197,7 +200,8 @@ function Wait-Until([int]$MaxSeconds, [scriptblock]$predicate, [string]$what) {
     return $final
 }
 
-# Snapshot both system AppData roots; returns an ordered hashtable.
+# Snapshot both system AppData roots; returns an ordered hashtable whose values
+# also carry the full relative file set (so growth can be named, not just counted).
 function Get-SystemAppDataSnapshot {
     $roaming = Join-Path $env:APPDATA 'com.drawpaper.app'
     $local  = Join-Path $env:LOCALAPPDATA 'com.drawpaper.app'
@@ -205,13 +209,15 @@ function Get-SystemAppDataSnapshot {
     foreach ($pair in @(@('roaming', $roaming), @('local', $local))) {
         $name = $pair[0]; $p = $pair[1]
         $existed = Test-Path -LiteralPath $p
+        $files = @{}
         if ($existed) {
-            $count = @(Get-ChildItem -LiteralPath $p -Recurse -File -ErrorAction SilentlyContinue).Count
-        } else {
-            $count = 0
+            Get-ChildItem -LiteralPath $p -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+                $rel = $_.FullName.Substring($p.Length).TrimStart('\')
+                $files[$rel] = $_.Length
+            }
         }
-        $snap[$name] = [pscustomobject]@{ Path = $p; Existed = $existed; Count = $count }
-        Info "system $($name) AppData snapshot: existed=$existed files=$count ($p)"
+        $snap[$name] = [pscustomobject]@{ Path = $p; Existed = $existed; Count = $files.Count; Files = $files }
+        Info "system $($name) AppData snapshot: existed=$existed files=$($files.Count) ($p)"
     }
     return $snap
 }
@@ -224,15 +230,18 @@ function Assert-NoSystemAppDataGrowth($before, [string]$label) {
         if (-not $b.Existed) {
             if ($a.Existed) {
                 Write-TreeDiag $a.Path
-                Fail "[$label] portable run CREATED $($a.Path) — data leaked into system AppData!"
+                $leaked = @($a.Files.Keys | Select-Object -First 15) -join ', '
+                Fail "[$label] portable run CREATED $($a.Path) (sample new files: $leaked) — data leaked into system AppData!"
             }
             Ok "[$label] system $($name) AppData was not created"
         } else {
             if ($a.Count -gt $b.Count) {
                 Write-Host "  before: $($b.Count) files under $($b.Path)"
                 Write-Host "  after : $($a.Count) files under $($a.Path)"
+                $newFiles = @($a.Files.Keys | Where-Object { -not $b.Files.ContainsKey($_) } | Select-Object -First 15)
+                Write-Host "  new files (up to 15): $($newFiles -join ', ')"
                 Write-TreeDiag $a.Path
-                Fail "[$label] system $($name) AppData grew ($($b.Count) -> $($a.Count)) during portable run — data leaked!"
+                Fail "[$label] system $($name) AppData grew ($($b.Count) -> $($a.Count)); new: $($newFiles -join ' | ')"
             }
             Ok "[$label] system $($name) AppData file count stable ($($b.Count) -> $($a.Count))"
         }
