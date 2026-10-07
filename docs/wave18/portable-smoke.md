@@ -12,7 +12,7 @@
 2. 快照 `%APPDATA%\com.drawpaper.app` 与 `%LOCALAPPDATA%\com.drawpaper.app` 的存在性与文件数。
 3. **先 `Stop-AllDrawpaper` 杀掉所有残留 `drawpaper.exe`**（单实例插件按 app 标识全局命名，前序 CI 步骤若残留一个系统安装版进程，会把我们的便携启动吸收进已有实例、便携 exe 立即退出且不落 `./data`——这是头号 flaky 源，故每次启动前都清场）。
 4. 启动便携 exe，**有界轮询**（上限 `WaitSeconds*2` = 30s）等待 `.\data\logs\drawpaper.log` 出现。
-5. 日志出现后再给 `WaitSeconds`（15s）有界宽限，硬断言 `.\data\` 下至少落 `drawpaper-recents.json` / `window-state.json` / `EBWebView/` 之一（证明路径重定向不止挪了日志 target）。
+5. 日志出现后再给 `WaitSeconds`（15s）有界等待 recents/window-state/EBWebView 落盘，**仅记录不阻断**——这几个产物落盘时机不一（window-state 只在关闭时写、EBWebView leveldb 懒初始化、recents 仅在打开文件时写），硬要求会 flaky；真正证明重定向的是下一步"系统 AppData 不增长"。
 6. 断言系统 AppData **未被本次运行新建**（若运行前已存在，则断言文件数不增长——CI 上安装版已被前面的冒烟跑过，目录必然存在，走文件数对比分支）。
 
 ### b. data/ 目录触发
@@ -36,7 +36,7 @@
 
 | 用例 | 硬断言 | 说明 |
 |---|---|---|
-| a | `.\data\logs\drawpaper.log` 30s 内出现；其后 15s 内 recents/window-state/EBWebView 至少其一落盘；系统 Roaming/Local AppData 未新建且文件数不增长 | 任一不过即 exit 1 |
+| a | `.\data\logs\drawpaper.log` 30s 内出现；系统 Roaming/Local AppData 未新建且文件数不增长 | recents/window-state/EBWebView 仅记录不阻断；任一硬断言不过即 exit 1 |
 | b | 同 a（无 marker、仅预建空 data/ 路径） | 同上 |
 | c | 重装 exit code 0；重装后原 data 文件全部存在；第二次启动进程存活且 `drawpaper.log` 字节/mtime 增长；系统 AppData 不增长 | 日志增长是"便携仍被识别"的直接证据 |
 
