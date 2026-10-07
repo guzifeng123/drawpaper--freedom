@@ -1338,8 +1338,15 @@ jobs:
 
           function Invoke-Selftest($dir, $logPath) {
             Remove-Item $logPath -ErrorAction SilentlyContinue
-            Write-Host "Running: cmd /c `"$exe`" --native-autosave-selftest `"$dir`" > `"$logPath`" 2>&1"
-            $cp = Start-Process -FilePath 'cmd.exe' -ArgumentList '/c', "`"$exe`" --native-autosave-selftest `"$dir`" > `"$logPath`" 2>&1" -PassThru -WindowStyle Hidden
+            # Build the cmd /c line with an OUTER quoted pair around the whole
+            # payload: Start-Process joins -ArgumentList raw (no re-quoting), so
+            # cmd.exe would otherwise see six raw quotes and apply its "strip
+            # first+last quote" rule, mangling the exe path. Wrapping the payload
+            # in extra outer quotes makes cmd strip THOSE instead — the inner
+            # quoting survives exactly like the diag canary's direct pwsh call.
+            $argLine = '/c "' + '"' + $exe + '" --native-autosave-selftest "' + $dir + '" > "' + $logPath + '" 2>&1"'
+            Write-Host "Running: cmd.exe $argLine"
+            $cp = Start-Process -FilePath 'cmd.exe' -ArgumentList $argLine -PassThru -WindowStyle Hidden
             for ($w = 0; $w -lt 60; $w++) {
               Start-Sleep -Seconds 1
               $cp.Refresh()
