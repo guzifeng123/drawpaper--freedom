@@ -45,12 +45,17 @@ Rust、VS2022 ARM、NSIS 3.10；**缺 WiX**）。本仓库为公开仓库，技�
 
 ## P4（时间盒，各一次尝试）：更新器无网回退 / 诊断菜单 UI 弱断言
 
-两个脚本均已写好并以 **`continue-on-error: true`** 接入（失败只琥珀不阻断，日志充分，
-绝不假绿）；脚本内对前置条件缺失打印明确 `::SKIP::`。
+**最终决定：两项均不接 workflow（挂账）。** 初始版本曾以 `continue-on-error: true` 接入，
+按收紧口径复审后撤下——SendKeys 驱动原生菜单/保存对话框依赖桌面会话焦点、菜单动画时机与 IME
+状态，在 hosted runner 上**不具备确定性**，一次实跑无法证明稳定；用 `continue-on-error`
+吸收偶发失败等于把不确定步骤伪装成绿色信号。两项隐私路径的确定性断言已由上方
+`--diag-export` 无头金丝雀在 CI 必红覆盖，菜单入口回归留作手动验收。
 
-### a. 更新器无网回退 —— `apps/desktop-tauri/ci/updater-offline-fallback.ps1`（已接，continue-on-error）
+脚本保留在 `apps/desktop-tauri/ci/` 供手动/后续排障调用（自包含，可带 `-ExePath`）：
 
-- 做法：New-NetFirewallRule 仅对 `drawpaper.exe` 进程出站 Block（finally 必删）→
+### a. 更新器无网回退 —— `apps/desktop-tauri/ci/updater-offline-fallback.ps1`（挂账，手动）
+
+- 脚本做法：New-NetFirewallRule 仅对 `drawpaper.exe` 进程出站 Block（finally 必删）→
   启动应用等主窗口 → SendKeys `Alt → Right×5 → Down → Enter`（帮助→检查更新…）→
   30s 内有界等待双证据：
   ① `%APPDATA%\com.drawpaper.app\logs\drawpaper.log` 出现锚点
@@ -58,22 +63,22 @@ Rust、VS2022 ARM、NSIS 3.10；**缺 WiX**）。本仓库为公开仓库，技�
   updater build failed / check() Err）；
   ② 浏览器进程命令行含 `releases/latest`（opener 真的打开了 Releases 页）；
   ③ 进程不崩。
-- 风险与挂账说明：SendKeys 依赖原生菜单与窗口焦点，hosted runner 桌面会话下可能点空；
-  一次实跑后若琥珀稳定，维持现状观察不追 flaky。**手动验证步骤**：
+- 挂账理由：runner 上 AppActivate/SendKeys 对原生菜单栏焦点不可控，证据双锚设计虽严密，
+  触发动作本身不可重复。**手动验证步骤**：
   1. 装 rc.9 NSIS 版后以管理员开 PowerShell；
   2. `New-NetFirewallRule -DisplayName t -Direction Outbound -Program "$env:LOCALAPPDATA\Programs\drawpaper\drawpaper.exe" -Action Block`；
   3. 启动 drawpaper，菜单「帮助 → 检查更新…」；
   4. 预期：不弹窗报错、进程不崩、默认浏览器打开 `releases/latest`，drawpaper.log 含回退行；
   5. `Remove-NetFirewallRule -DisplayName t`。
 
-### b. 诊断菜单 UI —— `apps/desktop-tauri/ci/diagnostics-menu-ui.ps1`（已接，continue-on-error）
+### b. 诊断菜单 UI —— `apps/desktop-tauri/ci/diagnostics-menu-ui.ps1`（挂账，手动）
 
-- 做法：启动应用 → SendKeys `Alt → Right×5 → Down×4 → Enter`（帮助→导出诊断信息…）→
+- 脚本做法：启动应用 → SendKeys `Alt → Right×5 → Down×4 → Enter`（帮助→导出诊断信息…）→
   原生保存对话框出现后直接 SendKeys 输入 `%TEMP%\dp-diag-menu-<guid>.zip` + Enter →
   40s 内等 zip → Expand-Archive 断言含 `system.json`、**零 `*.kbnote` 条目**。
-- 风险与挂账说明：原生保存对话框焦点/标题在 runner 上不可控；点空即 40s 超时 exit 1（琥珀）。
-  无头 CLI `--diag-export` 金丝雀已在 CI 必红覆盖同一路径的隐私断言，本步骤只是补 UI 入口回归。
-  **手动验证步骤**：帮助→导出诊断信息… → 另存对话框选桌面 → 打开 zip 确认含 system.json 且无 .kbnote。
+- 挂账理由：原生保存对话框焦点/标题在 runner 上不可控；无头 CLI `--diag-export` 金丝雀已在
+  CI 必红覆盖同一路径的隐私断言。**手动验证步骤**：帮助→导出诊断信息… → 另存对话框选桌面 →
+  打开 zip 确认含 system.json 且无 .kbnote。
 
 ## 冲突面与红线自检
 

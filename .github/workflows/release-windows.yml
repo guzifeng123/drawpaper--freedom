@@ -1406,26 +1406,13 @@ jobs:
           Remove-Item $outLog -ErrorAction SilentlyContinue
           Write-Host "Smoke OK: native-autosave selftest passed (run 1 + idempotent run 2, mirror files exact, traversal rejected)"
 
-      # Wave18 P4 (time-boxed best-effort): native menu / file-dialog UI automation
-      # via SendKeys. Headless-desktop focus makes these flaky BY DESIGN — both steps
-      # are continue-on-error and exit 1 with full logs when the menu click or the
-      # save dialog does not land (never a fake green). Decisions and manual
-      # fallback steps live in docs/wave18/ci-hardening.md.
-      - name: 'Smoke (x64, best-effort): updater offline fallback -> Releases page'
-        if: matrix.arch == 'x64'
-        shell: pwsh
-        timeout-minutes: 6
-        continue-on-error: true
-        run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File apps/desktop-tauri/ci/updater-offline-fallback.ps1
-
-      - name: 'Smoke (x64, best-effort): 导出诊断信息 menu -> zip privacy weak-assert'
-        if: matrix.arch == 'x64'
-        shell: pwsh
-        timeout-minutes: 6
-        continue-on-error: true
-        run: |
-          pwsh -NoProfile -ExecutionPolicy Bypass -File apps/desktop-tauri/ci/diagnostics-menu-ui.ps1
+      # ------------------------------------------------------------------
+      # Wave18 P4 (updater offline fallback / diagnostics-menu UI): 时间盒评估结论——
+      # SendKeys 驱动原生菜单/保存对话框在 hosted runner 上不具备确定性（桌面会话焦点、
+      # 菜单动画、IME），按收紧口径不接 workflow（不用 continue-on-error 掩盖）。
+      # 脚本保留在 apps/desktop-tauri/ci/ 供手动调用；手动步骤与调研结论见
+      # docs/wave18/ci-hardening.md。同路径的隐私断言已由上方 --diag-export 金丝雀覆盖。
+      # ------------------------------------------------------------------
 
       - name: 'Smoke (x64): silent uninstall, install dir removed'
         if: matrix.arch == 'x64'
