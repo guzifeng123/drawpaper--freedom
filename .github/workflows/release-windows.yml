@@ -34,6 +34,7 @@ on:
       - 'feat/desktop-global-shortcuts'
       - 'feat/msi-bilingual'
       - 'chore/portable-smoke-ci'
+      - 'chore/ci-exe-hardening'
   workflow_dispatch:
 
 permissions:
@@ -1348,6 +1349,124 @@ jobs:
             & $script -ExePath $exe -WaitSeconds 15
           }
           Write-Host "Smoke OK: portable-mode cases passed"
+      # Wave18 P1: native-autosave headless selftest. The installed exe carries a
+      # hidden pre-Tauri-builder CLI (`--native-autosave-selftest <dir>`) that writes
+      # one test .kbnote + one test asset under a unique temp dir, asserts its own
+      # readback, and proves join_within() rejects ../ traversal and absolute paths.
+      # We mirror the diag canary's `cmd /c ... > log 2>&1` capture: drawpaper.exe is
+      # a GUI-subsystem binary, so PowerShell native redirect can lose the handle.
+      - name: 'Smoke (x64): native-autosave headless selftest (mirror files + traversal rejection)'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Discover install dir / exe exactly like the prior smoke steps.
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'drawpaper'),
+            (Join-Path $env:ProgramFiles 'drawpaper')
+          )
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'drawpaper') }
+          $installDir = $null
+          foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
+          if (-not $installDir) {
+            foreach ($root in @((Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+              if ($root -and (Test-Path $root)) {
+                $hit = Get-ChildItem $root -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { $installDir = $hit.FullName; break }
+              }
+            }
+          }
+          if (-not $installDir) { Write-Error 'Smoke FAIL: install dir not found at native-autosave selftest' }
+          $exe = Join-Path $installDir 'drawpaper.exe'
+          if (-not (Test-Path $exe)) { $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName }
+          Write-Host "App exe = $exe"
+
+          # Isolate this run: unique temp dir so no prior run can contaminate.
+          $selftestDir = Join-Path $env:TEMP ("dp-selftest-" + [guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Force -Path $selftestDir | Out-Null
+          $outLog = Join-Path $env:TEMP ('dp-selftest-' + [guid]::NewGuid().ToString('N') + '.log')
+          $expectedDoc  = '{"format":"knowledge-block-notes","version":4}'
+          $expectedAsset = 'FAKE-ASSET-BYTES'
+
+          function Invoke-Selftest($dir, $logPath) {
+            Remove-Item $logPath -ErrorAction SilentlyContinue
+            # Build the cmd /c line with an OUTER quoted pair around the whole
+            # payload: Start-Process joins -ArgumentList raw (no re-quoting), so
+            # cmd.exe would otherwise see six raw quotes and apply its "strip
+            # first+last quote" rule, mangling the exe path. Wrapping the payload
+            # in extra outer quotes makes cmd strip THOSE instead — the inner
+            # quoting survives exactly like the diag canary's direct pwsh call.
+            $argLine = '/c "' + '"' + $exe + '" --native-autosave-selftest "' + $dir + '" > "' + $logPath + '" 2>&1"'
+            Write-Host "Running: cmd.exe $argLine"
+            $cp = Start-Process -FilePath 'cmd.exe' -ArgumentList $argLine -PassThru -WindowStyle Hidden
+            for ($w = 0; $w -lt 60; $w++) {
+              Start-Sleep -Seconds 1
+              $cp.Refresh()
+              if ($cp.HasExited) { break }
+            }
+            if (-not $cp.HasExited) {
+              Stop-Process -Id $cp.Id -Force -ErrorAction SilentlyContinue
+              Write-Error 'Smoke FAIL: --native-autosave-selftest did not exit within 60s'
+            }
+            return $cp.ExitCode
+          }
+
+          # --- Run 1: full assertions. -------------------------------------
+          $code = Invoke-Selftest $selftestDir $outLog
+          Write-Host "selftest run-1 exit code = $code"
+          Write-Host "::group::selftest captured stdout/stderr"
+          if (Test-Path $outLog) { Get-Content $outLog | ForEach-Object { Write-Host "  | $_" } } else { Write-Host "  (no output file)" }
+          Write-Host "::endgroup::"
+          if ($code -ne 0) { Write-Error "Smoke FAIL: native-autosave selftest exited $code on run 1" }
+          $logText = if (Test-Path $outLog) { Get-Content -Raw $outLog } else { '' }
+          if ($logText -notmatch 'selftest OK') { Write-Error "Smoke FAIL: selftest output missing 'selftest OK' marker (got: $logText)" }
+
+          $docPath = Join-Path $selftestDir 'selftest-doc.kbnote'
+          if (-not (Test-Path $docPath)) { Write-Error "Smoke FAIL: $docPath not written" }
+          $docBytes = [System.IO.File]::ReadAllBytes($docPath)
+          $docText = [System.Text.Encoding]::UTF8.GetString($docBytes)
+          Write-Host ("doc bytes = {0} (expected {1})" -f $docBytes.Length, $expectedDoc.Length)
+          if ($docText -cne $expectedDoc) { Write-Error ("Smoke FAIL: selftest-doc.kbnote content mismatch: got '{0}'" -f $docText) }
+
+          $assetPath = Join-Path $selftestDir 'assets\abc123def'
+          if (-not (Test-Path $assetPath)) { Write-Error "Smoke FAIL: $assetPath not written" }
+          $assetBytes = [System.IO.File]::ReadAllBytes($assetPath)
+          Write-Host ("asset bytes = {0} (content = {1})" -f $assetBytes.Length, [System.Text.Encoding]::ASCII.GetString($assetBytes))
+          if ($assetBytes.Length -ne $expectedAsset.Length) { Write-Error ("Smoke FAIL: asset length {0} != {1}" -f $assetBytes.Length, $expectedAsset.Length) }
+          if ([System.Text.Encoding]::ASCII.GetString($assetBytes) -cne $expectedAsset) { Write-Error 'Smoke FAIL: asset bytes != FAKE-ASSET-BYTES' }
+
+          # Traversal must have been REJECTED: no evil*.kbnote inside the temp
+          # dir, and nothing written one level UP (../evil.kbnote would land here).
+          $leakedInDir  = Get-ChildItem $selftestDir -Recurse -Filter 'evil*.kbnote' -File -ErrorAction SilentlyContinue
+          $leakedParent = Get-ChildItem (Split-Path $selftestDir -Parent) -Filter 'evil*.kbnote' -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -gt (Get-Date).AddMinutes(-5) }
+          if ($leakedInDir -or $leakedParent) {
+            $leakedInDir  | ForEach-Object { Write-Host "TRAVERSAL LEAK: $($_.FullName)" }
+            $leakedParent | ForEach-Object { Write-Host "TRAVERSAL LEAK (parent): $($_.FullName)" }
+            Write-Error 'Smoke FAIL: traversal-rejected paths still produced an evil*.kbnote on disk'
+          }
+          Write-Host 'Traversal rejection OK: no evil*.kbnote in temp dir or its parent'
+
+          # --- Run 2: idempotency against the SAME dir (overwrite path). ---
+          $code2 = Invoke-Selftest $selftestDir $outLog
+          Write-Host "selftest run-2 (idempotent) exit code = $code2"
+          if ($code2 -ne 0) { Write-Error "Smoke FAIL: native-autosave selftest exit $code2 on repeated run (must be idempotent)" }
+          if ((Get-Content -Raw $outLog) -notmatch 'selftest OK') { Write-Error 'Smoke FAIL: second selftest run output missing OK marker' }
+
+          # Cleanup.
+          Remove-Item $selftestDir -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item $outLog -ErrorAction SilentlyContinue
+          Write-Host "Smoke OK: native-autosave selftest passed (run 1 + idempotent run 2, mirror files exact, traversal rejected)"
+
+      # ------------------------------------------------------------------
+      # Wave18 P4 (updater offline fallback / diagnostics-menu UI): 时间盒评估结论——
+      # SendKeys 驱动原生菜单/保存对话框在 hosted runner 上不具备确定性（桌面会话焦点、
+      # 菜单动画、IME），按收紧口径不接 workflow（不用 continue-on-error 掩盖）。
+      # 脚本保留在 apps/desktop-tauri/ci/ 供手动调用；手动步骤与调研结论见
+      # docs/wave18/ci-hardening.md。同路径的隐私断言已由上方 --diag-export 金丝雀覆盖。
+      # ------------------------------------------------------------------
 
       - name: 'Smoke (x64): silent uninstall, install dir removed'
         if: matrix.arch == 'x64'
@@ -1408,9 +1527,35 @@ jobs:
             Write-Host "  dir still present after '$arg'; trying next arg..."
           }
           if (-not $removed) {
-            Write-Host "Remaining files under $installDir :"
+            # Wave18 P2: last-resort sweep before declaring failure. Wave15 saw
+            # one false-red on a loaded runner where the dir lingered only
+            # because a residual drawpaper / uninstaller child still held a
+            # handle. Kill known residual owners ONCE, print the action, then
+            # re-poll 10s. This only ADDS a recovery path: if the dir still
+            # survives, we still Write-Error below — a real uninstall failure
+            # must stay red.
+            Write-Host "::warning title=uninstall-residual-sweep::install dir still present; sweeping residual drawpaper/unins* processes before re-poll"
+            Write-Host "Remaining files under $installDir (pre-sweep) :"
             Get-ChildItem $installDir -Recurse -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
-            Write-Error "Smoke FAIL: install dir still present 20s after silent uninstall (tried /SILENT and /S)"
+            $victims = Get-Process -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -like 'drawpaper*' -or $_.Name -like 'unins*' -or $_.Name -like 'uninstall*' }
+            if ($victims) {
+              $victims | ForEach-Object { Write-Host "  killing residual process: $($_.Name) (PID $($_.Id))" }
+              $victims | Stop-Process -Force -ErrorAction SilentlyContinue
+            } else {
+              Write-Host '  no residual drawpaper/unins* process found'
+            }
+            Start-Sleep -Seconds 2
+            for ($i = 1; $i -le 10; $i++) {
+              Start-Sleep -Seconds 1
+              if (-not (Test-Path $installDir)) { $removed = $true; break }
+            }
+            Write-Host "post-sweep re-poll: dir removed = $removed"
+          }
+          if (-not $removed) {
+            Write-Host "Remaining files under $installDir (final) :"
+            Get-ChildItem $installDir -Recurse -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "  $($_.FullName)" }
+            Write-Error "Smoke FAIL: install dir still present after silent uninstall (tried /SILENT and /S, residual-process sweep + 10s re-poll)"
           }
           Write-Host "Smoke OK: install dir removed after silent uninstall"
 

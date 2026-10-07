@@ -6,6 +6,11 @@
 
 ### 内部工程
 
+纯 CI/工程加固，无用户可见行为变化（release-windows，x64）：
+
+- **native-autosave 自检接入 CI 冒烟**：安装后调用隐藏无头 CLI `drawpaper.exe --native-autosave-selftest <临时目录>`，断言镜像文件逐字节正确（测试文档 JSON v4、`assets/abc123def` 假资产字节）、路径穿越与绝对路径写入被拒绝、无任何 `evil*.kbnote` 落盘，并同目录重跑验证幂等。
+- **NSIS 静默卸载冒烟加严**：两轮静默卸载后轮询仍未消失时，先兜底清理残留 drawpaper / 卸载器进程并复查 10s，仍残留才判红——消化高负载 runner 上的偶发假红，真失败依旧红。
+- 更新器无网回退（防火墙阻断出站后经菜单触发检查更新，断言日志锚点与 Releases 页回退）与诊断菜单导出（原生保存对话框路径）两条 UI 回归经时间盒评估后**不接 CI**——SendKeys 驱动原生菜单/对话框在 hosted runner 上不具备确定性，脚本保留 `apps/desktop-tauri/ci/` 供手动调用，手动步骤见 `docs/wave18/ci-hardening.md`；GitHub hosted ARM64 runner 现状评估见 `docs/wave18/arm64-runner-assessment.md`，本波不新增 arm64 实跑 job。
 - **便携模式冒烟接入 release-windows（x64）**：把 Wave16-I 留下但从未在 CI 实跑过的 `apps/desktop-tauri/ci/smoke-portable.ps1` 扩展为三组用例——①marker 触发 + 系统 AppData 隔离（Roaming/Local 文件数差分）；②无 marker、仅预建空 `data\` 目录触发；③同版本 NSIS 覆盖安装后便携树原数据不丢、便携模式仍被识别。新步骤插在 NSIS 卸载之前，x64 门控、arm64 按惯例跳过；全部有界轮询 + finally 进程清理 + 临时树重试删除，不假绿。详见 `docs/wave18/portable-smoke.md`。
 
 ## 0.1.0-rc.9
