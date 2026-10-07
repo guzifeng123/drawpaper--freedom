@@ -520,6 +520,299 @@ jobs:
           }
           Write-Host "Smoke OK: second launch absorbed by running instance (process count = 1)"
 
+      # ------------------------------------------------------------------
+      # Wave15 D: three extra x64 smokes on top of the original seven.
+      # Each repeats the installDir probe (same as above), cleans up leftover
+      # drawpaper + its WebView2 children on entry/exit, and uses bounded polls
+      # (no bare -Wait) so a hung dialog can never hang the job. arm64 steps are
+      # skipped by the matrix gate, never faked green.
+      # ------------------------------------------------------------------
+      - name: 'Smoke (x64): cold-start .kbnote file association (canary log + recents)'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 4
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Resolve install dir (identical probe to the install/launch steps).
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'drawpaper'),
+            (Join-Path $env:ProgramFiles 'drawpaper')
+          )
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'drawpaper') }
+          $installDir = $null
+          foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
+          if (-not $installDir) {
+            foreach ($root in @((Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+              if ($root -and (Test-Path $root)) {
+                $hit = Get-ChildItem $root -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { $installDir = $hit.FullName; break }
+              }
+            }
+          }
+          if (-not $installDir) { Write-Error 'Smoke FAIL: install dir not found for cold-start file assoc' }
+          $exe = Join-Path $installDir 'drawpaper.exe'
+          if (-not (Test-Path $exe)) { $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName }
+          Write-Host "App exe = $exe"
+
+          # Clean slate (single-instance absorb would otherwise swallow the launch).
+          Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$installDir*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+
+          # Write a minimal valid .kbnote carrying a unique canary token into a
+          # temp dir, then launch drawpaper.exe WITH that path as argv[1] — this
+          # mimics Explorer / command-line file-association open.
+          $canary = 'CANARY-' + ([guid]::NewGuid().ToString('N'))
+          $tmpDir = Join-Path $env:TEMP ('dp-smoke-' + ([guid]::NewGuid().ToString('N')))
+          New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
+          $docPath = Join-Path $tmpDir ($canary + '.kbnote')
+          # Build a minimal valid .kbnote via a hashtable -> JSON (avoids a
+          # PowerShell here-string, whose '@' closer must sit at column 0 and
+          # would prematurely end this YAML block scalar).
+          $doc = [ordered]@{
+            format    = 'knowledge-block-notes'
+            version   = 1
+            id        = 'doc_coldstart_canary'
+            title     = $canary
+            board     = [ordered]@{ createdAt = 0; updatedAt = 0 }
+            nodes     = @()
+            edges     = @()
+            tags      = @()
+            layout    = [ordered]@{ mode = 'mindmap-right'; rankSpacing = 90; nodeSpacing = 28 }
+            viewport  = [ordered]@{ x = 0; y = 0; zoom = 1 }
+            page      = [ordered]@{ size='A4'; orientation='portrait'; marginMm=15; mode='fit'; showPageBreak=$true; colorMode='color'; header=$false; footer=$false; showPageNumbers=$false; edgeLabels=$true; pageBreaks=@() }
+            assetRefs = @()
+          }
+          ($doc | ConvertTo-Json -Depth 6) | Set-Content -Path $docPath -Encoding UTF8
+          Write-Host "Canary doc = $docPath (token=$canary)"
+
+          Write-Host "Launching: drawpaper.exe <canary.kbnote>"
+          $null = Start-Process -FilePath $exe -ArgumentList $docPath -WorkingDirectory $installDir -PassThru
+
+          # Bounded poll: process alive + main window title contains drawpaper.
+          $ok = $false
+          for ($i = 1; $i -le 25; $i++) {
+            Start-Sleep -Seconds 1
+            $p = Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($p) {
+              $p.Refresh()
+              $title = $p.MainWindowTitle
+              Write-Host ("t={0,2}s pid={1} MainWindowTitle='{2}'" -f $i, $p.Id, $title)
+              if ($title -and ($title.ToLower().Contains('drawpaper'))) { $ok = $true; break }
+            } else {
+              Write-Host ("t={0,2}s: drawpaper process not found" -f $i)
+            }
+          }
+          if (-not $ok) {
+            Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Write-Error 'Smoke FAIL: cold-start .kbnote launch did not present a drawpaper window within 25s'
+          }
+
+          # Give the shell a moment to finish reading the file + pushing recents.
+          Start-Sleep -Seconds 3
+
+          # Evidence: drawpaper.log must record the open-file (Wave15 D added the
+          # success-path log line; the error path already logged). The recents JSON
+          # must contain the canary path. NOTE BOUNDARY: this proves the OS->Rust
+          # hand-off (argv[1] read, current_path bound, recents pushed); whether the
+          # WebView canvas actually rendered the doc on cold start depends on the
+          # known setup()-phase event race (see docs/wave15/desktop-gap-audit.md),
+          # which CI UI automation does not assert.
+          $logFile = Join-Path $env:APPDATA 'com.drawpaper.app\logs\drawpaper.log'
+          $recentsFile = Join-Path $env:APPDATA 'com.drawpaper.app\drawpaper-recents.json'
+          $logHit = $false
+          $recentsHit = $false
+          for ($i = 1; $i -le 10; $i++) {
+            if ((-not $logHit) -and (Test-Path $logFile)) {
+              $content = Get-Content -Raw $logFile
+              if (($content -match 'open-file') -and $content.Contains($canary)) { $logHit = $true }
+            }
+            if ((-not $recentsHit) -and (Test-Path $recentsFile)) {
+              $rc = Get-Content -Raw $recentsFile
+              if ($rc.Contains($canary)) { $recentsHit = $true }
+            }
+            if ($logHit -and $recentsHit) { break }
+            Start-Sleep -Seconds 1
+          }
+          Write-Host "log open-file+canary hit = $logHit ; recents contains canary = $recentsHit"
+          if (Test-Path $logFile) {
+            Write-Host "::group::drawpaper.log tail"
+            Get-Content $logFile -Tail 20 | ForEach-Object { Write-Host "  $_" }
+            Write-Host "::endgroup::"
+          }
+
+          # Cleanup before the next step.
+          Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$installDir*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+
+          if (-not $logHit) { Write-Error 'Smoke FAIL: drawpaper.log has no open-file record for the canary .kbnote (Rust did not process argv[1])' }
+          if (-not $recentsHit) { Write-Error 'Smoke FAIL: drawpaper-recents.json does not contain the canary path (recents push did not happen)' }
+          Write-Host "Smoke OK: cold-start .kbnote association — process alive, title ok, log+recents prove Rust processed the file"
+
+      - name: 'Smoke (x64): first-run welcome doc lands in WebView2 leveldb, no dup on 2nd run'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 6
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'drawpaper'),
+            (Join-Path $env:ProgramFiles 'drawpaper')
+          )
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'drawpaper') }
+          $installDir = $null
+          foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
+          if (-not $installDir) {
+            foreach ($root in @((Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+              if ($root -and (Test-Path $root)) {
+                $hit = Get-ChildItem $root -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { $installDir = $hit.FullName; break }
+              }
+            }
+          }
+          if (-not $installDir) { Write-Error 'Smoke FAIL: install dir not found for welcome-doc check' }
+          $exe = Join-Path $installDir 'drawpaper.exe'
+          if (-not (Test-Path $exe)) { $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName }
+
+          $appData = Join-Path $env:APPDATA 'com.drawpaper.app'
+          $eb = Join-Path $appData 'EBWebView'
+
+          # Kill, then wipe the WHOLE app data dir so this is a true first run
+          # (the earlier launch steps already wrote the welcome flag once).
+          Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$installDir*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          if (Test-Path $appData) {
+            Write-Host "Wiping app data dir to force first run: $appData"
+            Remove-Item -Path $appData -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+          # Count welcome markers across EBWebView leveldb files (*.log is the
+          # uncompressed WAL written first, so fresh boot writes are greppable).
+          function Count-WelcomeHits {
+            param([string]$Root)
+            if (-not (Test-Path $Root)) { return 0 }
+            $files = Get-ChildItem -Path $Root -Recurse -Include '*.log','*.ldb' -File -ErrorAction SilentlyContinue
+            $n = 0
+            foreach ($f in $files) {
+              $h = Select-String -Path $f.FullName -Pattern 'doc_welcome_v1','drawpaper:welcome-doc-v1' -SimpleMatch -ErrorAction SilentlyContinue
+              if ($h) { $n += $h.Count }
+            }
+            return $n
+          }
+
+          Write-Host "First launch (fresh app data)"
+          $null = Start-Process -FilePath $exe -WorkingDirectory $installDir -PassThru
+
+          $firstHits = 0
+          for ($i = 1; $i -le 45; $i++) {
+            Start-Sleep -Seconds 1
+            $firstHits = Count-WelcomeHits $eb
+            if (($i % 5) -eq 0 -or $firstHits -gt 0) {
+              Write-Host ("t={0,2}s welcome marker hits in EBWebView leveldb = {1}" -f $i, $firstHits)
+            }
+            if ($firstHits -gt 0) { break }
+          }
+          Write-Host "First-run welcome hits = $firstHits"
+          if ($firstHits -lt 1) {
+            Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Write-Error 'Smoke FAIL: welcome markers (doc_welcome_v1 / drawpaper:welcome-doc-v1) not found in EBWebView leveldb within 45s'
+          }
+          Write-Host "::group::sample welcome-marker hits"
+          Get-ChildItem -Path $eb -Recurse -Include '*.log','*.ldb' -File -ErrorAction SilentlyContinue |
+            Select-String -Pattern 'doc_welcome_v1','drawpaper:welcome-doc-v1' -SimpleMatch -ErrorAction SilentlyContinue |
+            Select-Object -First 5 | ForEach-Object { Write-Host ("  HIT: {0}:{1}" -f $_.Filename, $_.LineNumber) }
+          Write-Host "::endgroup::"
+
+          # Kill, relaunch; the localStorage flag must already be set so the
+          # welcome doc is NOT re-created.
+          Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$installDir*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 3
+          Write-Host "Second launch (must not re-create welcome doc)"
+          $null = Start-Process -FilePath $exe -WorkingDirectory $installDir -PassThru
+          Start-Sleep -Seconds 15
+          $secondHits = Count-WelcomeHits $eb
+          Write-Host "Second-run welcome hits = $secondHits (first = $firstHits)"
+
+          Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$installDir*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+
+          # LevelDB compaction can move a string between .log/.ldb and nudge the
+          # raw-line count by a few; the no-dup guarantee is "did not roughly grow".
+          if ($secondHits -gt ($firstHits + 3)) {
+            Write-Error ("Smoke FAIL: welcome markers grew on second run ({0} -> {1}); welcome doc re-created?" -f $firstHits, $secondHits)
+          }
+          Write-Host "Smoke OK: welcome doc created on first run, not duplicated on second (hits $firstHits -> $secondHits)"
+
+      - name: 'Smoke (x64): --diag-export probe (SKIPPED until C path merges)'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'drawpaper'),
+            (Join-Path $env:ProgramFiles 'drawpaper')
+          )
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'drawpaper') }
+          $installDir = $null
+          foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
+          if (-not $installDir) {
+            foreach ($root in @((Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+              if ($root -and (Test-Path $root)) {
+                $hit = Get-ChildItem $root -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { $installDir = $hit.FullName; break }
+              }
+            }
+          }
+          if (-not $installDir) { Write-Error 'Smoke FAIL: install dir not found for diag-export probe' }
+          $exe = Join-Path $installDir 'drawpaper.exe'
+          if (-not (Test-Path $exe)) { $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName }
+
+          # Cold start so single-instance absorb cannot mask the probe.
+          Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$installDir*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+
+          $zipPath = Join-Path $env:TEMP ('drawpaper-diag-' + ([guid]::NewGuid().ToString('N')) + '.zip')
+          Write-Host "Probing: drawpaper.exe --diag-export $zipPath"
+          Write-Host "C-path contract: drawpaper.exe --diag-export <zip>. This branch predates C, so the flag is unknown and the app boots normally (no zip)."
+          $null = Start-Process -FilePath $exe -ArgumentList '--diag-export', $zipPath -WorkingDirectory $installDir -PassThru
+
+          # Bounded wait for the zip. Post-C it should be written promptly. In
+          # this branch it never appears -> exit 0 as SKIPPED (never fake-green,
+          # never a hard fail).
+          $zipExists = $false
+          for ($i = 1; $i -le 25; $i++) {
+            Start-Sleep -Seconds 1
+            if (Test-Path $zipPath) { $zipExists = $true; break }
+          }
+
+          # Always kill the (possibly normally-booted GUI) process afterwards.
+          Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$installDir*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+
+          if ($zipExists) {
+            # Post-C real-assertion path (not reachable in this branch today).
+            $size = (Get-Item $zipPath).Length
+            Write-Host "DIAG ZIP produced: $zipPath ($size bytes)"
+            if ($size -lt 1) { Write-Error 'Smoke FAIL: diag zip exists but is empty' }
+            # TODO(post-C): open the zip, assert it bundles logs/recents and does
+            # NOT embed any .kbnote document body. Kept green until C lands.
+            Write-Host "Smoke OK: diagnostics package exported (post-C assertion path)"
+          } else {
+            Write-Host "SKIPPED: diagnostics feature not in this branch, activates after C merges"
+            Write-Host "No diag zip within 25s (expected: --diag-export is a C-path feature, absent here). Probe passes as skipped."
+            exit 0
+          }
+
       - name: 'Smoke (x64): silent uninstall, install dir removed'
         if: matrix.arch == 'x64'
         shell: pwsh

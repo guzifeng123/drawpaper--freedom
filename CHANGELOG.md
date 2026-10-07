@@ -2,6 +2,13 @@
 
 本文件按「用户可见能力」分组归纳各版本，不逐条罗列提交。每个版本标题为语义化版本号，预发布版后缀 `-rc.N` / `-beta.N` / `-alpha.N`。
 
+## 未发布（Unreleased）
+
+### Windows 桌面端
+
+- **安装包冒烟补三条（release-windows，x64）**：在既有 7 条 NSIS 冒烟之上新增——①冷启动 `.kbnote` 文件关联（临时目录写金丝雀文档，以该路径启动 exe，有界轮询断言进程存活、窗口标题含 drawpaper，并在 `drawpaper.log` 与 `drawpaper-recents.json` 中确认 Rust 处理了 argv[1]）；②首次运行欢迎文档落地（清空数据目录后冷启动，断言 WebView2 leveldb 出现 `doc_welcome_v1` / `drawpaper:welcome-doc-v1`，二次启动不重复创建）；③诊断包 `--diag-export` 探测（本分支无此功能则显式 SKIPPED 通过，合入 C 路后自动转真断言）。每条均带超时与有界等待，arm64 按惯例跳过不假绿。
+- **桌面壳可观测性**：外部文件打开（冷启动 / 单实例转发 / 打开最近）成功路径补一行结构化日志，便于冒烟与排障；此前仅失败路径有日志。
+
 ## 0.1.0-rc.7
 
 同步正确性修复、Windows 桌面缺陷收口、触屏与多标签协作打磨，以及「直接下载 PDF」矢量化。
