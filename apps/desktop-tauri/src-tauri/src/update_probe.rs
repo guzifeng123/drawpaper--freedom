@@ -262,13 +262,15 @@ fn fetch_once(url: &str) -> FetchOutcome {
 
 /// 极简单绝对 http(s) URL 解析：抽出 (host, port, path)。只支持 http://host[:port]/path。
 fn parse_http_url(url: &str) -> Option<(String, u16, String)> {
+    let https = url.starts_with("https://");
     let rest = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://"))?;
     let authority_path: Vec<&str> = rest.splitn(2, '/').collect();
     let authority = authority_path[0];
     let path = authority_path.get(1).map(|p| format!("/{p}")).unwrap_or_else(|| "/".to_string());
+    let default_port = if https { 443 } else { 80 };
     let (host, port) = match authority.rsplit_once(':') {
         Some((h, p)) => (h.to_string(), p.parse().ok()?),
-        None => (authority.to_string(), 80),
+        None => (authority.to_string(), default_port),
     };
     if host.is_empty() {
         return None;
