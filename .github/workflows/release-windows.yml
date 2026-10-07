@@ -33,6 +33,7 @@ on:
       - 'feat/desktop-folder-autosave'
       - 'feat/desktop-global-shortcuts'
       - 'feat/msi-bilingual'
+      - 'chore/portable-smoke-ci'
   workflow_dispatch:
 
 permissions:
@@ -1294,6 +1295,59 @@ jobs:
           $names = $man | ForEach-Object { $_.name }
           Write-Host "  manifest still lists canary by name (metadata-only): $($names -contains 'SECRET-canary.kbnote')"
           Write-Host "Smoke OK: diag-export privacy canary passed"
+
+      - name: 'Smoke (x64): portable mode (marker + data-dir trigger + isolation + reinstall)'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 8
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Resolve the already-installed drawpaper.exe the same way the install
+          # step does (installMode="both" may land per-user or per-machine).
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'drawpaper'),
+            (Join-Path $env:ProgramFiles 'drawpaper')
+          )
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'drawpaper') }
+          $installDir = $null
+          foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
+          if (-not $installDir) {
+            foreach ($root in @((Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+              if ($root -and (Test-Path $root)) {
+                $hit = Get-ChildItem $root -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { $installDir = $hit.FullName; break }
+              }
+            }
+          }
+          if (-not $installDir) { Write-Error 'Smoke FAIL: portable smoke could not locate install dir for the installed drawpaper.exe' }
+          $exe = Join-Path $installDir 'drawpaper.exe'
+          if (-not (Test-Path $exe)) { Write-Error "Smoke FAIL: installed exe not found at $exe" }
+          Write-Host "Installed exe to copy into portable trees: $exe"
+
+          # Case c reuses the NSIS *-setup.exe this build just produced (same
+          # version). The embedBootstrapper measure rebuilds were followed by a
+          # normal nsis rebuild, so the on-disk bundle/nsis installer matches the
+          # installed app.
+          $setup = Get-ChildItem -Path 'apps/desktop-tauri/src-tauri/target' -Recurse -Filter '*-setup.exe' -File |
+            Where-Object { $_.FullName -match '[\\/]bundle[\\/]nsis[\\/]' } |
+            Select-Object -First 1
+          if ($setup) { Write-Host "NSIS setup for reinstall case c: $($setup.FullName)" }
+          else { Write-Host '::notice title=portable-smoke::NSIS *-setup.exe not found — case c will self-skip' }
+
+          # Self-contained script (a marker+isolation / b data-dir trigger / c
+          # reinstall). It kills all drawpaper before each launch, bounded-polls,
+          # and does a final global process sweep so the uninstall step below is
+          # never blocked by a leftover portable process. Run it in this pwsh
+          # process; its own `exit 0/1` sets the step result directly.
+          $script = 'apps/desktop-tauri/ci/smoke-portable.ps1'
+          Write-Host "Running: $script -ExePath $exe -WaitSeconds 15$(if ($setup) { ' -SetupExePath <setup.exe>' })"
+          if ($setup) {
+            & $script -ExePath $exe -WaitSeconds 15 -SetupExePath $setup.FullName
+          } else {
+            & $script -ExePath $exe -WaitSeconds 15
+          }
+          Write-Host "Smoke OK: portable-mode cases passed"
 
       - name: 'Smoke (x64): silent uninstall, install dir removed'
         if: matrix.arch == 'x64'

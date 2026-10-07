@@ -2,6 +2,12 @@
 
 本文件按「用户可见能力」分组归纳各版本，不逐条罗列提交。每个版本标题为语义化版本号，预发布版后缀 `-rc.N` / `-beta.N` / `-alpha.N`。
 
+## 未发布（Unreleased）
+
+### 内部工程
+
+- **便携模式冒烟接入 release-windows（x64）**：把 Wave16-I 留下但从未在 CI 实跑过的 `apps/desktop-tauri/ci/smoke-portable.ps1` 扩展为三组用例——①marker 触发 + 系统 AppData 隔离（Roaming/Local 文件数差分）；②无 marker、仅预建空 `data\` 目录触发；③同版本 NSIS 覆盖安装后便携树原数据不丢、便携模式仍被识别。新步骤插在 NSIS 卸载之前，x64 门控、arm64 按惯例跳过；全部有界轮询 + finally 进程清理 + 临时树重试删除，不假绿。详见 `docs/wave18/portable-smoke.md`。
+
 ## 0.1.0-rc.9
 
 Windows 桌面原生打磨波：冷启动外部文件打开竞态收口、原生文件夹自动保存镜像、全局快捷键，以及桌面文档与现状全面对齐。
