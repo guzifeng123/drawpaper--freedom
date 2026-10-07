@@ -24,6 +24,8 @@ use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_log::{Target, TargetKind};
+// Wave15 A: manual updater (UpdaterExt::updater/.check/.download_and_install).
+use tauri_plugin_updater::UpdaterExt;
 
 /// Wave16-I: Windows portable-mode decision (pure function + fs probe). See
 /// `portable.rs`. Setting `app_directories_override` moves Tauri's path resolver
@@ -561,6 +563,106 @@ fn backup_doc(
 }
 
 // ---------------------------------------------------------------------------
+// Wave15 A: manual "帮助 → 检查更新…" updater flow.
+//
+// ZERO-BACKEND / ZERO-BACKOUT NETWORK INVARIANT: this is the ONLY place in the
+// whole crate that touches the updater. It is reached EXCLUSIVELY from the menu
+// event handler when the user clicks the "检查更新…" item. There is NO startup
+// check, NO timer, NO polling, NO automatic download — the single network
+// request happens exactly once per user click.
+//
+// Behaviour:
+//   * build the updater and `check()` the configured latest.json endpoint once;
+//   * if a newer SIGNED release is found -> native confirm dialog showing the
+//     current version / latest version / release notes (latest.json `body`);
+//     user confirms -> `download_and_install` (NSIS installer self-restarts);
+//     user cancels -> do nothing at all;
+//   * no update / offline / endpoint missing (no latest.json yet) / bad or
+//     absent signature / any check error -> transparently fall back to opening
+//     the Releases web page (the Wave13 behaviour). No scary error dialog.
+// ---------------------------------------------------------------------------
+
+/// Fallback used for every non-"new version available" outcome: open the
+/// Releases web page in the system browser (identical to the Wave13 flow).
+fn open_releases_page(app: &tauri::AppHandle) {
+    let _ = app.opener().open_url(GITHUB_RELEASES_LATEST, None::<&str>);
+}
+
+fn run_manual_update_check(app: &tauri::AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        // Build the updater from tauri.conf plugins.updater (endpoints + pubkey).
+        let updater = match app.updater() {
+            Ok(u) => u,
+            Err(e) => {
+                log::warn!("updater build failed, falling back to Releases web page: {e}");
+                open_releases_page(&app);
+                return;
+            }
+        };
+
+        // The ONE network request, fired only because the user clicked the menu.
+        let update = match updater.check().await {
+            Ok(Some(u)) => u,
+            // Ok(None) -> already on the latest version; Err -> offline / 404 /
+            // no latest.json yet / signature / parse error. Both fall back.
+            Ok(None) => {
+                log::info!("updater: already on the latest version");
+                open_releases_page(&app);
+                return;
+            }
+            Err(e) => {
+                log::warn!("updater check failed, falling back to Releases web page: {e}");
+                open_releases_page(&app);
+                return;
+            }
+        };
+
+        let current = update.current_version.clone();
+        let latest = update.version.clone();
+        let notes = update.body.clone().unwrap_or_default();
+
+        // Ask before downloading. The dialog callback runs on the main thread;
+        // block on a oneshot so the async task waits for the user's choice.
+        let (tx, rx) = tokio::sync::oneshot::channel::<bool>();
+        let message = format!(
+            "发现新版本 {latest}\n\n当前版本：{current}\n\n{notes}\n\n现在下载并安装？安装完成后会自动重启。"
+        );
+        app.dialog()
+            .message(message)
+            .title(format!("发现新版本 {latest}"))
+            .kind(tauri_plugin_dialog::MessageDialogKind::Info)
+            .buttons(tauri_plugin_dialog::MessageDialogButtons::YesNo)
+            .show(move |yes: bool| {
+                let _ = tx.send(yes);
+            });
+        let confirmed = rx.await.unwrap_or(false);
+        if !confirmed {
+            // User cancelled — do nothing, stay on the current version.
+            log::info!("updater: user cancelled the update");
+            return;
+        }
+
+        // Download + verify signature + run the installer. On Windows NSIS this
+        // launches the updater installer (which replaces files and restarts).
+        match update
+            .download_and_install(|_chunk: usize, _total: Option<u64>| {}, || {})
+            .await
+        {
+            Ok(()) => {
+                // On Windows the installer restarts the app; restart() is the
+                // cross-platform safety net (macOS/Linux need it).
+                app.restart();
+            }
+            Err(e) => {
+                log::warn!("updater download/install failed, falling back to Releases web page: {e}");
+                open_releases_page(&app);
+            }
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
 // Menu
 // ---------------------------------------------------------------------------
 
@@ -866,6 +968,10 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_notification::init())
+        // Wave15 A: manual updater. Registers the plugin + its JS commands, but
+        // performs NO background check — we only call .check() from the menu
+        // handler on user click (see run_manual_update_check).
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::default())
         .setup(|app| {
             // Load persisted recents into state.
@@ -890,9 +996,12 @@ pub fn run() {
                     let _ = app.opener().open_url(GITHUB_REPO, None::<&str>);
                     return;
                 }
-                // 仅在用户点击时打开 releases/latest；没有任何定时/启动检查。
+                // Wave15 A: 纯用户手动触发的原生更新流程。这是整个 crate 里
+                // 唯一触发 updater 网络请求的地方——没有启动检查、没有定时器、
+                // 没有轮询、没有自动下载。无更新 / 离线 / 端点未就绪 / 任意报错
+                // 一律回退为打开 Releases 网页（见 run_manual_update_check）。
                 if id == "help:check-update" {
-                    let _ = app.opener().open_url(GITHUB_RELEASES_LATEST, None::<&str>);
+                    run_manual_update_check(app);
                     return;
                 }
                 // 在资源管理器中 reveal 数据目录。

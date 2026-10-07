@@ -34,6 +34,14 @@ tauri-plugin-window-state = "2.0"
 # Wave13: structured logging to drawpaper.log (app log dir) + stdout + webview
 # forward. Replaces env_logger as the global `log` logger; level=Info.
 tauri-plugin-log = "2.0"
+# Wave15 A: official Tauri updater (manual-only). The native "帮助→检查更新…"
+# flow calls Updater.check() ONCE on user click; no startup/timer/poll. When a
+# newer signed release is found we show a confirm dialog, then
+# download_and_install + restart; on no-update / offline / missing-endpoint /
+# any error we transparently fall back to opening the Releases web page (the
+# Wave13 behavior). The pubkey lives in tauri.conf plugins.updater.pubkey; the
+# matching private key is a GitHub secret (TAURI_SIGNING_KEY), never in-repo.
+tauri-plugin-updater = "2"
 # Wave13: decode the base64 export bytes (PDF/PNG/SVG/MD) passed by the frontend
 # through the `save_export` command.
 base64 = "0.22"
@@ -47,12 +55,6 @@ tokio = { version = "1", features = ["sync"] }
 # the app config dir; no extra KV store dependency.
 dirs = "5"
 log = "0.4"
-
-# NOTE on tauri-plugin-updater: intentionally NOT included.
-# Auto-update requires (1) a TAURI_SIGNING_PRIVATE_KEY at build time and
-# (2) a hosted `latest.json` update endpoint. We have neither in this repo.
-# Enabling the plugin without a valid pubkey would break `tauri build`.
-# See docs/p2-tauri-ci.md §Updater for the onboarding checklist.
 
 [features]
 # This feature is used for production builds where `devPath` points to the filesystem
