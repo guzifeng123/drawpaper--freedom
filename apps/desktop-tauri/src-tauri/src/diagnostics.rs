@@ -126,8 +126,10 @@ pub fn write_diagnostic_zip(
         }
     }
     let file = fs::File::create(out_zip)?;
-    let mut zip = zip::ZipWriter::new(file);
+    // NOTE: build `opts` BEFORE binding the writer to the name `zip`, otherwise
+    // the local `zip` shadows the crate path and `zip::CompressionMethod` breaks.
     let opts = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let mut zip = zip::ZipWriter::new(file);
     let zerr = |e: zip::ZipError| {
         std::io::Error::new(std::io::ErrorKind::Other, format!("zip: {e}"))
     };
