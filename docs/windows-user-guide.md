@@ -128,8 +128,8 @@ drawpaper 也支持**不安装、直接拷到 U 盘/移动硬盘里跑**：所�
 drawpaper 的窗口用 Microsoft Edge WebView2 渲染：
 
 - **Win11**：系统自带 WebView2 运行时，装完即跑。
-- **Win10 或精简过的系统**：第一次启动 drawpaper 会自动下载 WebView2 Evergreen Runtime（约 100MB）。
-- **完全离线 / 内网隔离机器**：提前在能上网的机器上下载「WebView2 Standalone Installer (x64)」（Microsoft 官网，搜 *Evergreen Bootstrapper* / *Standalone*），拷到内网装好，再装 drawpaper 即可。
+- **Win10 或精简过的系统（联网）**：第一次启动 drawpaper 的安装器会自动联网下载 WebView2 Evergreen Runtime。
+- **完全离线 / 内网隔离机器**：当前安装包**不内置**运行时，需要你先在能上网的机器上，到 Microsoft 官网下载「WebView2 Evergreen Standalone Installer」（按机型选 x64 / x86 / ARM64），拷到内网先装好，再装 drawpaper。官方下载页：`https://developer.microsoft.com/microsoft-edge/webview2/`（选 *Evergreen Standalone Installer*，不是 Bootstrapper）。
 - WebView2 崩了会表现为白屏 / 窗口卡死；关掉 drawpaper 重开即可，文档有 500ms 防抖自动保存兜底。
 
 ## 5. 检查更新
@@ -159,11 +159,16 @@ drawpaper 官方不提供任何云服务，同步通道完全由你自己选，�
 ## 7. 日志与反馈
 
 - 日志文件位置：`%APPDATA%\com.drawpaper.app\logs\drawpaper.log`（按启动追加，由 tauri-plugin-log 写入）。
+- **一键导出诊断包（推荐）**：菜单「帮助 → 导出诊断信息…」，选个保存位置，会生成一个
+  `drawpaper-diagnostic-YYYYMMDD.zip`。里面有：`system.json`（版本/OS/架构/WebView2 版本）、
+  日志尾部（约 256KB）、`files-manifest.json`（数据目录文件清单，仅路径/大小/时间）、
+  说明。**这个 zip 不含任何 `.kbnote` 文档正文，也不含图片/附件字节**——你可以放心附上。
+  取消对话框不会报错。
 - 出 bug（崩溃、白屏、同步报错、快捷键失灵）时：
   1. 先把 app 关掉再重开一次，看是否复现。
-  2. 复现后把 `%APPDATA%\com.drawpaper.app\logs\drawpaper.log` 最近几百行截出来（里面不含文档正文，只有启动 / 错误栈）。
-  3. 到仓库 Issues 页提一条：附上 Windows 版本（Win10/11、x64/ARM64）、drawpaper 版本号（菜单「帮助 → 关于」）、复现步骤、日志尾部。
-- 反馈时**不要**把 `%APPDATA%\com.drawpaper.app\` 下的备份 `.kbnote` 直接贴出来——那是你的私有文档。
+  2. 复现后用上面的「导出诊断信息」生成 zip。
+  3. 到仓库 Issues 页提一条：附上 drawpaper 版本号（菜单「帮助 → 关于」）、Windows 版本（Win10/11、x64/ARM64）、复现步骤，以及导出的诊断 zip。
+- 反馈时**不要**把 `%APPDATA%\com.drawpaper.app\` 下的备份 `.kbnote` 直接贴出来——那是你的私有文档；诊断包已经替你避开了它们的正文。
 
 ## 8. 边界与已知限制
 

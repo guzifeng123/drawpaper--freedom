@@ -55,6 +55,10 @@ tokio = { version = "1", features = ["sync"] }
 # the app config dir; no extra KV store dependency.
 dirs = "5"
 log = "0.4"
+# Wave15 C: pure-Rust diagnostic bundle (help → 导出诊断信息 / `--diag-export`).
+# zip writes the archive in Rust (no web dep). WebView2/OS version detection shells
+# out to the system `reg.exe query` (std::process::Command) — no winreg dependency.
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [features]
 # This feature is used for production builds where `devPath` points to the filesystem
