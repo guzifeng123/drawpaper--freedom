@@ -35,6 +35,7 @@ on:
       - 'feat/msi-bilingual'
       - 'chore/portable-smoke-ci'
       - 'chore/ci-exe-hardening'
+      - 'chore/arm64-runner-smoke'
   workflow_dispatch:
 
 permissions:
