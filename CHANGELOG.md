@@ -2,6 +2,12 @@
 
 本文件按「用户可见能力」分组归纳各版本，不逐条罗列提交。每个版本标题为语义化版本号，预发布版后缀 `-rc.N` / `-beta.N` / `-alpha.N`。
 
+## 未发布（Unreleased）
+
+### Windows 桌面端
+
+- **桌面全局快捷键（失焦可用）**：注册一组系统级快捷键，即使 drawpaper 窗口不在前台也能触发，动作与原生菜单同源（快捷键回调不新写业务逻辑，菜单类动作直接复用 `app:menu` 事件通道）。固定集为 `Ctrl+Shift+D`（显示并聚焦主窗口：显示 + 取消最小化 + 聚焦）、`Ctrl+S`（保存）、`Ctrl+P`（打印 / 另存为 PDF）、`Ctrl+F`（聚焦搜索）。用户可在 app 配置目录的 `drawpaper-shortcuts.json` 里改 accelerator→action 映射（合法动作：`focus_window` / `file:save` / `export:print` / `view:search`，空串表示解绑）；配置缺失时静默用默认集，JSON 损坏 / 非法 accelerator / 未知 action / 快捷键被其他应用占用等任一失败项均逐项记日志并回退或跳过，**不弹窗、不 panic、不阻断启动**。详见 `docs/wave17/global-shortcuts.md` 与 `docs/windows-user-guide.md`「全局快捷键」。
+
 ## 0.1.0-rc.8
 
 Windows 桌面 EXE 收口波：原生手动更新器、WiX MSI 安装包矩阵、隐私安全诊断包、便携模式（U盘运行），以及资产内容去重与垃圾回收。同一次 CI 产出 NSIS ×2 + MSI ×2 共四个 Windows 安装包。
