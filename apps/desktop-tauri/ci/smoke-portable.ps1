@@ -1,153 +1,476 @@
 <#
 .SYNOPSIS
-  Manual smoke test for drawpaper Windows portable mode (Wave16-I).
+  Smoke test for drawpaper Windows portable mode (Wave18).
 
 .DESCRIPTION
   Self-contained: does NOT read any GitHub Actions / CI environment variable.
   You can run it by hand on a Windows box:
 
-      powershell -ExecutionPolicy Bypass -File .\smoke-portable.ps1 -ExePath C:\path\to\drawpaper.exe
+      powershell -ExecutionPolicy Bypass -File .\smoke-portable.ps1 `
+          -ExePath C:\path\to\drawpaper.exe
 
-  What it does:
-    1. Builds a throwaway portable tree under $env:TEMP\drawpaper-portable-smoke\
-    2. Copies drawpaper.exe there and drops the `drawpaper.portable` marker next to it
-    3. Snapshots whether %APPDATA%\com.drawpaper.app already exists
-    4. Launches the exe, waits for it to write data
-    5. Asserts ./data\ got populated (logs / recents / window-state)
-    6. Asserts the system AppData dir was NOT newly created by this portable run
-    7. Kills the spawned process and cleans up (prints the tree first so you can inspect)
+  To also exercise the reinstall case (c), point at the matching NSIS setup.exe:
 
-  Exit code 0 = portable mode behaved correctly; non-zero = assertion failed.
+      powershell -ExecutionPolicy Bypass -File .\smoke-portable.ps1 `
+          -ExePath C:\path\to\drawpaper.exe `
+          -SetupExePath C:\path\to\drawpaper_0.1.0-rc.9_x64-setup.exe
+
+  Runs up to three independent test cases, each in its own throwaway tree under
+  %TEMP% (guarded by a per-case try/finally + a global kill at the end):
+
+    a. Marker trigger + isolation
+       - Copy exe to a fresh tree, drop `drawpaper.portable` next to it.
+       - Snapshot %APPDATA%\com.drawpaper.app and %LOCALAPPDATA%\com.drawpaper.app.
+       - Launch, bounded-poll (up to -WaitSeconds*2) for ./data\logs\drawpaper.log.
+       - Assert ./data\ got logs/recents/window-state/EBWebView (log REQUIRED).
+       - Assert system AppData was not newly created (or file count did not grow).
+
+    b. data/ directory trigger
+       - Fresh tree, NO marker, only a pre-created empty ./data/ dir.
+       - Launch, assert the same portable redirect (data lands in ./data/).
+
+    c. Reinstall does not clobber portable data (requires -SetupExePath)
+       - Fresh tree (with marker), let it produce data (logs/recents).
+       - Record the on-disk file set under ./data/.
+       - Re-run the system NSIS installer silently (/S /CURRENTUSER).
+       - Relaunch the SAME portable tree.
+       - Assert every file recorded before the reinstall still exists, and that
+         a fresh launch still redirects into ./data/ (system AppData did not grow).
+
+  Each case gets its own temp tree; process cleanup is in finally plus a global
+  double-kill at the end. Use -Keep to leave trees on disk for manual inspection
+  (processes are still killed). Exit code 0 = all requested cases passed;
+  non-zero = first failure (with tree diagnostics).
 
 .PARAMETER ExePath
   Path to a real drawpaper.exe (a release build). No default — you must point at it.
 
+.PARAMETER SetupExePath
+  Path to the matching NSIS *-setup.exe. Required for case c; if omitted, case c
+  is skipped (logged as SKIP).
+
 .PARAMETER WaitSeconds
-  How long to let the app run before asserting. Default 10.
+  Base settle budget. Each bounded poll waits up to (WaitSeconds * 2) seconds for
+  the log file to appear. Default 15.
+
+.PARAMETER Cases
+  Which cases to run. Default @('a','b','c'). Case c is auto-skipped when
+  -SetupExePath is empty.
 
 .PARAMETER Keep
-  If set, do not delete the smoke tree on exit (for manual inspection).
+  If set, do not delete the smoke trees on exit (for manual inspection).
 #>
 
 param(
     [Parameter(Mandatory = $true)]
     [string]$ExePath,
 
-    [int]$WaitSeconds = 10,
+    [string]$SetupExePath = '',
+
+    [int]$WaitSeconds = 15,
+
+    [string[]]$Cases = @('a','b','c'),
 
     [switch]$Keep
 )
 
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+
+# --- helpers ----------------------------------------------------------------
 
 function Fail([string]$msg) {
+    Write-Host ""
+    Write-Host "=============================================================="
     Write-Host "FAIL: $msg" -ForegroundColor Red
+    Write-Host "=============================================================="
+    Write-Host ""
     exit 1
 }
 
 function Ok([string]$msg) {
-    Write-Host "ok:   $msg" -ForegroundColor Green
+    Write-Host "  ok: $msg" -ForegroundColor Green
 }
 
-# --- 0. Sanity: the exe actually exists -------------------------------------
-if (-not (Test-Path -LiteralPath $ExePath)) {
-    Fail "exe not found: $ExePath"
+function Info([string]$msg) {
+    Write-Host "  ..: $msg" -ForegroundColor DarkGray
 }
+
+function Banner([string]$text) {
+    Write-Host ""
+    Write-Host "--------------------------------------------------------------"
+    Write-Host "CASE $text"
+    Write-Host "--------------------------------------------------------------"
+}
+
+function Write-TreeDiag([string]$root) {
+    if (-not (Test-Path -LiteralPath $root)) {
+        Info "(tree does not exist: $root)"
+        return
+    }
+    Write-Host "  --- tree: $root ---"
+    Get-ChildItem -LiteralPath $root -Recurse -ErrorAction SilentlyContinue |
+        Select-Object -First 80 |
+        ForEach-Object {
+            $rel = $_.FullName.Substring($root.Length).TrimStart('\')
+            if ($_.PSIsContainer) { Write-Host "    [D] $rel" }
+            else { Write-Host "    [F] $rel  ($($_.Length) bytes)" }
+        }
+    Write-Host "  --- end tree ---"
+}
+
+# Kill a process gracefully (WM_CLOSE) then force-kill if it lingers, plus any
+# other drawpaper.exe / msedgewebview2.exe process running out of the portable
+# tree we launched (the WebView2 children hold EBWebView leveldb handles).
+function Stop-PortableProcess([System.Diagnostics.Process]$proc, [string]$portableExe) {
+    $root = Split-Path -Parent $portableExe
+    if ($proc) {
+        try { $proc.Refresh() } catch {}
+        if (-not $proc.HasExited) {
+            # Try graceful close first (lets WebView2 flush leveldb).
+            try { $null = $proc.CloseMainWindow() } catch {}
+            for ($i = 0; $i -lt 5; $i++) {
+                Start-Sleep -Seconds 1
+                try { $proc.Refresh() } catch {}
+                if ($proc.HasExited) { break }
+            }
+        }
+        try { $proc.Refresh() } catch {}
+        if (-not $proc.HasExited) {
+            Info "force-killing PID $($proc.Id)"
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+    # Sweep any other process running from this exact portable exe path.
+    Get-Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and ($_.Path -eq $portableExe) } |
+        ForEach-Object {
+            Info "sweeping extra process $($_.Id) at $portableExe"
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        }
+    # Sweep WebView2 children spawned for OUR temp tree (other runners'/steps'
+    # msedgewebview2 instances live elsewhere and are left alone).
+    Get-Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and ($_.Path -like "$root*") } |
+        ForEach-Object {
+            Info "sweeping child process $($_.Id) ($($_.ProcessName)) under $root"
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        }
+}
+
+# Kill EVERY drawpaper.exe on the box (used before a reinstall and at exit).
+function Stop-AllDrawpaper {
+    Get-Process -ErrorAction SilentlyContinue |
+        Where-Object { $_.ProcessName -eq 'drawpaper' } |
+        ForEach-Object {
+            Info "killing leftover drawpaper PID $($_.Id)"
+            Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+        }
+}
+
+# Bounded poll: run $predicate every 1s up to $MaxSeconds. Returns $true on first
+# success, $false if the budget expired. Prints progress every 5s.
+function Wait-Until([int]$MaxSeconds, [scriptblock]$predicate, [string]$what) {
+    for ($i = 0; $i -lt $MaxSeconds; $i++) {
+        if (& $predicate) {
+            Info "ready after ${i}s: $what"
+            return $true
+        }
+        if (($i % 5) -eq 0) {
+            Info "waiting (${i}/${MaxSeconds}s) for: $what"
+        }
+        Start-Sleep -Seconds 1
+    }
+    $final = & $predicate
+    if (-not $final) { Info "timed out after ${MaxSeconds}s: $what" }
+    return $final
+}
+
+# Snapshot both system AppData roots; returns an ordered hashtable.
+function Get-SystemAppDataSnapshot {
+    $roaming = Join-Path $env:APPDATA 'com.drawpaper.app'
+    $local  = Join-Path $env:LOCALAPPDATA 'com.drawpaper.app'
+    $snap = [ordered]@{}
+    foreach ($pair in @(@('roaming', $roaming), @('local', $local))) {
+        $name = $pair[0]; $p = $pair[1]
+        $existed = Test-Path -LiteralPath $p
+        if ($existed) {
+            $count = @(Get-ChildItem -LiteralPath $p -Recurse -File -ErrorAction SilentlyContinue).Count
+        } else {
+            $count = 0
+        }
+        $snap[$name] = [pscustomobject]@{ Path = $p; Existed = $existed; Count = $count }
+        Info "system $($name) AppData snapshot: existed=$existed files=$count ($p)"
+    }
+    return $snap
+}
+
+# Compare post-run snapshot against $before. Throws via Fail on growth/new-dir.
+function Assert-NoSystemAppDataGrowth($before, [string]$label) {
+    $after = Get-SystemAppDataSnapshot
+    foreach ($name in @('roaming','local')) {
+        $b = $before[$name]; $a = $after[$name]
+        if (-not $b.Existed) {
+            if ($a.Existed) {
+                Write-TreeDiag $a.Path
+                Fail "[$label] portable run CREATED $($a.Path) — data leaked into system AppData!"
+            }
+            Ok "[$label] system $($name) AppData was not created"
+        } else {
+            if ($a.Count -gt $b.Count) {
+                Write-Host "  before: $($b.Count) files under $($b.Path)"
+                Write-Host "  after : $($a.Count) files under $($a.Path)"
+                Write-TreeDiag $a.Path
+                Fail "[$label] system $($name) AppData grew ($($b.Count) -> $($a.Count)) during portable run — data leaked!"
+            }
+            Ok "[$label] system $($name) AppData file count stable ($($b.Count) -> $($a.Count))"
+        }
+    }
+}
+
+# Create a fresh temp tree, copy the exe in. Returns the root path.
+function New-PortableTree {
+    $root = Join-Path $env:TEMP ('drawpaper-portable-smoke-' + [guid]::NewGuid().ToString('N').Substring(0,8))
+    New-Item -ItemType Directory -Force -Path $root | Out-Null
+    Copy-Item -LiteralPath $ExePath -Destination (Join-Path $root 'drawpaper.exe') -Force
+    Info "created portable tree: $root"
+    return $root
+}
+
+# Wait for the portable data dir + log file to appear. Throws on timeout.
+function Assert-PortableDataFlowing([string]$root, [string]$label) {
+    $dataDir = Join-Path $root 'data'
+    $logFile = Join-Path $dataDir 'logs\drawpaper.log'
+
+    $okLog = Wait-Until ($WaitSeconds * 2) {
+        Test-Path -LiteralPath $logFile
+    } "log file $logFile to appear"
+
+    if (-not $okLog) {
+        Write-Host "  data dir exists = $(Test-Path -LiteralPath $dataDir)"
+        if (Test-Path -LiteralPath $dataDir) { Write-TreeDiag $dataDir }
+        Write-TreeDiag $root
+        Fail "[$label] no drawpaper.log under $dataDir\logs after $($WaitSeconds*2)s — portable mode did not activate or log plugin did not redirect"
+    }
+    Ok "[$label] portable log present: $logFile"
+
+    # Task requirement: data\ must hold at least one of recents / window-state /
+    # EBWebView (proves the path redirect actually moved more than just the log
+    # target). These land slightly after the log, so give a bounded grace.
+    $recents     = Join-Path $dataDir 'drawpaper-recents.json'
+    $windowState = Join-Path $dataDir 'window-state.json'
+    $ebwebview   = Join-Path $dataDir 'EBWebView'
+    $haveArtifact = Wait-Until $WaitSeconds {
+        (Test-Path -LiteralPath $recents) -or
+        (Test-Path -LiteralPath $windowState) -or
+        (Test-Path -LiteralPath $ebwebview -PathType Container)
+    } "at least one of recents / window-state / EBWebView to land under $dataDir"
+    if (-not $haveArtifact) {
+        Write-TreeDiag $dataDir
+        Fail "[$label] portable log appeared but NONE of recents/window-state/EBWebView landed under $dataDir within ${WaitSeconds}s — redirect looks partial"
+    }
+
+    $found = @('logs/drawpaper.log')
+    if (Test-Path -LiteralPath $recents)       { $found += 'drawpaper-recents.json' }
+    if (Test-Path -LiteralPath $windowState)   { $found += 'window-state.json' }
+    if (Test-Path -LiteralPath $ebwebview -PathType Container) { $found += 'EBWebView/' }
+    Ok "[$label] data/ artifacts: $($found -join ', ')"
+}
+
+# Remove a tree with retries (EBWebView leveldb may hold a handle briefly).
+function Remove-PortableTree([string]$root) {
+    if (-not (Test-Path -LiteralPath $root)) { return }
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        if (-not (Test-Path -LiteralPath $root)) {
+            Info "cleaned up $root (attempt $attempt)"
+            return
+        }
+        Start-Sleep -Seconds 1
+    }
+    Info "WARNING: could not fully remove $root after 5 attempts (leaving for OS cleanup)"
+    Write-TreeDiag $root
+}
+
+# --- 0. Sanity --------------------------------------------------------------
+if (-not (Test-Path -LiteralPath $ExePath)) { Fail "exe not found: $ExePath" }
 $ExePath = (Resolve-Path -LiteralPath $ExePath).Path
 Write-Host "Using exe: $ExePath"
+Write-Host "Setup exe: $(if ($SetupExePath) { $SetupExePath } else { '(none — case c will SKIP)' })"
+Write-Host "Cases requested: $($Cases -join ', ')"
+Write-Host "WaitSeconds: $WaitSeconds"
 
-# --- 1. Build the portable tree --------------------------------------------
-$Root = Join-Path $env:TEMP ('drawpaper-portable-smoke-' + [guid]::NewGuid().ToString('N').Substring(0,8))
-New-Item -ItemType Directory -Force -Path $Root | Out-Null
-$PortableExe = Join-Path $Root 'drawpaper.exe'
-Copy-Item -LiteralPath $ExePath -Destination $PortableExe -Force
+# Global baseline snapshot of system AppData (for a final growth sweep).
+$GlobalBefore = Get-SystemAppDataSnapshot
 
-# Drop the marker file (empty is fine).
-$Marker = Join-Path $Root 'drawpaper.portable'
-New-Item -ItemType File -Force -Path $Marker | Out-Null
-Ok "created portable tree at $Root"
-Ok "wrote marker $Marker"
+$ranCases = @()
 
-# --- 2. Snapshot system AppData BEFORE the run ------------------------------
-$SystemAppData = Join-Path $env:APPDATA 'com.drawpaper.app'
-$SystemExistedBefore = Test-Path -LiteralPath $SystemAppData
-if ($SystemExistedBefore) {
-    Write-Host "note: $SystemAppData already exists on this machine (install-mode data); will compare file counts instead of existence."
-    $BeforeCount = (Get-ChildItem -LiteralPath $SystemAppData -Recurse -File -ErrorAction SilentlyContinue | Measure-Object).Count
-} else {
-    $BeforeCount = 0
+# --- Case a: marker trigger + isolation -------------------------------------
+if ($Cases -contains 'a') {
+    Banner "a: marker trigger + isolation"
+    $root = New-PortableTree
+    $marker = Join-Path $root 'drawpaper.portable'
+    New-Item -ItemType File -Force -Path $marker | Out-Null
+    Info "wrote marker: $marker"
+
+    $snapBefore = Get-SystemAppDataSnapshot
+    $proc = $null
+    try {
+        # The single-instance plugin keys off the app identifier GLOBALLY (not
+        # off the redirected data dir). A lingering system-installed drawpaper
+        # from a prior CI step would absorb our portable launch into its existing
+        # process and this exe would exit instantly with no ./data log. Kill all
+        # drawpaper before every launch so each case is hermetic.
+        Stop-AllDrawpaper
+        Info "launching portable exe..."
+        $proc = Start-Process -FilePath (Join-Path $root 'drawpaper.exe') -PassThru
+        Assert-PortableDataFlowing $root 'a'
+        Assert-NoSystemAppDataGrowth $snapBefore 'a'
+    } finally {
+        Stop-PortableProcess $proc (Join-Path $root 'drawpaper.exe')
+    }
+    if (-not $Keep) { Remove-PortableTree $root } else { Info "Keep=set; leaving $root" }
+    $ranCases += 'a'
 }
 
-# --- 3. Launch the portable exe --------------------------------------------
-Write-Host "launching $PortableExe (waiting ${WaitSeconds}s)..."
-$proc = Start-Process -FilePath $PortableExe -PassThru
-try {
-    Start-Sleep -Seconds $WaitSeconds
+# --- Case b: data/ directory trigger (no marker) ----------------------------
+if ($Cases -contains 'b') {
+    Banner "b: data/ dir trigger (no marker)"
+    $root = New-PortableTree
+    # Pre-create an EMPTY data/ dir next to the exe. No marker.
+    New-Item -ItemType Directory -Force -Path (Join-Path $root 'data') | Out-Null
+    Info "pre-created empty data/ dir (no marker file)"
 
-    # --- 4. Assert ./data got populated ------------------------------------
-    $DataDir = Join-Path $Root 'data'
-    if (-not (Test-Path -LiteralPath $DataDir)) {
-        Fail "expected portable data dir $DataDir to exist, but it does not (portable mode did not activate?)"
+    $snapBefore = Get-SystemAppDataSnapshot
+    $proc = $null
+    try {
+        Stop-AllDrawpaper   # hermetic launch (see case a note)
+        Info "launching portable exe..."
+        $proc = Start-Process -FilePath (Join-Path $root 'drawpaper.exe') -PassThru
+        Assert-PortableDataFlowing $root 'b'
+        Assert-NoSystemAppDataGrowth $snapBefore 'b'
+    } finally {
+        Stop-PortableProcess $proc (Join-Path $root 'drawpaper.exe')
     }
-    Ok "portable data dir exists: $DataDir"
+    if (-not $Keep) { Remove-PortableTree $root } else { Info "Keep=set; leaving $root" }
+    $ranCases += 'b'
+}
 
-    $LogDir = Join-Path $DataDir 'logs'
-    $LogFile = Join-Path $LogDir 'drawpaper.log'
-    $Recents = Join-Path $DataDir 'drawpaper-recents.json'
-    $WindowState = Join-Path $DataDir 'window-state.json'
-    $EBWebView = Join-Path $DataDir 'EBWebView'
-
-    $found = @()
-    if (Test-Path -LiteralPath $LogFile)    { $found += 'logs/drawpaper.log' }
-    if (Test-Path -LiteralPath $Recents)    { $found += 'drawpaper-recents.json' }
-    if (Test-Path -LiteralPath $WindowState) { $found += 'window-state.json' }
-    if (Test-Path -LiteralPath $EBWebView -PathType Container) { $found += 'EBWebView/' }
-
-    # At least the log file MUST exist; the others are nice-to-have on first run.
-    if (-not (Test-Path -LiteralPath $LogFile)) {
-        Fail "no drawpaper.log under $LogDir — log plugin did not redirect into ./data"
-    }
-    Ok ("data/ populated with: " + ($found -join ', '))
-
-    # --- 5. Assert system AppData was not newly written --------------------
-    if (-not $SystemExistedBefore) {
-        if (Test-Path -LiteralPath $SystemAppData) {
-            Fail "portable run CREATED $SystemAppData — data leaked into system AppData!"
-        }
-        Ok "system AppData dir was NOT created (stays isolated from installed mode)"
+# --- Case c: reinstall does not clobber portable data -----------------------
+if ($Cases -contains 'c') {
+    if (-not $SetupExePath -or -not (Test-Path -LiteralPath $SetupExePath)) {
+        Banner "c: reinstall persistence — SKIPPED (no -SetupExePath or file missing)"
+        Info "pass -SetupExePath <path-to-*-setup.exe> to enable this case"
     } else {
-        Start-Sleep -Seconds 1
-        $AfterCount = (Get-ChildItem -LiteralPath $SystemAppData -Recurse -File -ErrorAction SilentlyContinue | Measure-Object).Count
-        if ($AfterCount -gt $BeforeCount) {
-            Fail "system AppData grew during portable run ($BeforeCount -> $AfterCount files) — data leaked!"
+        Banner "c: reinstall does not clobber portable data"
+        $SetupExePath = (Resolve-Path -LiteralPath $SetupExePath).Path
+
+        # Step 1: build a portable tree and let it produce data.
+        $root = New-PortableTree
+        $marker = Join-Path $root 'drawpaper.portable'
+        New-Item -ItemType File -Force -Path $marker | Out-Null
+        $snapBefore1 = Get-SystemAppDataSnapshot
+        $proc = $null
+        try {
+            Stop-AllDrawpaper   # hermetic launch (see case a note)
+            Info "first launch: letting portable tree produce data..."
+            $proc = Start-Process -FilePath (Join-Path $root 'drawpaper.exe') -PassThru
+            Assert-PortableDataFlowing $root 'c/1'
+        } finally {
+            Stop-PortableProcess $proc (Join-Path $root 'drawpaper.exe')
         }
-        Ok "system AppData file count stable ($BeforeCount -> $AfterCount)"
-    }
 
-    Write-Host ""
-    Write-Host "Portable tree for inspection:"
-    Get-ChildItem -LiteralPath $DataDir -Recurse -ErrorAction SilentlyContinue |
-        Select-Object -First 40 | ForEach-Object { Write-Host ("  " + $_.FullName.Substring($Root.Length)) }
-}
-finally {
-    # --- 6. Clean up the process -------------------------------------------
-    if ($proc -and -not $proc.HasExited) {
-        # Kill the whole tree (the exe may have spawned WebView2 children).
-        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-        Get-Process | Where-Object { $_.Path -eq $PortableExe } |
-            Stop-Process -Force -ErrorAction SilentlyContinue
-        Ok "stopped drawpaper process"
+        # Record the on-disk file set under ./data/ (relative paths + sizes).
+        $dataDir = Join-Path $root 'data'
+        $beforeFiles = @{}
+        Get-ChildItem -LiteralPath $dataDir -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+            $rel = $_.FullName.Substring($dataDir.Length).TrimStart('\')
+            $beforeFiles[$rel] = $_.Length
+        }
+        Info "recorded $($beforeFiles.Count) files under ./data/ before reinstall"
+        $beforeFiles.Keys | Sort-Object | ForEach-Object { Info "  pre: $_ ($($beforeFiles[$_]) bytes)" }
+
+        # Step 2: run the system NSIS installer again silently. Make sure no
+        # drawpaper.exe is running first (a "files in use" dialog would hang).
+        Stop-AllDrawpaper
+        Info "re-running system installer: $SetupExePath /S /CURRENTUSER"
+        $inst = Start-Process -FilePath $SetupExePath -ArgumentList '/S','/CURRENTUSER' -PassThru
+        $instOk = Wait-Until 120 { try { $inst.Refresh(); $inst.HasExited } catch { $true } } "installer process to exit"
+        if (-not $instOk) {
+            Stop-Process -Id $inst.Id -Force -ErrorAction SilentlyContinue
+            Fail "c: NSIS reinstall did not exit within 120s"
+        }
+        Info "installer exit code = $($inst.ExitCode)"
+        if ($inst.ExitCode -ne 0) {
+            Fail "c: NSIS reinstall exited $($inst.ExitCode) (expected 0)"
+        }
+
+        # Step 3: relaunch the SAME portable tree.
+        $logFile = Join-Path $dataDir 'logs\drawpaper.log'
+        # Snapshot the existing log's size + mtime BEFORE the second launch, so we
+        # can prove the *second* process actually wrote fresh bytes into ./data/
+        # (a mere "log still exists + process up" check is true instantly and
+        # would not detect a silent fallback to system dirs).
+        $logBefore = Get-Item -LiteralPath $logFile -ErrorAction SilentlyContinue
+        $logLenBefore = if ($logBefore) { $logBefore.Length } else { 0 }
+        $logMtimeBefore = if ($logBefore) { $logBefore.LastWriteTimeUtc } else { [datetime]::MinValue }
+        Info "log before 2nd launch: $logLenBefore bytes, mtime $logMtimeBefore"
+
+        $snapBefore2 = Get-SystemAppDataSnapshot
+        $proc = $null
+        try {
+            Stop-AllDrawpaper
+            Info "second launch: same portable tree after reinstall..."
+            $proc = Start-Process -FilePath (Join-Path $root 'drawpaper.exe') -PassThru
+            # Proof the second run re-entered portable mode: the process stays up
+            # AND the portable log file grows (or is touched) beyond its pre-launch
+            # state. If portable detection had regressed, the new process would
+            # write to the system log path instead and ./data\logs\drawpaper.log
+            # would stay untouched for the whole budget.
+            $grew = Wait-Until ($WaitSeconds * 2) {
+                try { $proc.Refresh() } catch {}
+                if ($proc.HasExited) { return $false }
+                $cur = Get-Item -LiteralPath $logFile -ErrorAction SilentlyContinue
+                if (-not $cur) { return $false }
+                (($cur.Length -gt $logLenBefore) -or ($cur.LastWriteTimeUtc -gt $logMtimeBefore.AddSeconds(1)))
+            } "second process to write fresh bytes into $logFile"
+            if (-not $grew) {
+                Write-Host "  log after 2nd launch: $((Get-Item $logFile -ErrorAction SilentlyContinue).Length) bytes, mtime $((Get-Item $logFile -ErrorAction SilentlyContinue).LastWriteTimeUtc)"
+                Write-TreeDiag $root
+                Fail "c: after reinstall, portable exe stayed up but never wrote to ./data\logs\drawpaper.log (stayed up=$(-not $proc.HasExited)) — portable mode not re-recognized?"
+            }
+            Ok "c: portable exe still running and writing fresh bytes to ./data/ after reinstall"
+
+            # Assert every file recorded before the reinstall still exists.
+            $missing = @()
+            foreach ($rel in $beforeFiles.Keys) {
+                $p = Join-Path $dataDir $rel
+                if (-not (Test-Path -LiteralPath $p)) { $missing += $rel }
+            }
+            if ($missing.Count -gt 0) {
+                Write-TreeDiag $root
+                Fail "c: these pre-reinstall files are GONE after reinstall: $($missing -join ', ')"
+            }
+            Ok "c: all $($beforeFiles.Count) pre-reinstall files still present under ./data/"
+
+            Assert-NoSystemAppDataGrowth $snapBefore2 'c/2'
+        } finally {
+            Stop-PortableProcess $proc (Join-Path $root 'drawpaper.exe')
+        }
+        if (-not $Keep) { Remove-PortableTree $root } else { Info "Keep=set; leaving $root" }
+        $ranCases += 'c'
     }
 }
 
-if (-not $Keep) {
-    Start-Sleep -Seconds 1
-    Remove-Item -LiteralPath $Root -Recurse -Force -ErrorAction SilentlyContinue
-    Ok "cleaned up $Root"
-} else {
-    Write-Host "Keep=set; leaving tree at $Root"
-}
+# --- Final sweep: make sure no drawpaper process lingers (would block the
+#     downstream NSIS uninstall step). --------------------------------------
+Stop-AllDrawpaper
+
+# Final global AppData growth check (catches any case that leaked at exit).
+Assert-NoSystemAppDataGrowth $GlobalBefore 'final'
 
 Write-Host ""
-Write-Host "SMOKE PASS" -ForegroundColor Cyan
+Write-Host "=============================================================="
+Write-Host "SMOKE PASS (cases run: $($ranCases -join ', '))" -ForegroundColor Cyan
+Write-Host "=============================================================="
 exit 0
