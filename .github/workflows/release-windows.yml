@@ -32,6 +32,7 @@ on:
       - 'feat/desktop-coldstart-race'
       - 'feat/desktop-folder-autosave'
       - 'feat/desktop-global-shortcuts'
+      - 'chore/portable-smoke-ci'
   workflow_dispatch:
 
 permissions:
