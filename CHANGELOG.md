@@ -4,7 +4,11 @@
 
 ## 未发布（Unreleased）
 
-（暂无）
+### 内部工程
+
+纯 CI/工程加固，无用户可见行为变化（release-windows）：
+
+- **新增 `arm64-native` 原生 ARM64 实跑冒烟 job**：跑在 GitHub hosted `windows-11-arm` runner 上，与 build/publish 并列、互不为依赖——自带 checkout / pnpm 11.7.0 / Node 22 / JS deps / Tauri CLI，job 开头先断言 `PROCESSOR_ARCHITECTURE=ARM64` 且 `rustc host=aarch64-pc-windows-msvc`（原生编译硬证据），随后 `pnpm -r build` 与 `tauri build --bundles nsis,msi --target aarch64-pc-windows-msvc`，并把现有 x64 NSIS 三条冒烟（静默安装 + ProductVersion 断言 / 启动后窗口标题含 drawpaper / 静默卸载目录移除，全部有界轮询 + Wave18 P2 残留进程兜底）精简复制到 arm64 真跑。该 job **不产 release 资产、不进 publish 的 needs**——发布仍以 x64 交叉构建的 `nsis-arm64`/`msi-arm64` 为准；仅在失败时上传 `arm64-native-logs`。2026-10-08 首轮即绿（12m18s）：WiX 工具链由 Tauri CLI 在 arm 镜像联网自动获取成功，arm64 NSIS+MSI 双包原生编译、安装、启动、卸载全链路通过。详见 `docs/wave18/arm64-runner-assessment.md` §5。
 
 ## 0.1.0-rc.10（2026-10-08）
 

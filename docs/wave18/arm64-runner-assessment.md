@@ -45,3 +45,33 @@
 - **不加任何 arm64 实跑 job**（任务红线）。matrix 维持 `runs-on: windows-latest` 双架构交叉构建；冒烟维持 `matrix.arch == 'x64'` 门控。
 - 理由：① 本波次范围是 EXE 收尾加固（P1/P2），arm64 实跑是独立议题；② VS2026 镜像 2026-09 刚完成滚动，arm 镜像生产稳定性观察期尚短；③ GUI 类冒烟在 arm runner 桌面会话上零经验，贸然放开会引入新 flaky 面。
 - 后续触发条件：当需要对 arm64 真机用户负责（例如首批 ARM Windows 用户反馈）时，按 §3 清单立项迁移。
+
+## 5. 2026-10-08 实测（Wave19）：可行，`arm64-native` job 已接入
+
+> 分支 `chore/arm64-runner-smoke`，首轮 CI 即绿，未触发第二轮降级。结论翻转：§3 列的前置条件在实跑中**全部满足**。
+
+### 5.1 run 编号与证据
+
+- 触发确认 run（仅白名单一行）：`37684637041`（cba08e0）。
+- **首轮实测 run：`37684812438`（3294ced，https://github.com/guzifeng123/drawpaper--freedom/actions/runs/37684812438 ），总 17m33s，整体 Success。**
+- `arm64-native` job：`12m18s`，succeeded，调度记录 `runs-on: windows-11-arm`（GitHub runner #1000000465）——**非排队不分配，立即上路**。
+- 原生证据（job 第 3 步「Arch evidence」断言式打印，两项不满足即 `Write-Error` 判红；该步 success ⇒ 两项均通过）：
+  - `PROCESSOR_ARCHITECTURE = ARM64`；
+  - `rustc -vV` host = `aarch64-pc-windows-msvc`（原生编译，非 x64 模拟）。
+- 步骤级结论（API 取证）：Checkout / pnpm 11.7.0 / Node22 / `pnpm install --frozen-lockfile` / Tauri CLI / `rustup target add aarch64-pc-windows-msvc` / `pnpm -r build` / `tauri build --ci --bundles nsis,msi --target aarch64-pc-windows-msvc` / NSIS 静默安装+ProductVersion / 启动标题轮询 / 静默卸载+残留兜底——**全部 success**；`Upload arm64-native logs on failure` 按 `if: failure()` 正确 skipped。
+
+### 5.2 关键风险点实测结论（对照 §1/§3 的预判）
+
+| 预判风险 | 实测结果（2026-10-08） |
+| --- | --- |
+| WiX 不在 arm 镜像，MSI 可能构建失败 | **未发生**：Tauri CLI 联网自动获取 WiX 工具链成功，arm64 MSI 与 NSIS 同轮产出，未触发「第二轮降为 `--bundles nsis`」预案。 |
+| WebView2 Evergreen ARM64 Runtime 是否预装未知 | **预装可用**：启动冒烟 20s 窗口标题轮询内拿到含 drawpaper 的主窗口（WebView2 渲染成功），无需 embedBootstrapper 兜底。 |
+| arm runner 桌面会话 GUI 冒烟不确定性 | **确定通过**：启动→标题断言→杀进程三步在 3 分钟超时窗内完成；卸载器 60s 有界等待 + 20s 目录轮询 + Wave18 P2 残留 sweep 一次通过，未触发兜底。 |
+| 4 vCPU/16GB 性能 | `pnpm -r build` + 全量 Rust release 编译 + 双 bundle 共 12m18s，与 x64 matrix（17m28s 含全部 20+ 条冒烟）同量级，无容量问题。 |
+
+### 5.3 落地形态（与 §3 建议的差异）
+
+- 未把 arm64 冒烟塞进既有 matrix 的 `matrix.arch=='x64'` 门控放开，而是**新增独立 `arm64-native` job**：`runs-on: windows-11-arm`，与 build/publish 并列、无 `needs`。
+- **不产 release 资产**：发布仍以 x64 交叉构建的 `nsis-arm64`/`msi-arm64` artifact 为准（避免与 `nsis-arm64`/`msi-arm64` 重名）；`publish.needs` 仍只有 `build`，未动。
+- 失败取证：仅 `if: failure()` 上传 `arm64-native-logs`（tauri-build.log），release 资产路径零污染。
+- 后续：该 job 随 `chore/arm64-runner-smoke` 分支白名单触发；待稳定观察若干波次后，可考虑把 headless CLI 冒烟（`--native-autosave-selftest` / `--diag-export`）从 x64 复制到本 job（§3 第 4 条，当前三条冒烟已覆盖安装/启动/卸载主干）。
