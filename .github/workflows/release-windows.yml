@@ -735,7 +735,8 @@ jobs:
           $bad = @()
           foreach ($e in $man) {
             $props = @($e.PSObject.Properties.Name | Sort-Object)
-            if (($props -join ',') -ne 'name,size,mtime') { $bad += ($props -join ',') }
+            # Sort-Object yields alphabetic order: mtime, name, size (m<n<s).
+            if (($props -join ',') -ne 'mtime,name,size') { $bad += ($props -join ',') }
           }
           if ($bad.Count -gt 0) { Write-Error ("Smoke FAIL: manifest entries with unexpected fields: " + ($bad -join ' | ')) }
           $names = $man | ForEach-Object { $_.name }
