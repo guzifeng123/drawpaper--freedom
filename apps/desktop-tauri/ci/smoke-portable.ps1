@@ -409,14 +409,21 @@ if ($Cases -contains 'c') {
             Stop-PortableProcess $proc (Join-Path $root 'drawpaper.exe')
         }
 
-        # Record the on-disk file set under ./data/ (relative paths + sizes).
+        # Record the on-disk STABLE app files under ./data/ (relative paths).
+        # EXCLUDE the EBWebView subtree: WebView2 recycles its leveldb files
+        # (LOCK / *.log / MANIFEST-* / CURRENT) on every process restart, so the
+        # exact file set under ./data/EBWebView/ is NOT stable across a relaunch —
+        # asserting it survives verbatim was a flaky WebView2-timing check, not a
+        # real "reinstall clobbered portable data" signal. The reinstall touches
+        # only the system install dir, never this temp tree.
         $dataDir = Join-Path $root 'data'
         $beforeFiles = @{}
         Get-ChildItem -LiteralPath $dataDir -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
             $rel = $_.FullName.Substring($dataDir.Length).TrimStart('\')
+            if ($rel -like 'EBWebView\*') { return }
             $beforeFiles[$rel] = $_.Length
         }
-        Info "recorded $($beforeFiles.Count) files under ./data/ before reinstall"
+        Info "recorded $($beforeFiles.Count) stable app files under ./data/ before reinstall (EBWebView excluded)"
         $beforeFiles.Keys | Sort-Object | ForEach-Object { Info "  pre: $_ ($($beforeFiles[$_]) bytes)" }
 
         # Step 2: run the system NSIS installer again silently. Make sure no
