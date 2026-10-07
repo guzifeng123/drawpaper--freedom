@@ -1,21 +1,33 @@
 # drawpaper Windows 用户指南
 
 > 适用版本：Windows 10 / 11（x64 与 ARM64）。
-> 安装包为 NSIS `.exe`，由 `.github/workflows/release-windows.yml` 自动构建并发布到 GitHub Releases。
+> 安装包由 `.github/workflows/release-windows.yml` 自动构建并发布到 GitHub Releases。
 > 本指南面向**最终用户**，只讲「怎么装、数据在哪、出问题怎么办」，不讲构建。
+
+## 0. 选哪个安装包
+
+每个架构有**两种格式**，装出来的是同一个 drawpaper，只是安装器不同：
+
+| 格式 | 文件名 | 适合谁 | 安装范围 |
+|---|---|---|---|
+| **NSIS（推荐）** | `drawpaper_*_x64-setup.exe` / `drawpaper_*_arm64-setup.exe` | 绝大多数个人用户 | 向导可选「仅当前用户」（默认，不弹 UAC）或「为所有用户」 |
+| **WiX MSI** | `drawpaper_*_x64_en-US.msi` / `drawpaper_*_arm64_en-US.msi` | 企业批量部署 / 组策略 / SCCM / Intune | 固定**按机器安装**到 `C:\Program Files\drawpaper`（需要管理员） |
+
+个人用户直接下 NSIS `*-setup.exe` 即可。MSI 主要给要批量分发 / 静默部署（`msiexec /i xxx.msi /qn`）的 IT 管理员用；MSI 安装界面只有英文，NSIS 有中 / 英双语选择。
 
 ## 1. 下载与安装
 
 1. 打开仓库 Releases 页（`https://github.com/guzifeng123/drawpaper--freedom/releases`），选最新一条预发布（prerelease）。
-2. 按机型下载：
+2. 按机型下载（个人用户选 NSIS，企业批量部署才选 MSI，见 §0）：
    - 普通 Intel / AMD 笔记本、台式机 → `drawpaper_*_x64-setup.exe`
    - Copilot+ PC、Surface Pro X 等 ARM 设备 → `drawpaper_*_arm64-setup.exe`
-   - 同时下载 `SHA256SUMS.txt`，在 PowerShell 里校验：
+   - （可选）企业静默部署 → 同名 `*_x64_en-US.msi` / `*_arm64_en-US.msi`，管理员 `msiexec /i xxx.msi /qn`
+   - 同时下载 `SHA256SUMS.txt`，在 PowerShell 里校验（NSIS 与 MSI 四个包的校验和都在里面）：
      ```powershell
      Get-FileHash .\drawpaper_*_x64-setup.exe -Algorithm SHA256
      # 与 SHA256SUMS.txt 里对应那一行的哈希比对，一致再装
      ```
-3. 双击 `*-setup.exe` 安装。
+3. NSIS 双击 `*-setup.exe` 安装；MSI 双击 `.msi` 或命令行 `msiexec /i xxx.msi`。
 
 ### 1.1 SmartScreen 蓝色弹窗（「Windows 已保护你的电脑」）
 
@@ -37,7 +49,8 @@ Wave13 起安装器配置为 `both`：安装向导里**默认按当前用户安�
 
 - 方式一：Windows 设置 → 应用 → 已安装的应用 → drawpaper → 卸载。
 - 方式二：开始菜单 → 右键 drawpaper → 卸载。
-- 静默卸载器是安装目录下的 `unins000.exe`。
+- NSIS 静默卸载器是安装目录下的 `unins000.exe`。
+- MSI 版卸载走系统「应用」面板，或管理员命令行 `msiexec /x drawpaper_*_x64_en-US.msi /qn`。MSI 固定装在 `C:\Program Files\drawpaper`。
 
 ## 2. 数据目录与卸载后保留策略
 

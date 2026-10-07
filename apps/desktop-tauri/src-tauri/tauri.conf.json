@@ -31,7 +31,8 @@
   "bundle": {
     "active": true,
     "targets": [
-      "nsis"
+      "nsis",
+      "msi"
     ],
     "publisher": "drawpaper contributors",
     "copyright": "MIT",
@@ -54,6 +55,9 @@
         ],
         "headerImage": "icons/installer-header.bmp",
         "sidebarImage": "icons/installer-sidebar.bmp"
+      },
+      "wix": {
+        "version": "0.1.0.7"
       }
     },
     "macOS": {
