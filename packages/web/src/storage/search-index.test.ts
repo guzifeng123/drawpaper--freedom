@@ -5,7 +5,7 @@ import { extractPlainText, buildIndex, searchDocs } from './search-index';
 function docWith(blocks: Array<{ id: string; data: unknown }>): KBNoteDoc {
   return {
     format: 'knowledge-block-notes',
-    version: 3,
+    version: 4,
     id: 'd1',
     title: 't',
     board: { createdAt: 0, updatedAt: 0 },

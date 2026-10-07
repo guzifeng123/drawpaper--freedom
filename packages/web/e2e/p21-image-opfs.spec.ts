@@ -111,7 +111,9 @@ test.describe('P2.1 图片 → OPFS assetRef 统一管线', () => {
     await page.keyboard.press('Escape');
     const assetRefs2 = await page.evaluate(() => window.__drawpaper__!.listAssetRefs());
     console.log('AFTER_SLASH_ASSET_REFS', assetRefs2);
-    expect(assetRefs2.length).toBeGreaterThanOrEqual(2);
+    // Wave16 F：内容寻址去重——两次拖入相同 PNG 只登记一个 hash ref（而非两个 nanoid）。
+    expect(assetRefs2.length).toBe(1);
+    expect(assetRefs2[0]).toMatch(/^[0-9a-f]{64}$/);
     // 全部 image.src 都不是 dataURL
     const allSrc = await page.evaluate(() =>
       window.__drawpaper__!.getState().doc.nodes.filter((n) => n.type === 'image').map((n) => n.image!.src),

@@ -2,6 +2,16 @@ import type { KBNoteDoc, DocRefLink, PaginateResult } from '@drawpaper/core';
 import { parseKBNote, KBNoteFileError, serializeKBNote, mergeSnapshots } from '@drawpaper/core';
 import { editorStore } from '@/store/editor-store';
 import { getAsset, isOpfsAvailable, writeAssetToRef, deleteAsset } from '@/storage/opfs';
+import {
+  listAssets,
+  listTrashAssets,
+  trashAssetsSize,
+} from '@/storage/opfs';
+import { reconcileAssetRefs } from '@/storage/asset-reconcile';
+import {
+  runManualAssetCleanup,
+  confirmEmptyRetention,
+} from '@/storage/asset-gc-web';
 import { loadBacklinks } from '@/storage/backlinks';
 import { mountOverviewDev, unmountOverviewDev } from '@/overview/dev-mount';
 import { requestDeleteNodes } from './block-delete-guard';
@@ -145,6 +155,19 @@ export interface DrawpaperDevHook {
   opfsReadAssetB64(ref: string): Promise<string | null>;
   /** Wave14：向注入的 fake 同步目录写字节文件（assets/<ref>），模拟对端落盘资产。 */
   syncFakeWriteBytes(path: string, b64: string): void;
+  // ---- Wave16 F：资产内容寻址 + 孤儿 GC e2e seam ----
+  /** 跑一次 v3→v4 资产 reconcile（nanoid→hash），返回摘要。 */
+  opfsReconcile(): Promise<unknown>;
+  /** 列出现存主资产区全部 ref。 */
+  opfsListAssets(): Promise<string[]>;
+  /** 保留区（孤儿资产）现有条目 ref 列表。 */
+  trashListAssets(): Promise<string[]>;
+  /** 保留区占用字节。 */
+  trashAssetsBytes(): Promise<number>;
+  /** 手动「清理未使用资产」：孤儿移进保留区，返回结果。 */
+  assetGcManual(): Promise<unknown>;
+  /** 用户确认后物理清空保留区，返回清除条数。 */
+  assetGcPurge(): Promise<number>;
   // ---- Wave13 欢迎文档：e2e 模拟宿主首次运行创建流程 ----
   /** 当前是否检测到 Tauri 宿主（duck-type __TAURI__）。 */
   welcomeDetectHost(): boolean;
@@ -465,6 +488,24 @@ export function installDevHooks(): void {
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i) ?? 0;
       void injectedFake.writeBytes(path, bytes);
+    },
+    async opfsReconcile() {
+      return reconcileAssetRefs();
+    },
+    async opfsListAssets() {
+      return listAssets();
+    },
+    async trashListAssets() {
+      return listTrashAssets();
+    },
+    async trashAssetsBytes() {
+      return trashAssetsSize();
+    },
+    async assetGcManual() {
+      return runManualAssetCleanup();
+    },
+    async assetGcPurge() {
+      return confirmEmptyRetention();
     },
     // Wave13 欢迎文档 e2e seam
     welcomeDetectHost() {

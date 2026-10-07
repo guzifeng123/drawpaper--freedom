@@ -6,3 +6,4 @@ export * from './clock-floor.js';
 export * from './merge.js';
 export * from './manifest.js';
 export * from './prune.js';
+export * from './asset-gc.js';

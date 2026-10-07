@@ -6,7 +6,7 @@
 export const DOC_FORMAT = 'knowledge-block-notes' as const;
 
 /** 当前序列化 schema 版本。旧版本文件由 serialize 模块的迁移管线逐级升级。 */
-export const CURRENT_DOC_VERSION = 3 as const;
+export const CURRENT_DOC_VERSION = 4 as const;
 
 /**
  * 知识块类型联合。

@@ -1,11 +1,16 @@
-import { nanoid } from 'nanoid';
-
 /**
  * OPFS（Origin Private File System）大附件读写 + 图片压缩 + objectURL 缓存。
  * 能力不足（旧浏览器 / 非安全上下文）时抛 OpfsUnavailableError，由上层降级为 dataURL 内嵌。
+ *
+ * Wave16 F 路：内容寻址（content-addressed）。写入时按字节算 SHA-256，文件名即 hash。
+ * 相同内容只存一份 blob；跨文档引用同一内容时 ref 相同（dedup）。
+ * 旧版 nanoid ref 的一次性重命名迁移在 asset-reconcile.ts 完成（这里只认形状）。
  */
 
 const ASSET_DIR = 'drawpaper-assets';
+/** 保留区（孤儿资产回收站）：`.trash/assets/<ref>` + 同名 meta 边车文件。 */
+const TRASH_DIR = '.trash';
+const TRASH_ASSETS_SUBDIR = 'assets';
 
 /** 图片长边上限：超过则等比缩到此值。 */
 export const IMAGE_MAX_LONG_EDGE = 1600;
@@ -57,15 +62,55 @@ async function getAssetsDir(): Promise<FileSystemDirectoryHandle> {
   return root.getDirectoryHandle(ASSET_DIR, { create: true });
 }
 
-/** 写入 Blob，返回 assetRef（文件名 id）。 */
+/** 取保留区目录（assets/.trash/assets/），按需创建。 */
+async function getTrashDir(): Promise<FileSystemDirectoryHandle> {
+  const assets = await getAssetsDir();
+  const trash = await assets.getDirectoryHandle(TRASH_DIR, { create: true });
+  return trash.getDirectoryHandle(TRASH_ASSETS_SUBDIR, { create: true });
+}
+
+/** Blob → Uint8Array。 */
+export async function blobBytes(blob: Blob): Promise<Uint8Array> {
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+/**
+ * 计算字节的 SHA-256 十六进制摘要（Web Crypto subtle.digest）。
+ * 返回 64 位小写 hex，作为内容寻址 ref。core 只把 hash 当不透明字符串。
+ */
+export async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', bytes as BufferSource);
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+}
+
+/** 文件是否已存在（不读内容）。 */
+async function fileExists(dir: FileSystemDirectoryHandle, name: string): Promise<boolean> {
+  try {
+    await dir.getFileHandle(name);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 写入 Blob，返回 assetRef（= 内容 SHA-256 hex）。
+ * 内容寻址：相同字节只写一次——同名 hash 已存在则跳过写入（幂等）。
+ */
 export async function putAsset(blob: Blob): Promise<{ assetRef: string }> {
+  const bytes = await blobBytes(blob);
+  const ref = await sha256Hex(bytes);
   const dir = await getAssetsDir();
-  const assetRef = nanoid();
-  const fh = await dir.getFileHandle(assetRef, { create: true });
-  const writable = await fh.createWritable();
-  await writable.write(blob);
-  await writable.close();
-  return { assetRef };
+  // 同名已存在 = 同内容已存，跳过（content-addressed dedup）。
+  if (!(await fileExists(dir, ref))) {
+    const fh = await dir.getFileHandle(ref, { create: true });
+    const writable = await fh.createWritable();
+    await writable.write(bytes);
+    await writable.close();
+  }
+  return { assetRef: ref };
 }
 
 /** 读取 Blob；不存在返回 null。 */
@@ -79,7 +124,7 @@ export async function getAsset(assetRef: string): Promise<Blob | null> {
   }
 }
 
-/** 删除附件；不存在静默忽略。 */
+/** 物理删除附件；不存在静默忽略。 */
 export async function deleteAsset(assetRef: string): Promise<void> {
   try {
     const dir = await getAssetsDir();
@@ -89,11 +134,33 @@ export async function deleteAsset(assetRef: string): Promise<void> {
   }
 }
 
+/** 某 blob 是否存在于主资产区。 */
+export async function hasAsset(assetRef: string): Promise<boolean> {
+  const dir = await getAssetsDir();
+  return fileExists(dir, assetRef);
+}
+
+/** 列目录下全部条目名（不递归）。TS lib 缺 values() 迭代器，按仓库既有模式兜底。 */
+async function listDirNames(dir: FileSystemDirectoryHandle): Promise<string[]> {
+  const out: string[] = [];
+  // @ts-expect-error values() 迭代器在 TS lib 里可能缺
+  for await (const entry of dir.values()) {
+    out.push((entry as FileSystemHandle).name);
+  }
+  return out;
+}
+
+/** 列出现存全部资产 ref（主资产区，不含保留区）。 */
+export async function listAssets(): Promise<string[]> {
+  const dir = await getAssetsDir();
+  const names = await listDirNames(dir);
+  return names.filter((n) => n !== TRASH_DIR);
+}
+
 /**
- * 按【指定】assetRef 写回字节（同步导入回填用）。
- * 与 putAsset（每次随机 nanoid）不同：跨设备同步时文档 assetRefs 里登记的就是原 ref，
- * 必须按同名落盘，否则画布引用指向不存在的对象。
- * 已存在同名 ref 则覆盖写入（幂等）。
+ * 按【指定】assetRef 写回字节（同步导入回填 / reconcile 重命名用）。
+ * 与 putAsset（内容寻址）不同：跨设备同步时文档 assetRefs 里登记的就是原 ref，
+ * 必须按同名落盘，否则画布引用指向不存在的对象。已存在同名则覆盖（幂等）。
  */
 export async function writeAssetToRef(assetRef: string, bytes: Uint8Array): Promise<void> {
   const dir = await getAssetsDir();
@@ -101,6 +168,86 @@ export async function writeAssetToRef(assetRef: string, bytes: Uint8Array): Prom
   const writable = await fh.createWritable();
   await writable.write(bytes);
   await writable.close();
+}
+
+// ============ 保留区（孤儿资产回收站）============
+
+/** 保留区条目元数据（边车 JSON）。 */
+export interface TrashAssetMeta {
+  ref: string;
+  movedAt: number;
+  sourceDocId: string;
+}
+
+/** 把孤儿资产从主资产区移入保留区（可恢复；不物理删除）。 */
+export async function moveAssetToTrash(ref: string, meta: Omit<TrashAssetMeta, 'ref'>): Promise<void> {
+  const srcDir = await getAssetsDir();
+  const trash = await getTrashDir();
+  try {
+    const fh = await srcDir.getFileHandle(ref);
+    const blob = await fh.getFile();
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    await writeAssetToRefInDir(trash, ref, bytes);
+    const metaText = JSON.stringify({ ref, ...meta } satisfies TrashAssetMeta);
+    await writeAssetToRefInDir(trash, `${ref}.meta.json`, new TextEncoder().encode(metaText));
+    await srcDir.removeEntry(ref);
+  } catch {
+    /* 源不存在或已移走：幂等忽略 */
+  }
+}
+
+async function writeAssetToRefInDir(dir: FileSystemDirectoryHandle, name: string, bytes: Uint8Array): Promise<void> {
+  const fh = await dir.getFileHandle(name, { create: true });
+  const writable = await fh.createWritable();
+  await writable.write(bytes);
+  await writable.close();
+}
+
+/** 列出保留区里的资产 ref（不含 .meta.json 边车）。 */
+export async function listTrashAssets(): Promise<string[]> {
+  const trash = await getTrashDir();
+  const names = await listDirNames(trash);
+  return names.filter((n) => !n.endsWith('.meta.json'));
+}
+
+/** 保留区占用总字节（人类可读体积由调用方格式化）。 */
+export async function trashAssetsSize(): Promise<number> {
+  const trash = await getTrashDir();
+  let total = 0;
+  for (const name of await listDirNames(trash)) {
+    if (name.endsWith('.meta.json')) continue;
+    try {
+      const fh = await trash.getFileHandle(name);
+      const blob = await fh.getFile();
+      total += blob.size;
+    } catch { /* ignore */ }
+  }
+  return total;
+}
+
+/** 物理清空保留区（用户确认后的最终删除，不可恢复）。 */
+export async function emptyTrashAssets(): Promise<number> {
+  const trash = await getTrashDir();
+  let removed = 0;
+  for (const name of await listDirNames(trash)) {
+    try {
+      await trash.removeEntry(name);
+      removed += 1;
+    } catch { /* ignore */ }
+  }
+  return removed;
+}
+
+/** 保留区某 ref 的元数据（供 e2e/检视）；无则 null。 */
+export async function trashAssetMeta(ref: string): Promise<TrashAssetMeta | null> {
+  const trash = await getTrashDir();
+  try {
+    const fh = await trash.getFileHandle(`${ref}.meta.json`);
+    const blob = await fh.getFile();
+    return JSON.parse(await blob.text()) as TrashAssetMeta;
+  } catch {
+    return null;
+  }
 }
 
 // ============ 图片压缩 ============

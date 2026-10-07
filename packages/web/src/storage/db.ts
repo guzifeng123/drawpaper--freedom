@@ -3,6 +3,7 @@ import { nanoid } from 'nanoid';
 import type { DocMeta, KBNoteDoc, SnapshotMeta, TrashDocMeta } from '@drawpaper/core';
 import { pruneSnapshotsToLatest, SNAPSHOT_KEEP } from '@drawpaper/core';
 import { deleteAsset, getAsset, putAsset } from './opfs';
+import { orphansAfterPurge, moveOrphansToTrash } from './asset-gc-web';
 
 /**
  * Dexie/IndexedDB 持久化：
@@ -143,20 +144,23 @@ export class DexieStorageAdapter {
     await db.trash.delete(id);
   }
 
-  /** 物理删除回收站一份文档，并清理其 OPFS 附件。 */
+  /** 物理删除回收站一份文档，并把其孤儿资产移入保留区（可恢复，不直接删 blob）。 */
   async purgeTrash(id: string): Promise<void> {
     const row = await db.trash.get(id);
-    if (row) await this.purgeAssets(row.assetRefs);
+    if (row) {
+      // 只移进「refcount 归零」的孤儿资产；仍被其他文档/冲突副本引用的不动。
+      const orphans = await orphansAfterPurge(row);
+      await moveOrphansToTrash(orphans, row.id);
+    }
     await db.trash.delete(id);
   }
 
   async emptyTrash(): Promise<void> {
     const rows = await db.trash.toArray();
-    for (const row of rows) await this.purgeAssets(row.assetRefs);
+    for (const row of rows) {
+      const orphans = await orphansAfterPurge(row);
+      await moveOrphansToTrash(orphans, row.id);
+    }
     await db.trash.clear();
-  }
-
-  private async purgeAssets(assetRefs: string[]): Promise<void> {
-    await Promise.all(assetRefs.map((ref) => deleteAsset(ref)));
   }
 }

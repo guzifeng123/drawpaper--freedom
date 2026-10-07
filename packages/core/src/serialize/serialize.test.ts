@@ -79,7 +79,7 @@ describe('serialize / parse round-trip', () => {
     const text = serializeKBNote(doc);
     const { doc: back, migrationNotes } = parseKBNote(text);
     expect(back.id).toBe(doc.id);
-    expect(back.version).toBe(3);
+    expect(back.version).toBe(4);
     expect(back.nodes).toHaveLength(2);
     expect(back.edges[0]!.label).toBe('父子');
     expect(back.edges[0]!.points).toEqual([{ x: 100, y: 20 }]);
@@ -96,10 +96,10 @@ describe('serialize / parse round-trip', () => {
   });
 });
 
-describe('v1 -> v2 -> v3 migration', () => {
-  it('upgrades a v1 doc: version=3, links=[], edges preserved, sync meta injected, notes recorded', () => {
+describe('v1 -> v2 -> v3 -> v4 migration', () => {
+  it('upgrades a v1 doc: version=4, links=[], edges preserved, sync meta injected, notes recorded', () => {
     const { doc, migrationNotes } = parseKBNote(JSON.stringify(v1Doc()));
-    expect(doc.version).toBe(3);
+    expect(doc.version).toBe(4);
     expect(doc.links).toEqual([]);
     expect(doc.edges).toHaveLength(1);
     // 旧边无 points，缺省即默认贝塞尔（undefined）
@@ -107,7 +107,7 @@ describe('v1 -> v2 -> v3 migration', () => {
     // v2→v3 注入确定性同步元数据
     expect(doc.sync.vv['seed:doc_v1']).toBe(1);
     expect(Object.keys(doc.sync.nodes ?? {})).toContain('n_1');
-    expect(migrationNotes).toEqual([MIGRATION_NOTES[1], MIGRATION_NOTES[2]]);
+    expect(migrationNotes).toEqual([MIGRATION_NOTES[1], MIGRATION_NOTES[2], MIGRATION_NOTES[3]]);
   });
 
   it('v1 doc without links cannot pass v2 schema directly (must migrate)', () => {
@@ -138,7 +138,7 @@ describe('parseKBNote rejection', () => {
   });
 
   it('rejects a version higher than current with unsupported-version', () => {
-    expect(CURRENT_DOC_VERSION).toBe(3);
+    expect(CURRENT_DOC_VERSION).toBe(4);
     const future = JSON.stringify({ format: DOC_FORMAT, version: 99, id: 'x' });
     expect(() => parseKBNote(future)).toThrow(KBNoteFileError);
     try {
@@ -174,8 +174,8 @@ describe('migrate registry', () => {
 
   it('runs registered steps in order across multiple versions (chainable)', () => {
     const calls: string[] = [];
-    // current=3。注册假的 v0->1 与 v1->2（覆盖真实 v1->2），从 v0 迁移观察链式顺序；
-    // v2->v3 真实步仍会执行（不入 calls）。
+    // current=4。注册假的 v0->1 与 v1->2（覆盖真实 v1->2），从 v0 迁移观察链式顺序；
+    // v2->v3 / v3->v4 真实步仍会执行（不入 calls）。
     MIGRATION_REGISTRY[0] = (raw) => {
       calls.push('step0');
       return { ...(raw as object), v0: true };
@@ -186,15 +186,15 @@ describe('migrate registry', () => {
     };
     const res = migrate({ hello: 1, version: 0 }, 0);
     expect(calls).toEqual(['step0', 'step1']);
-    // step0 + step1 + 真实 v2->v3 = 3 步
-    expect(res.notes).toHaveLength(3);
+    // step0 + step1 + 真实 v2->v3 + v3->v4 = 4 步
+    expect(res.notes).toHaveLength(4);
     expect((res.value as Record<string, unknown>)['v0']).toBe(true);
     expect((res.value as Record<string, unknown>)['v1']).toBe(true);
   });
 
   it('is identity when fromVersion equals current', () => {
     const raw = { a: 1 };
-    const res = migrate(raw, 3);
+    const res = migrate(raw, 4);
     expect(res.value).toBe(raw);
     expect(res.notes).toEqual([]);
   });
@@ -202,5 +202,67 @@ describe('migrate registry', () => {
   it('restores the registry after each test', () => {
     // afterEach 已还原；此处断言真实 v1->2 仍在。
     expect(typeof MIGRATION_REGISTRY[1]).toBe('function');
+  });
+});
+
+describe('v3 -> v4 migration (asset ref normalization)', () => {
+  /** 手工构造一份 v3 文档（带同步块 + 重复/空 assetRefs）。 */
+  function v3Doc(): Record<string, unknown> {
+    return {
+      format: DOC_FORMAT,
+      version: 3,
+      id: 'doc_v3',
+      title: 'v3 旧档',
+      board: { createdAt: 1000, updatedAt: 2000 },
+      nodes: [
+        {
+          id: 'n_1',
+          type: 'image',
+          x: 0, y: 0, width: 200, height: 120,
+          content: { format: 'tiptap-json', data: { type: 'doc' } },
+        },
+      ],
+      edges: [],
+      tags: [],
+      layout: { mode: 'mindmap-right', rankSpacing: 90, nodeSpacing: 28 },
+      viewport: { x: 0, y: 0, zoom: 1 },
+      page: { size: 'A4', orientation: 'portrait', marginMm: 15, mode: 'fit', showPageBreak: true, colorMode: 'color' },
+      // 故意：重复 ref、空串、旧 nanoid、内容 hash 混在一起。
+      assetRefs: ['V1StGXR8_Z5jdHi6B-myT', 'V1StGXR8_Z5jdHi6B-myT', '', 'a'.repeat(64)],
+      links: [],
+      sync: { vv: { cA: 3 }, nodes: { n_1: { f: { content: [3, 'cA'] } } } },
+    };
+  }
+
+  it('v3 档升级到 v4：assetRefs 去重去空、保留顺序，其余字段不丢', () => {
+    const { doc, migrationNotes } = parseKBNote(JSON.stringify(v3Doc()));
+    expect(doc.version).toBe(4);
+    expect(doc.assetRefs).toEqual(['V1StGXR8_Z5jdHi6B-myT', 'a'.repeat(64)]);
+    expect(doc.sync.vv).toEqual({ cA: 3 });
+    expect(doc.nodes).toHaveLength(1);
+    expect(migrationNotes).toEqual([MIGRATION_NOTES[3]]);
+  });
+
+  it('迁移幂等：v4 档再 parse 不改变 assetRefs', () => {
+    const { doc: v4 } = parseKBNote(JSON.stringify(v3Doc()));
+    const text = serializeKBNote(v4);
+    const { doc: again, migrationNotes } = parseKBNote(text);
+    expect(again.assetRefs).toEqual(v4.assetRefs);
+    expect(again.version).toBe(4);
+    expect(migrationNotes).toEqual([]);
+  });
+
+  it('往返：v3 → v4 → 导出 v4 → 再 parse，资产 ref 不丢', () => {
+    const { doc: v4 } = parseKBNote(JSON.stringify(v3Doc()));
+    const text = serializeKBNote(v4);
+    const { doc: back } = parseKBNote(text);
+    expect(back.assetRefs).toEqual(['V1StGXR8_Z5jdHi6B-myT', 'a'.repeat(64)]);
+  });
+
+  it('assetRefs 缺失/非数组时兜底为空数组，不抛', () => {
+    const raw = v3Doc();
+    delete (raw as Record<string, unknown>)['assetRefs'];
+    const { doc } = parseKBNote(JSON.stringify(raw));
+    expect(doc.assetRefs).toEqual([]);
   });
 });

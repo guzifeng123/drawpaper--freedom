@@ -18,7 +18,7 @@ export function makeMockDoc(
 ): KBNoteDoc {
   return {
     format: 'knowledge-block-notes',
-    version: 3,
+    version: 4,
     id,
     title,
     board: { createdAt: 0, updatedAt: 0 },

@@ -24,7 +24,7 @@ function buildTableFixture(): KBNoteDoc {
   const now = Date.now();
   return {
     format: 'knowledge-block-notes',
-    version: 3,
+    version: 4,
     id: 'table-fixture',
     title: '表格拖选夹具',
     board: { createdAt: now, updatedAt: now },

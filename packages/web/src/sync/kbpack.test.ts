@@ -109,7 +109,7 @@ describe('packZip / unpackZip 往返', () => {
 function makeDoc(id: string, title: string, text: string, vv: Record<string, number>): KBNoteDoc {
   return {
     format: 'knowledge-block-notes',
-    version: 3,
+    version: 4,
     id,
     title,
     board: { createdAt: 1000, updatedAt: 2000 },

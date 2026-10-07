@@ -180,7 +180,7 @@ test.describe('Wave10 跨设备同步（WebDAV route mock）', () => {
     });
     const res = await page.evaluate((text) => window.__drawpaper__!.v3MigrationCheck(text), v2);
     expect(res.ok).toBe(true);
-    expect(res.version).toBe(3);
+    expect(res.version).toBe(4);
     expect(res.migratedDeepEqual).toBe(true);
     expect(res.mergedConflictCount).toBe(0);
   });
