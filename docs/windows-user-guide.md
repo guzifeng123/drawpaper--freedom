@@ -3,6 +3,7 @@
 > 适用版本：Windows 10 / 11（x64 与 ARM64）。
 > 安装包由 `.github/workflows/release-windows.yml` 自动构建并发布到 GitHub Releases。
 > 本指南面向**最终用户**，只讲「怎么装、数据在哪、出问题怎么办」，不讲构建。
+> 想自己构建 / 出包 / 维护发版签名，请转 [`../apps/desktop-tauri/README.md`](../apps/desktop-tauri/README.md)（开发与打包）与 [`RELEASE.md`](./RELEASE.md)（发版操作手册）。
 
 ## 0. 选哪个安装包
 
