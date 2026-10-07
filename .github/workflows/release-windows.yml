@@ -29,7 +29,11 @@ on:
       - 'feat/win-msi-bundle'
       - 'chore/win-smoke-gap-audit'
       - 'feat/win-diagnostics-webview2'
+<<<<<<< HEAD
       - 'feat/desktop-coldstart-race'
+=======
+      - 'feat/desktop-folder-autosave'
+>>>>>>> origin/feat/desktop-folder-autosave
   workflow_dispatch:
 
 permissions:

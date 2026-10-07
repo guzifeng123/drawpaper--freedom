@@ -35,8 +35,11 @@ mod portable;
 // Wave15 C: 诊断信息导出（纯 Rust，见 diagnostics.rs）。
 mod diagnostics;
 
-// Wave17 J2: 冷启动外部文件打开事件的可靠投递队列（纯逻辑 + 单测，见 startup.rs）。
+// Wave17 J: 冷启动外部文件打开事件的可靠投递队列（纯逻辑 + 单测，见 startup.rs）。
 mod startup;
+// Wave17 K: 原生文件夹自动保存（见 native_autosave.rs）。选择/读取目录、
+// 受困相对路径写文件、配置持久化全部在该模块；本文件只做命令注册。
+mod native_autosave;
 
 /// GitHub repository URL — shared by 帮助→项目主页 / 检查更新 / About.
 const GITHUB_REPO: &str = "https://github.com/guzifeng123/drawpaper--freedom";
@@ -49,7 +52,6 @@ const GITHUB_RELEASES_LATEST: &str =
 
 const RECENTS_CAP: usize = 10;
 const RECENTS_FILE: &str = "drawpaper-recents.json";
-const AUTOSAVE_FILE: &str = "drawpaper-autosave.json";
 /// Backup directory under app_data_dir: `backups/{title}_备份_{ts}.kbnote`.
 const BACKUP_DIR: &str = "backups";
 /// Keep at most N backups per app launch (pruned oldest-first on each write).
@@ -66,10 +68,6 @@ struct AppState {
     /// `save_kbnote` overwrites in place instead of prompting again. The frontend
     /// title bar shows "已保存到 xxx.kbnote".
     current_path: Mutex<Option<PathBuf>>,
-    /// Optional directory the user picked for "real folder auto-save" (P2
-    /// enhancement). When Some, debounced auto-save writes a sibling .kbnote
-    /// into this folder keyed by document id. Not wired to the store yet.
-    auto_save_dir: Mutex<Option<PathBuf>>,
     /// Wave12 close-guard: whether the CURRENT document is bound to a native
     /// `.kbnote` on disk (user opened/saved one via the native dialog). When
     /// true AND `native_dirty` is true, CloseRequested is intercepted and the
@@ -103,10 +101,6 @@ fn config_dir(app: &tauri::AppHandle) -> PathBuf {
 
 fn recents_path(app: &tauri::AppHandle) -> PathBuf {
     config_dir(app).join(RECENTS_FILE)
-}
-
-fn autosave_path(app: &tauri::AppHandle) -> PathBuf {
-    config_dir(app).join(AUTOSAVE_FILE)
 }
 
 fn load_recents(app: &tauri::AppHandle) -> VecDeque<String> {
@@ -428,75 +422,14 @@ fn force_quit(app: tauri::AppHandle, state: tauri::State<'_, AppState>) {
 }
 
 // ---------------------------------------------------------------------------
-// Optional: real-folder auto-save skeleton (planning §4.9 P2).
+// Wave17: 原生文件夹自动保存。
 //
-// The idea: user picks a folder once; every debounced autosave writes
-// `<doc-id>.kbnote` into that folder. This is an alternative to OPFS for users
-// who want the folder in Explorer / synced with OneDrive.
-//
-// NOT wired to the store in this scaffold — the store's StorageAdapter still
-// uses Dexie/IndexedDB. The commands below compile and express the contract;
-// wiring them into the editor-store is a follow-up (see docs/p2-shells.md).
+// 选择/读取/清空目录、受困相对路径写文件、配置持久化全部在
+// native_autosave.rs（autosave_pick_dir / autosave_get_dir / autosave_clear_dir /
+// autosave_write_file / autosave_dir_writable）。落盘布局 <docId>.kbnote +
+// assets/<ref> 与 web FSA 通道逐字节一致；本文件只注册命令。旧
+// choose_auto_save_dir/auto_save_doc 骨架已被本模块取代移除。
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Serialize, Deserialize)]
-struct AutoSaveManifest {
-    dir: String,
-    /// doc_id -> filename on disk.
-    docs: Vec<(String, String)>,
-}
-
-#[tauri::command]
-async fn choose_auto_save_dir(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
-) -> Result<Option<String>, String> {
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    app.dialog()
-        .file()
-        .set_title("选择自动保存文件夹")
-        .pick_folder(move |res| {
-            let _ = tx.send(res);
-        });
-    let picked = rx.await.map_err(|e| e.to_string())?;
-    let Some(folder) = picked else {
-        return Ok(None);
-    };
-    let folder = folder.into_path().map_err(|e| e.to_string())?;
-    {
-        let mut d = state.auto_save_dir.lock().unwrap();
-        *d = Some(folder.clone());
-    }
-    // Persist manifest so next launch remembers the folder.
-    let manifest = AutoSaveManifest {
-        dir: folder.to_string_lossy().to_string(),
-        docs: vec![],
-    };
-    let _ = fs::write(
-        autosave_path(&app),
-        serde_json::to_string_pretty(&manifest).unwrap_or_default(),
-    );
-    Ok(Some(folder.to_string_lossy().to_string()))
-}
-
-/// Skeleton: write doc text into the configured auto-save folder as
-/// `<doc_id>.kbnote`. Debouncing (500ms) is the caller's responsibility, same
-/// as the OPFS path.
-#[tauri::command]
-fn auto_save_doc(
-    state: tauri::State<'_, AppState>,
-    doc_id: String,
-    text: String,
-) -> Result<Option<String>, String> {
-    let dir = { state.auto_save_dir.lock().unwrap().clone() };
-    let Some(dir) = dir else {
-        return Ok(None);
-    };
-    let name = format!("{doc_id}.kbnote");
-    let target = dir.join(&name);
-    fs::write(&target, text).map_err(|e| format!("autosave write failed: {e}"))?;
-    Ok(Some(target.to_string_lossy().to_string()))
-}
 
 // ---------------------------------------------------------------------------
 // Native notifications + auto-backup (P2 收尾).
@@ -1003,6 +936,18 @@ pub fn run() {
         }
     }
 
+    // Wave17: 隐藏无头自检 `--native-autosave-selftest <dir>`。在构建任何 Tauri
+    // 插件之前拦截：不弹窗、不开 webview，写一份测试 .kbnote+assets 再校验落盘与
+    // 路径穿越拒绝，exit 0/1。供本地/CI 冒烟；不影响正常启动。
+    if let Some(pos) = argv.iter().position(|a| a == "--native-autosave-selftest") {
+        if let Some(dir) = argv.get(pos + 1) {
+            std::process::exit(native_autosave::selftest_cli(dir));
+        } else {
+            eprintln!("[native-autosave-selftest] missing <dir> argument");
+            std::process::exit(2);
+        }
+    }
+
     // Wave13: tauri-plugin-log is the global `log` logger (file + stdout +
     // webview). It replaces the previous env_logger bootstrap; do NOT init a
     // second global logger here or the process will panic on setup.
@@ -1075,6 +1020,8 @@ pub fn run() {
         // handler on user click (see run_manual_update_check).
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState::default())
+        // Wave17: 原生文件夹自动保存的独立状态（选定目录）。
+        .manage(native_autosave::AutosaveState::default())
         .setup(|app| {
             // Load persisted recents into state.
             {
@@ -1225,14 +1172,18 @@ pub fn run() {
             list_recents,
             clear_recents,
             get_startup_file,
-            choose_auto_save_dir,
-            auto_save_doc,
             notify,
             backup_doc,
             set_window_title,
             bind_native_file,
             set_native_dirty,
             force_quit,
+            // Wave17: 原生文件夹自动保存（实现在 native_autosave.rs）。
+            native_autosave::autosave_pick_dir,
+            native_autosave::autosave_clear_dir,
+            native_autosave::autosave_get_dir,
+            native_autosave::autosave_dir_writable,
+            native_autosave::autosave_write_file,
         ])
         .run(context)
         .expect("error while running drawpaper desktop shell");
