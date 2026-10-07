@@ -6,6 +6,9 @@
 
 - **修复 Windows 冷启动双击 `.kbnote` 偶发不打开文档的竞态**：进程未运行时双击 `.kbnote`（或命令行以文件路径启动），外壳在 webview 页面加载、前端监听注册之前一次性投递打开事件，导致事件被丢弃、画布停在欢迎文档。改为把打开载荷存入托管状态，由有界重发泵在前端监听就绪后反复投递，直到前端成功加载并经既有 `bind_native_file` 隐式确认；热启动（单实例转发）与「打开最近」共用同一投递/去重通道。详见 `docs/wave17/coldstart-race.md`。
 - **Windows 桌面端新增「自动保存到本机文件夹」**：用户在同步设置里选一个真实文件夹后，每次编辑（500ms 防抖）由宿主自动把 `.kbnote` 文档与引用资产镜像落盘到该目录——文档为 `<文档名>.kbnote`、附件在 `assets/` 子目录，与「FSA 同步文件夹」通道逐字节同格式，可在资源管理器里看见、可被 OneDrive 同步。未配置 / 取消 / 非桌面环境时自动回退原应用内本地存储，行为不变。详见 `docs/wave17/folder-autosave.md`。
+### Windows 桌面端
+
+- **桌面全局快捷键（失焦可用）**：注册一组系统级快捷键，即使 drawpaper 窗口不在前台也能触发，动作与原生菜单同源（快捷键回调不新写业务逻辑，菜单类动作直接复用 `app:menu` 事件通道）。固定集为 `Ctrl+Shift+D`（显示并聚焦主窗口：显示 + 取消最小化 + 聚焦）、`Ctrl+S`（保存）、`Ctrl+P`（打印 / 另存为 PDF）、`Ctrl+F`（聚焦搜索）。用户可在 app 配置目录的 `drawpaper-shortcuts.json` 里改 accelerator→action 映射（合法动作：`focus_window` / `file:save` / `export:print` / `view:search`，空串表示解绑）；配置缺失时静默用默认集，JSON 损坏 / 非法 accelerator / 未知 action / 快捷键被其他应用占用等任一失败项均逐项记日志并回退或跳过，**不弹窗、不 panic、不阻断启动**。详见 `docs/wave17/global-shortcuts.md` 与 `docs/windows-user-guide.md`「全局快捷键」。
 
 ## 0.1.0-rc.8
 

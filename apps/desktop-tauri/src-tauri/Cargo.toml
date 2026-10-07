@@ -34,6 +34,13 @@ tauri-plugin-window-state = "2.0"
 # Wave13: structured logging to drawpaper.log (app log dir) + stdout + webview
 # forward. Replaces env_logger as the global `log` logger; level=Info.
 tauri-plugin-log = "2.0"
+# Wave17: desktop GLOBAL shortcuts (work even when the window is unfocused).
+# Rust-side only: accelerators are resolved against the existing native menu
+# ids and dispatched through the SAME `app:menu` event channel as menu clicks,
+# so no new business logic lives here. User-overridable via
+# drawpaper-shortcuts.json in the app config dir; every failure path warns and
+# falls back instead of panicking or blocking startup.
+tauri-plugin-global-shortcut = "2"
 # Wave15 A: official Tauri updater (manual-only). The native "帮助→检查更新…"
 # flow calls Updater.check() ONCE on user click; no startup/timer/poll. When a
 # newer signed release is found we show a confirm dialog, then

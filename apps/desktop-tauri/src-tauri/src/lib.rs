@@ -40,6 +40,8 @@ mod startup;
 // Wave17 K: 原生文件夹自动保存（见 native_autosave.rs）。选择/读取目录、
 // 受困相对路径写文件、配置持久化全部在该模块；本文件只做命令注册。
 mod native_autosave;
+// Wave17 L: 桌面全局快捷键（纯逻辑见 shortcuts.rs；本文件只做 Tauri 接线）。
+mod shortcuts;
 
 /// GitHub repository URL — shared by 帮助→项目主页 / 检查更新 / About.
 const GITHUB_REPO: &str = "https://github.com/guzifeng123/drawpaper--freedom";
@@ -765,6 +767,136 @@ fn rebuild_menu(app: &tauri::AppHandle) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Wave17: desktop GLOBAL shortcuts (work even when the window is unfocused).
+//
+// Action single-source: a shortcut press NEVER invents new business logic.
+//   * menu-id actions re-emit the exact same `app:menu {id}` event that a
+//     native menu click emits (see on_menu_event below), so the frontend's
+//     existing routeMenu handler runs unchanged.
+//   * the one special action (`focus_window`) goes straight to the window API.
+//
+// Lifecycle: registered in setup() after the menu exists. Unregistration relies
+// on the plugin's own Drop (and Windows' OS-level release of RegisterHotKey on
+// process exit). We deliberately do NOT call `unregister_all()` from inside a
+// RunEvent::ExitRequested callback: the plugin dispatches unregistration to the
+// main thread and blocks waiting for it, which would deadlock the main-thread
+// event-loop callback itself.
+// ---------------------------------------------------------------------------
+
+/// Dispatch one pressed global shortcut by its resolved action string.
+fn dispatch_global_shortcut(app: &tauri::AppHandle, action: &str) {
+    match shortcuts::action_to_menu_id(action) {
+        Some(menu_id) => {
+            // Identical payload to a native menu click (line 1115 below).
+            let _ = app.emit("app:menu", serde_json::json!({ "id": menu_id }));
+        }
+        None if action == shortcuts::ACTION_FOCUS_WINDOW => {
+            if let Some(w) = app.get_webview_window("main") {
+                let _ = w.show();
+                let _ = w.unminimize();
+                let _ = w.set_focus();
+            }
+        }
+        None => {
+            log::warn!("global-shortcut: unknown action '{action}' at dispatch time; ignoring");
+        }
+    }
+}
+
+/// Load + resolve + register the global shortcut set. Called from setup()
+/// after the menu exists. Never panics, never blocks startup: every failure
+/// path logs a warn and either falls back to defaults or skips the entry.
+fn setup_global_shortcuts(app: &tauri::AppHandle) {
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
+
+    let cfg_path = config_dir(app).join(shortcuts::SHORTCUTS_FILE);
+    let source = match std::fs::read_to_string(&cfg_path) {
+        Ok(raw) => {
+            // Parse as a generic JSON object and walk its entries in order so a
+            // duplicated key is surfaced to the pure resolver (which warns and
+            // keeps the first) instead of being silently collapsed by serde.
+            match serde_json::from_str::<serde_json::Value>(&raw) {
+                Ok(serde_json::Value::Object(map)) => {
+                    let pairs: Vec<(String, String)> = map
+                        .into_iter()
+                        .map(|(k, v)| {
+                            let action = v.as_str().unwrap_or("").to_string();
+                            (k, action)
+                        })
+                        .collect();
+                    shortcuts::ConfigSource::Parsed(pairs)
+                }
+                Ok(other) => shortcuts::ConfigSource::Invalid(format!(
+                    "{}: expected a JSON object {{\"Ctrl+S\": \"file:save\"}}, got {}",
+                    cfg_path.display(),
+                    match other {
+                        serde_json::Value::Null => "null",
+                        serde_json::Value::Bool(_) => "a boolean",
+                        serde_json::Value::Number(_) => "a number",
+                        serde_json::Value::String(_) => "a string",
+                        serde_json::Value::Array(_) => "an array",
+                        serde_json::Value::Object(_) => "an object",
+                    }
+                )),
+                Err(e) => shortcuts::ConfigSource::Invalid(format!(
+                    "{}: {e}",
+                    cfg_path.display()
+                )),
+            }
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => shortcuts::ConfigSource::Absent,
+        Err(e) => shortcuts::ConfigSource::Invalid(format!(
+            "{}: {e}",
+            cfg_path.display()
+        )),
+    };
+
+    let resolved = shortcuts::resolve(source);
+    for issue in &resolved.issues {
+        log::warn!("global-shortcut: {issue}");
+    }
+    if resolved.used_config {
+        log::info!(
+            "global-shortcuts: using user overrides from {}",
+            cfg_path.display()
+        );
+    } else {
+        log::info!(
+            "global-shortcuts: using built-in defaults (no usable config at {})",
+            cfg_path.display()
+        );
+    }
+
+    let gs = app.global_shortcut();
+    let mut ok = 0usize;
+    for b in &resolved.bindings {
+        let action = b.action.clone();
+        match gs.on_shortcut(b.accelerator.as_str(), move |app: &tauri::AppHandle, _sc, event| {
+            if event.state == ShortcutState::Pressed {
+                dispatch_global_shortcut(app, &action);
+            }
+        }) {
+            Ok(()) => {
+                ok += 1;
+                log::info!("global-shortcut registered: {} -> {}", b.accelerator, b.action);
+            }
+            Err(e) => {
+                log::warn!(
+                    "global-shortcut register FAILED (likely owned by another app): {} -> {} : {e}",
+                    b.accelerator, b.action
+                );
+            }
+        }
+    }
+    // Anchor line the release-windows CI smoke greps for.
+    log::info!(
+        "global-shortcuts: registered {} of {} bindings",
+        ok,
+        resolved.bindings.len()
+    );
+}
+
 /// Shared "open a `.kbnote` off disk" routine used by THREE entry points:
 ///   * File → 打开最近 → `recent:<n>` (menu click)
 ///   * file-association double-click on COLD start (argv[1], no instance running)
@@ -1011,6 +1143,10 @@ pub fn run() {
         // Wave13: remember window position/size/maximized; clamped to the
         // tauri.conf minWidth/minHeight (960x600) on restore.
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Wave17: desktop GLOBAL shortcuts (work even when the window is
+        // unfocused). Registered in setup() after the menu exists; unregistered
+        // on ExitRequested. Pure Rust-side — no JS commands, no web chunk.
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
@@ -1145,6 +1281,10 @@ pub fn run() {
                 // The frontend maps ids to store actions (undo/redo/print/fit).
                 let _ = app.emit("app:menu", serde_json::json!({ "id": id }));
             });
+
+            // Wave17: register desktop global shortcuts (best-effort; failures
+            // warn and fall back, never block startup).
+            setup_global_shortcuts(app.handle());
 
             Ok(())
         })
