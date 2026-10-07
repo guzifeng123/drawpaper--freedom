@@ -200,11 +200,14 @@ pub fn probe_cli(endpoint: &str) -> i32 {
     0
 }
 
-/// 一次阻塞 GET，带 8s 超时，把 reqwest 的 Result 归约成 [`FetchOutcome`]。
-/// 出错（超时/连接拒绝/DNS）一律映射成 Unreachable/Timeout，不 panic。
+/// 一次阻塞 GET，带 8s 总超时 + 4s 连接超时，把 reqwest 的 Result 归约成
+/// [`FetchOutcome`]。出错（超时/连接拒绝/DNS）一律映射成 Unreachable/Timeout，不 panic。
+/// 显式 `.no_proxy()`：CI 探测打 loopback，绝不走系统代理（避免代理环境下的不确定性）。
 fn fetch_once(url: &str) -> FetchOutcome {
     let client = match reqwest::blocking::Client::builder()
+        .connect_timeout(Duration::from_secs(4))
         .timeout(Duration::from_secs(8))
+        .no_proxy()
         .build()
     {
         Ok(c) => c,

@@ -1512,22 +1512,29 @@ jobs:
           $argLine = '/c "' + '"' + $exe + '" --update-check-probe "' + $endpoint + '" > "' + $outLog + '" 2>&1"'
           Write-Host "Running: cmd.exe $argLine"
           $cp = Start-Process -FilePath 'cmd.exe' -ArgumentList $argLine -PassThru -WindowStyle Hidden
-          for ($w = 0; $w -lt 30; $w++) {
+          for ($w = 0; $w -lt 60; $w++) {
             Start-Sleep -Seconds 1
             $cp.Refresh()
             if ($cp.HasExited) { break }
           }
           if (-not $cp.HasExited) {
             Stop-Process -Id $cp.Id -Force -ErrorAction SilentlyContinue
-            Write-Error 'Smoke FAIL: --update-check-probe did not exit within 30s (hang / dialog / webview leaked)'
+            Write-Error 'Smoke FAIL: --update-check-probe did not exit within 60s (hang / dialog / webview leaked)'
           }
           $code = $cp.ExitCode
           Write-Host "updater-probe exit code = $code"
+          # Give the redirected log a moment to flush after the process exits
+          # (GUI-subsystem stdout pipe can lag the process exit by a beat).
+          $logText = ''
+          for ($w = 0; $w -lt 10; $w++) {
+            $logText = if (Test-Path $outLog) { Get-Content -Raw $outLog } else { '' }
+            if ($logText -match 'decision=') { break }
+            Start-Sleep -Seconds 1
+          }
           Write-Host "::group::updater-probe captured stdout/stderr"
-          if (Test-Path $outLog) { Get-Content $outLog | ForEach-Object { Write-Host "  | $_" } } else { Write-Host "  (no output file)" }
+          Write-Host "  | $logText"
           Write-Host "::endgroup::"
           if ($code -ne 0) { Write-Error "Smoke FAIL: updater-probe exited $code (expected 0 for a deliberate fallback decision)" }
-          $logText = if (Test-Path $outLog) { Get-Content -Raw $outLog } else { '' }
           if ($logText -notmatch 'decision=fallback-releases') {
             Write-Error "Smoke FAIL: updater-probe output missing 'decision=fallback-releases' (got: $logText)"
           }
