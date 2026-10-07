@@ -30,6 +30,7 @@
     "notification:allow-notify",
     "notification:allow-is-permission-granted",
     "notification:allow-request-permission",
-    "log:default"
+    "log:default",
+    "updater:default"
   ]
 }
