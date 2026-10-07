@@ -1929,15 +1929,29 @@ jobs:
           for ($w = 0; $w -lt 180; $w++) { Start-Sleep -Seconds 1; $p.Refresh(); if ($p.HasExited) { break } }
           if (-not $p.HasExited) { Write-Host "::error title=zhcn-install::msiexec did not exit within 180s" ; Write-Error 'zh-CN probe: install msiexec timeout 180s' }
           Write-Host "::error title=zhcn-install::exitcode=$($p.ExitCode)"
-          Get-Content $log -Tail 80 -ErrorAction SilentlyContinue | ForEach-Object { Write-Host "::notice title=zhcn-install-log::$_" }
+          # Definitive install outcome line + scope/dir hints.
+          Get-Content $log -ErrorAction SilentlyContinue |
+            Where-Object { $_ -match 'Installation success or error status|InstallScope|InstallDir|ProductCode|Adding schedule|Deleting|Created Install|Note: 1:|returned actual|value 3|MainEngineThread' } |
+            Select-Object -Last 25 | ForEach-Object { Write-Host "::notice title=zhcn-install-key::$_" }
 
-          # 3) Assert install dir + exe + ProductVersion.
-          $installDir = Join-Path $env:ProgramFiles 'drawpaper'
-          if (-not (Test-Path $installDir)) { Write-Host "::error title=zhcn-assert::install dir missing after install" ; Write-Error 'zh-CN probe: install dir missing' }
-          $exe = Join-Path $installDir 'drawpaper.exe'
-          if (-not (Test-Path $exe)) { $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName }
-          if (-not $exe -or -not (Test-Path $exe)) { Write-Host "::error title=zhcn-assert::drawpaper.exe not found" ; Write-Error 'zh-CN probe: exe not found' }
+          # 3) Assert install: broad forensic search for where drawpaper.exe landed.
+          $cands = @(
+            (Join-Path $env:ProgramFiles 'drawpaper'),
+            (${env:ProgramFiles(x86)} + '\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper')
+          )
+          foreach ($c in $cands) { Write-Host "::notice title=zhcn-dir-cand::Test-Path [$c] = $(Test-Path $c)" }
+          $exe = $null
+          foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, (Join-Path $env:LOCALAPPDATA 'Programs'))) {
+            if (Test-Path $root) {
+              $found = Get-ChildItem -Path $root -Recurse -Filter 'drawpaper.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($found) { $exe = $found.FullName; break }
+            }
+          }
+          Write-Host "::error title=zhcn-assert::drawpaper.exe found at = [$exe]"
+          if (-not $exe) { Write-Host "::error title=zhcn-assert::drawpaper.exe not found anywhere under Program Files/LOCALAPPDATA" ; Write-Error 'zh-CN probe: exe not found after install exit 0' }
           Write-Host "::error title=zhcn-assert::installed ProductVersion=$((Get-Item $exe).VersionInfo.ProductVersion)"
+          $installDir = Split-Path $exe -Parent
 
           # 4) Uninstall zh-CN; emit exit code + log tail.
           Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
