@@ -35,6 +35,7 @@ on:
       - 'feat/msi-bilingual'
       - 'chore/portable-smoke-ci'
       - 'chore/ci-exe-hardening'
+      - 'feat/updater-fallback-probe'
   workflow_dispatch:
 
 permissions:
@@ -1467,6 +1468,70 @@ jobs:
       # 脚本保留在 apps/desktop-tauri/ci/ 供手动调用；手动步骤与调研结论见
       # docs/wave18/ci-hardening.md。同路径的隐私断言已由上方 --diag-export 金丝雀覆盖。
       # ------------------------------------------------------------------
+
+      # Wave19 C: headless updater-fallback probe smoke. The installed exe carries
+      # a hidden pre-builder CLI (`--update-check-probe <endpoint>`) that does ONE
+      # blocking GET (8s timeout, no retry) and prints `decision=...`. We point it
+      # at a closed loopback port (127.0.0.1:1 = connection refused = unreachable)
+      # and assert: exit 0, stdout contains `decision=fallback-releases`, and the
+      # process actually exits within 30s (proves no hang, no dialog, no webview).
+      # The 404 / malformed-manifest / up-to-date / update-available branches are
+      # covered by the pure-function `cargo test` above (no network needed).
+      - name: 'Smoke (x64): updater fallback probe (unreachable endpoint -> releases page, no hang)'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 3
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'drawpaper'),
+            (Join-Path $env:ProgramFiles 'drawpaper')
+          )
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'drawpaper') }
+          $installDir = $null
+          foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
+          if (-not $installDir) {
+            foreach ($root in @((Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+              if ($root -and (Test-Path $root)) {
+                $hit = Get-ChildItem $root -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { $installDir = $hit.FullName; break }
+              }
+            }
+          }
+          if (-not $installDir) { Write-Error 'Smoke FAIL: install dir not found at updater fallback probe' }
+          $exe = Join-Path $installDir 'drawpaper.exe'
+          if (-not (Test-Path $exe)) { $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName }
+          Write-Host "App exe = $exe"
+
+          # Closed loopback port = immediate ECONNREFUSED -> unreachable -> fallback.
+          $endpoint = 'http://127.0.0.1:1/'
+          $outLog = Join-Path $env:TEMP ('dp-updater-probe-' + [guid]::NewGuid().ToString('N') + '.log')
+          Remove-Item $outLog -ErrorAction SilentlyContinue
+          # Same outer-quote wrapping trick as the native-autosave selftest smoke.
+          $argLine = '/c "' + '"' + $exe + '" --update-check-probe "' + $endpoint + '" > "' + $outLog + '" 2>&1"'
+          Write-Host "Running: cmd.exe $argLine"
+          $cp = Start-Process -FilePath 'cmd.exe' -ArgumentList $argLine -PassThru -WindowStyle Hidden
+          for ($w = 0; $w -lt 30; $w++) {
+            Start-Sleep -Seconds 1
+            $cp.Refresh()
+            if ($cp.HasExited) { break }
+          }
+          if (-not $cp.HasExited) {
+            Stop-Process -Id $cp.Id -Force -ErrorAction SilentlyContinue
+            Write-Error 'Smoke FAIL: --update-check-probe did not exit within 30s (hang / dialog / webview leaked)'
+          }
+          $code = $cp.ExitCode
+          Write-Host "updater-probe exit code = $code"
+          Write-Host "::group::updater-probe captured stdout/stderr"
+          if (Test-Path $outLog) { Get-Content $outLog | ForEach-Object { Write-Host "  | $_" } } else { Write-Host "  (no output file)" }
+          Write-Host "::endgroup::"
+          if ($code -ne 0) { Write-Error "Smoke FAIL: updater-probe exited $code (expected 0 for a deliberate fallback decision)" }
+          $logText = if (Test-Path $outLog) { Get-Content -Raw $outLog } else { '' }
+          if ($logText -notmatch 'decision=fallback-releases') {
+            Write-Error "Smoke FAIL: updater-probe output missing 'decision=fallback-releases' (got: $logText)"
+          }
+          Write-Host "Smoke OK: updater-probe unreachable endpoint -> fallback-releases, exit 0, no hang"
 
       - name: 'Smoke (x64): silent uninstall, install dir removed'
         if: matrix.arch == 'x64'
