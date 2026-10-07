@@ -92,9 +92,11 @@
 > 现有 7 条断言 + 资源新鲜度检查**一条不动、不回退**。
 
 1. **冷启动文件关联**（`...\Temp\<guid>.kbnote` 含唯一金丝雀 → `drawpaper.exe <path>`）：
-   有界轮询断言进程存活、主窗口标题含 drawpaper；再断言
-   `%APPDATA%\com.drawpaper.app\logs\drawpaper.log` 出现 `open-file` + 金丝雀文件名，
-   且 `drawpaper-recents.json` 含该路径（数据目录断言）。画布内容断言为边界，文档注明。
+   有界轮询断言进程存活、主窗口标题含 drawpaper；再断言日志出现 `open-file` + 金丝雀文件名、
+   且 recents 文件含该路径（数据目录断言）。**路径不写死**：`app_log_dir` 与 `app_config_dir`
+   在 Tauri/Windows 上可能落在 Roaming（`%APPDATA%`）或 Local（`%LOCALAPPDATA%`）的
+   `com.drawpaper.app`，冒烟同时搜两个根、复制日志副本再读（防 appender 占用）、每轮打印诊断，
+   并 dump 实际数据目录树。画布内容断言为边界，文档注明。
 2. **首次运行欢迎文档**：清空 app 数据目录后冷启动 → 有界等 EBWebView leveldb 命中
    `doc_welcome_v1` / `drawpaper:welcome-doc-v1` 并打印命中；第二次启动断言命中数不增。
 3. **诊断包探测**：`drawpaper.exe --diag-export <zip>`，有界等 zip。本分支无此功能 →
