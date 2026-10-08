@@ -14,12 +14,15 @@
   新增 `SyncRunResult.prunedTombstones / prunedEdgeTombstones / retainedTombstones /
   tombstoneWatermark` 统计（仅 console.debug，不弹 UI）。详见
   `docs/wave20/tombstone-prune.md`。
+
 ### 修复
 
 - **OPFS 不可用时拖入附件不再静默无反馈**：非安全上下文 / 旧浏览器 / 隐私模式下，拖入 .pdf 等非图片附件现在会 toast 提示「当前浏览器不支持附件本地存储」，且不产生引用空 assetRef 的坏附件块。图片（拖入/斜杠/粘贴）在 OPFS 不可用时仍降级为 data: URL 内联，reload 后经 IDB 持久化仍可见，导出 SVG 正常内嵌。新增 e2e `wave20-opfs-degraded.spec.ts` 用 `context.addInitScript` 覆写 `navigator.storage` 端到端验证两种不可用形态（storage 不存在 / getDirectory 抛 NotAllowedError）。详见 `docs/wave20/opfs-degraded.md`。
+
 ### 导出 / PDF
 
 - **矢量 PDF 内嵌中文字库扩到 GB2312 全字库**：「直接下载 PDF（矢量）」内嵌的中文字体从 GB2312 一级常用字（3755 字）扩到一级+二级全部汉字（6763 字）。此前含二级生僻字的文档（如「龘」）会因缺字形被迫整体回退成位图 PDF；现在这类文档直接产出真正的矢量 PDF，中文文本可选、可复制、可搜索，且离线可用。真正超出字库的字符（CJK 扩展 B 等 BMP 外生僻字）仍按原策略回退位图，兜底不变。字库由 `packages/web/scripts/build-vec-cjk-font.py` 可复现构建，详见 `docs/wave20/pdf-cjk-gb2312.md`。
+
 ### 表格块
 
 - **修复斜杠菜单 / hover 工具条切到「表格」得到空块**：此前切类型一律重置为通用空段落，表格块里没有任何 `<table>`、工具条按钮无从操作；现在切到表格（及其他 P1 块型）会带上类型专属空稿（表格 = 2×2 网格）。
@@ -29,6 +32,7 @@
 ### 内部工程
 
 - 新增 `e2e/wave20-table-toolbar.spec.ts`：表格工具栏按钮（增删行列/表头切换/按钮合并拆分）、撤销重做、单元格打字后 reload 持久化、Markdown 导出含表共 8 条 e2e；连跑 `table-drag-merge` 不回退。详见 `docs/wave20/table-toolbar.md`。
+
 ### 新增
 - 跨画布只读「块嵌入」：斜杠菜单新增「嵌入其他画布的块」，可把另一张画布的某个块以只读实时视图嵌进当前画布；打开画布即见目标最新内容，支持手动刷新；目标被删显示悬挂占位；反链、导出（打印/PNG/矢量 PDF/SVG/Markdown）全覆盖。
 
@@ -41,6 +45,7 @@ Windows EXE 收口最后一波：ARM64 原生实跑 CI、中文 MSI 双语安装
 纯 CI/工程加固，无用户可见行为变化（release-windows）：
 
 - **新增 `arm64-native` 原生 ARM64 实跑冒烟 job**：跑在 GitHub hosted `windows-11-arm` runner 上，与 build/publish 并列、互不为依赖——自带 checkout / pnpm 11.7.0 / Node 22 / JS deps / Tauri CLI，job 开头先断言 `PROCESSOR_ARCHITECTURE=ARM64` 且 `rustc host=aarch64-pc-windows-msvc`（原生编译硬证据），随后 `pnpm -r build` 与 `tauri build --bundles nsis,msi --target aarch64-pc-windows-msvc`，并把现有 x64 NSIS 三条冒烟（静默安装 + ProductVersion 断言 / 启动后窗口标题含 drawpaper / 静默卸载目录移除，全部有界轮询 + Wave18 P2 残留进程兜底）精简复制到 arm64 真跑。该 job **不产 release 资产、不进 publish 的 needs**——发布仍以 x64 交叉构建的 `nsis-arm64`/`msi-arm64` 为准；仅在失败时上传 `arm64-native-logs`。2026-10-08 首轮即绿（12m18s）：WiX 工具链由 Tauri CLI 在 arm 镜像联网自动获取成功，arm64 NSIS+MSI 双包原生编译、安装、启动、卸载全链路通过。详见 `docs/wave18/arm64-runner-assessment.md` §5。
+
 ### Windows 安装包
 
 - **WiX MSI 新增 zh-CN 中文 UI culture 双语包**：`bundle.windows.wix.language = ["en-US", "zh-CN"]` 后，x64 / arm64 各产出 en-US 与 zh-CN 两个 MSI，Windows 安装包总数从 4 增至 6（NSIS×2 + MSI×4），`SHA256SUMS.txt` 同步为 6 条。企业批量部署可二选一部署英文（ProductLanguage 1033）或中文（2052）静默安装包；NSIS 安装向导的中/英语言选择不受影响。详见 `docs/wave18/msi-bilingual.md`。
