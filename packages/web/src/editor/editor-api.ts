@@ -222,4 +222,7 @@ export interface EditorApi {
    * 图片仍走 addImageBlock；这里是通用附件（非图片）。
    */
   putImageAsset?(file: File): Promise<{ assetRef: string; name: string; size: number }>;
+
+  // ---- Wave20 块嵌入：点击嵌入主体跳转（文档内 flyTo / 跨文档切换+聚焦）----
+  openDocRef?(targetDocId: string, targetNodeId: string): void;
 }

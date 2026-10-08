@@ -1,9 +1,10 @@
 import type { KBNoteDoc, BlockNode, Edge } from '@drawpaper/core';
 import type { PageSheet, PaginateResult } from '@drawpaper/core';
-import { extractNodePlainText } from '@drawpaper/core';
+import { extractNodePlainText, parseDocEmbedData } from '@drawpaper/core';
 import { pagePixelSize } from '@drawpaper/core';
 import { buildEdgePath, type EdgeEnd } from '../editor/edges/edge-geometry';
 import { assetRefToDataUri, isAssetRefSrc } from '../storage/opfs';
+import { db } from '../storage/db';
 
 /**
  * SVG 矢量导出：把每页序列化为独立 .svg（不引第三方依赖）。
@@ -15,13 +16,24 @@ import { assetRefToDataUri, isAssetRefSrc } from '../storage/opfs';
  *
  * Wave7 P2.1：OPFS 图片以自包含 data: URI 内嵌进 SVG（导出前由 buildPagesSvgAsync
  * 把 assetRef 读成 data URI），离线 .svg 双击即可看到图。
+ * Wave20：块嵌入节点按「来源标题 caption + 目标正文」静态渲染（embedInfo 由
+ * buildPagesSvgAsync 从全量文档预解析；目标已删 → 悬挂占位行）。
  */
+
+/** 一个嵌入节点的导出解析结果（caption + 正文行；dangling=目标已删）。 */
+export interface SvgEmbedInfo {
+  docTitle: string;
+  lines: string[];
+  dangling: boolean;
+}
 
 export interface SvgExportOptions {
   orientation: 'portrait' | 'landscape';
   gray?: boolean;
   /** nodeId → 自包含 data: URI（图片节点）。缺省时若 image.src 已是 data: 也能内联。 */
   imageHrefs?: Record<string, string>;
+  /** embed 节点 id → 预解析的来源标题 + 正文行（buildPagesSvgAsync 填充）。 */
+  embedInfo?: Record<string, SvgEmbedInfo>;
 }
 
 function escXml(s: string): string {
@@ -58,6 +70,25 @@ function renderNode(node: BlockNode, offset: { x: number; y: number }, opts: Svg
   const { fill, stroke } = nodeColor(node, opts.gray);
   const w = node.width;
   const h = node.height;
+
+  // Wave20 块嵌入：caption（来源标题）+ 目标正文行；悬挂则占位。
+  const emb = parseDocEmbedData(node.content.data);
+  if (emb) {
+    const info = opts.embedInfo?.[node.id];
+    const cap = `嵌入自「${info?.docTitle ?? (emb.titleSnapshot || '未知画布')}」`;
+    const bodyLines = info?.dangling
+      ? ['原块已删除 / 不可用']
+      : (info?.lines ?? []).slice(0, 4);
+    const capTspan = `<tspan x="${offset.x + 8}" y="${offset.y + 18}" font-style="italic" fill="#0284c7">${escXml(cap)}</tspan>`;
+    const bodyTspans = bodyLines
+      .map((l, i) => `<tspan x="${offset.x + 8}" y="${offset.y + 36 + i * 16}">${escXml(l)}</tspan>`)
+      .join('');
+    return `<g class="node" data-node-id="${escXml(node.id)}">` +
+      `<rect x="${offset.x}" y="${offset.y}" width="${w}" height="${h}" rx="8" fill="#f0f9ff" stroke="#7dd3fc" stroke-width="1"/>` +
+      `<text font-size="11">${capTspan}${bodyTspans}</text>` +
+      `</g>`;
+  }
+
   const lines = textLines(node);
   const tspans = lines
     .map((l, i) => `<tspan x="${offset.x + 8}" y="${offset.y + 20 + i * 16}">${escXml(l)}</tspan>`)
@@ -208,12 +239,46 @@ export async function resolveImageHrefs(doc: KBNoteDoc): Promise<Record<string, 
   return hrefs;
 }
 
+/**
+ * 预解析当前文档全部嵌入节点：目标 doc/block → { docTitle, lines, dangling }。
+ * 只在 buildPagesSvgAsync 里跑（需要 Dexie 全量文档）；同步 buildPagesSvg 不解析（无 info 时渲染 caption 降级行）。
+ */
+async function buildEmbedInfo(doc: KBNoteDoc): Promise<Record<string, SvgEmbedInfo>> {
+  const embeds = doc.nodes
+    .map((n) => ({ n, emb: parseDocEmbedData(n.content.data) }))
+    .filter((x): x is { n: BlockNode; emb: NonNullable<ReturnType<typeof parseDocEmbedData>> } => !!x.emb);
+  if (embeds.length === 0) return {};
+  let all: KBNoteDoc[] = [];
+  try {
+    all = await db.docs.toArray();
+  } catch {
+    all = [];
+  }
+  const byId = new Map(all.map((d) => [d.id, d]));
+  const out: Record<string, SvgEmbedInfo> = {};
+  for (const { n, emb } of embeds) {
+    const targetDoc = byId.get(emb.targetDocId);
+    const target = targetDoc?.nodes.find((x) => x.id === emb.targetNodeId);
+    if (!targetDoc || !target) {
+      out[n.id] = { docTitle: emb.titleSnapshot || '已删除的画布', lines: [], dangling: true };
+      continue;
+    }
+    const text = extractNodePlainText(target.content.data);
+    out[n.id] = {
+      docTitle: targetDoc.title || '未命名画布',
+      lines: text ? [text.slice(0, 60)] : ['（空块）'],
+      dangling: false,
+    };
+  }
+  return out;
+}
+
 /** 异步版：先把 OPFS 图片解析成 data: URI，再逐页构建 SVG。 */
 export async function buildPagesSvgAsync(
   result: PaginateResult,
   doc: KBNoteDoc,
   opts: SvgExportOptions,
 ): Promise<string[]> {
-  const imageHrefs = await resolveImageHrefs(doc);
-  return buildPagesSvg(result, doc, { ...opts, imageHrefs });
+  const [imageHrefs, embedInfo] = await Promise.all([resolveImageHrefs(doc), buildEmbedInfo(doc)]);
+  return buildPagesSvg(result, doc, { ...opts, imageHrefs, embedInfo });
 }

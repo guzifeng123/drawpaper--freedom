@@ -23,6 +23,7 @@ import { docToMarkdown, markdownBlob } from './markdown-export';
 import { buildExportFileName } from './filename';
 import { deliverExportFile } from './deliver';
 import { pushToast } from '@/panels/lib/toast';
+import { db } from '@/storage/db';
 
 const EMPTY_RESULT: PaginateResult = { pages: [], orphans: [], totalPages: 0, notes: [] };
 
@@ -233,14 +234,24 @@ export function useExportModel(api: PanelsApi): {
       },
       onExportMarkdown: () => {
         if (!api.doc) return;
-        const md = docToMarkdown(api.doc);
-        const name = buildExportFileName({
-          title: api.doc.title ?? '未命名',
-          date: new Date(),
-          orientation: api.page.orientation,
-          ext: 'md',
-        });
-        void deliverExportFile(name, 'md', markdownBlob(md));
+        // Wave20：嵌入块 caption 需要目标画布名——从 Dexie 全量文档注入 docTitles。
+        void (async () => {
+          let docTitles: Record<string, string> | undefined;
+          try {
+            const all = await db.docs.toArray();
+            docTitles = Object.fromEntries(all.map((d) => [d.id, d.title || '未命名画布']));
+          } catch {
+            docTitles = undefined;
+          }
+          const md = docToMarkdown(api.doc!, { docTitles });
+          const name = buildExportFileName({
+            title: api.doc!.title ?? '未命名',
+            date: new Date(),
+            orientation: api.page.orientation,
+            ext: 'md',
+          });
+          void deliverExportFile(name, 'md', markdownBlob(md));
+        })();
       },
     }),
     [api, afterSheetsRender, computeResult],

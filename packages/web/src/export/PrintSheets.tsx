@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type {
   BlockNode,
@@ -6,11 +7,12 @@ import type {
   PageSettings,
   PaginateResult,
 } from '@drawpaper/core';
-import { mmToPx } from '@drawpaper/core';
+import { mmToPx, parseDocEmbedData } from '@drawpaper/core';
 import { TiptapStatic } from './render/tiptap-static';
 import { sheetSizePx, pageNumberLabel } from './layout-utils';
 import { buildEdgePath } from '../editor/edges/edge-geometry';
 import { useResolvedImageSrc } from '../editor/nodes/use-resolved-image';
+import { db } from '../storage/db';
 
 /** 打印/PDF 里的图片节点：把 assetRef 解析成 objectURL 后渲染 <img>，
  *  使矢量打印（window.print）与位图（html-to-image）都能抓到 OPFS 图片。 */
@@ -29,6 +31,66 @@ function PrintNodeImage({ src, alt }: { src: string; alt?: string }) {
 
 /** 续接标记圆圈半径（px）。 */
 const MARKER_R = 9;
+
+/**
+ * Wave20 块嵌入的打印/PNG 渲染：离线解析目标 doc/block（Dexie 全局可读），
+ * 顶部来源标题 caption + 目标正文静态渲染；目标已删 → 悬挂占位（不裂图/不报错）。
+ */
+function PrintEmbedBlock({ embed, gray }: { embed: NonNullable<ReturnType<typeof parseDocEmbedData>>; gray: boolean }) {
+  const [state, setState] = useState<
+    | { status: 'loading' }
+    | { status: 'ok'; docTitle: string; target: BlockNode }
+    | { status: 'dangling' }
+  >({ status: 'loading' });
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const doc = await db.docs.get(embed.targetDocId);
+        const target = doc?.nodes.find((n) => n.id === embed.targetNodeId);
+        if (cancelled) return;
+        if (!doc || !target) setState({ status: 'dangling' });
+        else setState({ status: 'ok', docTitle: doc.title || '未命名画布', target });
+      } catch {
+        if (!cancelled) setState({ status: 'dangling' });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [embed.targetDocId, embed.targetNodeId]);
+
+  const cap =
+    state.status === 'ok'
+      ? `嵌入自「${state.docTitle}」`
+      : state.status === 'dangling'
+        ? `嵌入自「${embed.titleSnapshot || '已删除的画布'}」· 原块已删除`
+        : '嵌入加载中…';
+  const capColor = gray ? '#555' : '#0284c7';
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="mb-1 border-b border-sky-200 pb-0.5 text-[10px] italic" style={{ color: capColor }}>
+        {cap}
+      </div>
+      {state.status === 'ok' ? (
+        <div className="min-h-0 flex-1 overflow-hidden">
+          {(state.target.content.data as { type?: string })?.type === 'doc' ? (
+            <TiptapStatic doc={state.target.content.data} gray={gray} />
+          ) : null}
+          {state.target.type === 'image' && state.target.image?.src ? (
+            <PrintNodeImage src={state.target.image.src} alt={state.target.image.alt ?? ''} />
+          ) : null}
+        </div>
+      ) : (
+        <div className="rounded border border-dashed border-slate-300 p-2 text-[10px] text-slate-400">
+          {state.status === 'dangling' ? '原块已删除 / 不可用' : ''}
+        </div>
+      )}
+    </div>
+  );
+}
 /** 边标签与标记圆圈中心的安全距离（圆圈半径 + 标签半高 + 间隙）。 */
 const LABEL_SAFE_R = 20;
 
@@ -131,9 +193,10 @@ export function PrintSheets({ result, doc, settings, edgeLabelsVisible }: PrintS
                 {page.nodeIds.map((id) => {
                   const n = nodeById.get(id);
                   if (!n) return null;
+                  const emb = parseDocEmbedData(n.content.data);
                   return (
                     <div key={id} className="mb-3 rounded border p-2">
-                      <TiptapStatic doc={n.content.data} gray={gray} />
+                      {emb ? <PrintEmbedBlock embed={emb} gray={gray} /> : <TiptapStatic doc={n.content.data} gray={gray} />}
                     </div>
                   );
                 })}
@@ -157,12 +220,20 @@ export function PrintSheets({ result, doc, settings, edgeLabelsVisible }: PrintS
                         minHeight: rect.h,
                       }}
                     >
-                      <TiptapStatic doc={n.content.data} gray={gray} />
-                      {n.image?.src ? (
-                        <div style={{ width: '100%', height: rect.h }}>
-                          <PrintNodeImage src={n.image.src} alt={n.image.alt ?? ''} />
-                        </div>
-                      ) : null}
+                      {(() => {
+                        const emb = parseDocEmbedData(n.content.data);
+                        if (emb) return <PrintEmbedBlock embed={emb} gray={gray} />;
+                        return (
+                          <>
+                            <TiptapStatic doc={n.content.data} gray={gray} />
+                            {n.image?.src ? (
+                              <div style={{ width: '100%', height: rect.h }}>
+                                <PrintNodeImage src={n.image.src} alt={n.image.alt ?? ''} />
+                              </div>
+                            ) : null}
+                          </>
+                        );
+                      })()}
                       {orphanIds.has(id) ? (
                         <span
                           data-orphan-badge

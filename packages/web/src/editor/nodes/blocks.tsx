@@ -1,11 +1,12 @@
 import type { NodeProps } from '@xyflow/react';
 import { SquareCheck } from 'lucide-react';
+import { parseDocEmbedData } from '@drawpaper/core';
 import { useEditorApi } from '../canvas/editor-context';
 import { StaticHtml } from '../tiptap/static';
 import { BlockShell } from './BlockShell';
+import { DocEmbedBlock } from './DocEmbedBlock';
 import type { AppNode } from './types';
 import { useResolvedImageSrc } from './use-resolved-image';
-
 /** 文本块。 */
 export function TextBlock({ data, selected }: NodeProps<AppNode>) {
   const block = data.block;
@@ -85,9 +86,12 @@ export function BulletBlock({ data, selected }: NodeProps<AppNode>) {
   );
 }
 
-/** 便签块：暖色底。 */
+/** 便签块：暖色底。Wave20：content.data 是 doc-embed 时转嵌入只读视图。 */
 export function NoteBlock({ data, selected }: NodeProps<AppNode>) {
   const block = data.block;
+  if (parseDocEmbedData(block.content?.data)) {
+    return <DocEmbedBlock data={data} selected={selected} />;
+  }
   return (
     <BlockShell
       block={block}

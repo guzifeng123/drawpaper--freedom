@@ -22,6 +22,7 @@ import {
   BookMarked,
   Paperclip,
   CalendarClock,
+  Blocks,
 } from 'lucide-react';
 import type { BlockType } from '@drawpaper/core';
 
@@ -34,7 +35,9 @@ import type { BlockType } from '@drawpaper/core';
 
 export type SlashCommand =
   | { kind: 'block'; blockType: BlockType }
-  | { kind: 'inline'; action: 'bold' | 'italic' | 'underline' | 'highlight' | 'link' };
+  | { kind: 'inline'; action: 'bold' | 'italic' | 'underline' | 'highlight' | 'link' }
+  // Wave20：弹出跨画布目标选择器，把当前块改造成只读块嵌入。
+  | { kind: 'embed-pick' };
 
 interface SlashItem {
   id: string;
@@ -60,6 +63,7 @@ const ITEMS: SlashItem[] = [
   { id: 'bookmark', label: '网页书签', icon: <BookMarked size={14} />, command: { kind: 'block', blockType: 'bookmark' } },
   { id: 'attachment', label: '附件', icon: <Paperclip size={14} />, command: { kind: 'block', blockType: 'attachment' } },
   { id: 'reminder', label: '日期/提醒', icon: <CalendarClock size={14} />, command: { kind: 'block', blockType: 'reminder' } },
+  { id: 'embed', label: '嵌入其他画布的块', icon: <Blocks size={14} />, command: { kind: 'embed-pick' } },
   { id: 'bold', label: '粗体', icon: <Bold size={14} />, command: { kind: 'inline', action: 'bold' } },
   { id: 'italic', label: '斜体', icon: <Italic size={14} />, command: { kind: 'inline', action: 'italic' } },
   { id: 'underline', label: '下划线', icon: <UnderlineIcon size={14} />, command: { kind: 'inline', action: 'underline' } },

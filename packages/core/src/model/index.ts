@@ -11,3 +11,4 @@ export * from './page.js';
 export * from './doc.js';
 export * from './schema.js';
 export * from './factory.js';
+export * from './doc-embed.js';
