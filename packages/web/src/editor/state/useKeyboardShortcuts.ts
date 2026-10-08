@@ -4,6 +4,7 @@ import type { EditorApi } from '../editor-api';
 import { toast } from '../ui/toast';
 import { getActiveBendAnchor, setActiveBendAnchor } from '../edges/bend-active';
 import { navigateFocus, type FocusNavDirection } from '../lib/focus-nav';
+import { isConnectPickerOpen, useConnectPickerStore } from '../connect/connect-picker-store';
 
 /**
  * Wave9：把焦点移到指定块——选中 + 飞块（CanvasEditor lastFocus effect 负责
@@ -38,6 +39,11 @@ export function useKeyboardShortcuts(api: EditorApi): void {
       const snap = api.getState();
       const editing = snap.editingNodeId !== null;
       const mod = e.metaKey || e.ctrlKey;
+
+      // Wave23：键盘连线目标选择器打开期间，全部画布快捷键让路给选择器自身
+      // （↑↓/Enter/Tab/Esc/输入过滤），由 ConnectTargetPicker 的 window keydown 处理。
+      // 不 preventDefault/stopPropagation，事件继续派发到选择器监听器。
+      if (isConnectPickerOpen()) return;
 
       // Esc 分层退出交给状态机（editing → 仍选中；select → 清空选择）。
       // Wave9：弹层（Dialog/Popover/Dropdown）打开时 Esc 交给 Radix 自己关，
@@ -187,9 +193,17 @@ export function useKeyboardShortcuts(api: EditorApi): void {
         case 'v':
           api.setMode('select');
           return;
-        case 'c':
+        case 'c': {
+          // Wave23：选中某块时按 C 进入连线模式并弹出「选目标块」键盘选择器
+          // （源=当前选中块）。无选中时仍只切 connect 模式，保留指针拖拽连线入口。
           api.setMode('connect');
+          if (snap.selection.size === 1) {
+            const sourceId = [...snap.selection][0]!;
+            useConnectPickerStore.getState().openPicker(sourceId);
+            toast('连线模式：选择目标块，Esc 取消');
+          }
           return;
+        }
         case 'ArrowUp':
         case 'ArrowDown':
         case 'ArrowLeft':

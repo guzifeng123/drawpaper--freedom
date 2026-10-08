@@ -4,7 +4,11 @@
 
 ## 未发布（Unreleased）
 
-（暂无）
+- **纯键盘跨块父子连线（Wave23 H 路）**：焦点在某块按 `c` 进入连线模式，弹出当前文档内目标块选择器——
+  键入标题/正文前缀过滤、↑↓ 选择、Enter/Tab 确认、Esc 取消、点击外部关闭、IME 组合期让路；确认走与指针
+  拖拽完全相同的 `onConnect` → `api.addEdge` 校验链（自环/重复边 toast、多父/成环冲突弹窗、撤销栈自动继承），
+  不另造校验、不新增边类型。候选过滤为零 DOM 纯函数（排除源块自身与全部后代、标题前缀优先稳定排序），
+  选择器 `role="listbox"/option"` + aria-live。详见 `docs/wave23/keyboard-cross-connect.md`。
 
 ## 0.1.0-rc.14（2026-10-08）
 
