@@ -27,71 +27,81 @@ async function nodesOf(page: Page): Promise<Pt[]> {
 
 /** 灌入两棵根树（多根森林）：n1→n2,n3；n2→n4；另起 m1→m2。 */
 async function loadFlowDoc(page: Page): Promise<void> {
-  // 等 bootstrap 打开文档完成，再用 hook 灌数据（避免被异步 boot 覆盖）。
-  await page.waitForFunction(() => {
-    const h = (window as unknown as { __drawpaper__?: { getState: () => { doc: { id?: string } } } }).__drawpaper__;
-    return !!h && !!h.getState().doc.id;
-  }, null, { timeout: 10_000 });
-  await page.evaluate(() => {
-    const mk = (id: string) => ({
-      id,
-      type: 'text',
-      x: 0,
-      y: 0,
-      width: 200,
-      height: 60,
-      content: { format: 'tiptap-json', data: { type: 'doc', content: [] } },
-      parentId: null,
-      pinned: false,
-      locked: false,
-      collapsed: false,
-      tags: [],
-      style: {},
+  // 与 loadStandard 同范式：waitForApp（只等 __drawpaper__ 就绪）后**立即** loadFixture，
+  // 此时启动序列的异步 openDoc 尚未发生，fixture 直接占位成为当前文档；
+  // 切勿先等 doc.id——welcome 临时文档已有 id，会落进「灌完被迟到 openDoc 覆盖」窗口。
+  const loadOnce = () =>
+    page.evaluate(() => {
+      const mk = (id: string) => ({
+        id,
+        type: 'text',
+        x: 0,
+        y: 0,
+        width: 200,
+        height: 60,
+        content: { format: 'tiptap-json', data: { type: 'doc', content: [] } },
+        parentId: null,
+        pinned: false,
+        locked: false,
+        collapsed: false,
+        tags: [],
+        style: {},
+      });
+      const doc = {
+        format: 'knowledge-block-notes',
+        version: 4,
+        id: 'wave21-flow',
+        title: 'wave21 flow',
+        board: { createdAt: 0, updatedAt: 0 },
+        nodes: ['n1', 'n2', 'n3', 'n4', 'm1', 'm2'].map((id) => mk(id)),
+        edges: [
+          { id: 'e1', source: 'n1', target: 'n2', sourceHandle: 'right', targetHandle: 'left', label: '', directed: true, style: { color: '#94A3B8' } },
+          { id: 'e2', source: 'n1', target: 'n3', sourceHandle: 'right', targetHandle: 'left', label: '', directed: true, style: { color: '#94A3B8' } },
+          { id: 'e3', source: 'n2', target: 'n4', sourceHandle: 'right', targetHandle: 'left', label: '', directed: true, style: { color: '#94A3B8' } },
+          { id: 'e4', source: 'm1', target: 'm2', sourceHandle: 'right', targetHandle: 'left', label: '', directed: true, style: { color: '#94A3B8' } },
+        ],
+        tags: [],
+        layout: { mode: 'mindmap-right', rankSpacing: 90, nodeSpacing: 28 },
+        viewport: { x: 0, y: 0, zoom: 1 },
+        page: {
+          size: 'A4',
+          orientation: 'portrait',
+          marginMm: 15,
+          mode: 'fit',
+          showPageBreak: false,
+          colorMode: 'color',
+          header: false,
+          footer: false,
+          showPageNumbers: false,
+          edgeLabels: true,
+          pageBreaks: [],
+        },
+        assetRefs: [],
+        links: [],
+        sync: { vv: {} },
+      };
+      (window as unknown as { __drawpaper__: { loadFixture: (d: unknown) => void } }).__drawpaper__.loadFixture(doc);
     });
-    const doc = {
-      format: 'knowledge-block-notes',
-      version: 4,
-      id: 'wave21-flow',
-      title: 'wave21 flow',
-      board: { createdAt: 0, updatedAt: 0 },
-      nodes: ['n1', 'n2', 'n3', 'n4', 'm1', 'm2'].map((id) => mk(id)),
-      edges: [
-        { id: 'e1', source: 'n1', target: 'n2', sourceHandle: 'right', targetHandle: 'left', label: '', directed: true, style: { color: '#94A3B8' } },
-        { id: 'e2', source: 'n1', target: 'n3', sourceHandle: 'right', targetHandle: 'left', label: '', directed: true, style: { color: '#94A3B8' } },
-        { id: 'e3', source: 'n2', target: 'n4', sourceHandle: 'right', targetHandle: 'left', label: '', directed: true, style: { color: '#94A3B8' } },
-        { id: 'e4', source: 'm1', target: 'm2', sourceHandle: 'right', targetHandle: 'left', label: '', directed: true, style: { color: '#94A3B8' } },
-      ],
-      tags: [],
-      layout: { mode: 'mindmap-right', rankSpacing: 90, nodeSpacing: 28 },
-      viewport: { x: 0, y: 0, zoom: 1 },
-      page: {
-        size: 'A4',
-        orientation: 'portrait',
-        marginMm: 15,
-        mode: 'fit',
-        showPageBreak: false,
-        colorMode: 'color',
-        header: false,
-        footer: false,
-        showPageNumbers: false,
-        edgeLabels: true,
-        pageBreaks: [],
-      },
-      assetRefs: [],
-      links: [],
-      sync: { vv: {} },
-    };
-    (window as unknown as { __drawpaper__: { loadFixture: (d: unknown) => void } }).__drawpaper__.loadFixture(doc);
-  });
-  // 防 bootstrap 异步 openDoc 覆盖：轮询确认灌进去的文档真的在位（≤10s）。
-  await page.waitForFunction(
-    () => {
+
+  // 有界轮询：确认 state 真为 wave21-flow 且 6 节点；被 bootstrap 迟到 openDoc 冲掉则重灌，最多 3 次。
+  const check = () =>
+    page.evaluate(() => {
       const h = (window as unknown as { __drawpaper__?: { getState: () => { doc: { id: string; nodes: unknown[] } } } }).__drawpaper__;
       return !!h && h.getState().doc.id === 'wave21-flow' && h.getState().doc.nodes.length === 6;
-    },
-    null,
-    { timeout: 10_000 },
-  );
+    });
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await loadOnce();
+    // fixture 落位（最多 10s）。
+    await expect.poll(check, { timeout: 10_000 }).toBe(true);
+    // 观察窗：bootstrap 的 listDocs→newDoc/openDoc 是异步后到，可能把 fixture 冲掉；
+    // 窗后复查仍为真才算稳，否则重灌（bootstrap 已在窗口内跑完，下轮落位即钉住）。
+    await page.waitForTimeout(2_000);
+    if (await check()) break;
+    if (attempt === 2) {
+      throw new Error('loadFlowDoc：fixture 被 bootstrap openDoc 连续 3 轮覆盖，state 未钉住');
+    }
+  }
   await page.keyboard.press('Control+0');
   await page.waitForTimeout(300);
 }
