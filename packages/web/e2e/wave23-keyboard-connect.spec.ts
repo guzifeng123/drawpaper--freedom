@@ -10,8 +10,8 @@ import { test, expect, type Page } from '@playwright/test';
  *  - 自环候选不存在（源块自身被排除）；
  *  - 重复连接走「已存在」提示；
  *  - 成环（A→B→A）目标在候选中可见、不被静默吞掉；
- *  - 成环触发「连线冲突」裁决弹窗：以 test.fixme 挂账（基线渲染器成环死锁，见
- *    docs/wave23/keyboard-cross-connect.md §挂账）。
+ *  - 成环触发「连线冲突」裁决弹窗（Wave23.5 paginate 环防护修复后由挂账转真断言，
+ *    指针/触屏路径见 wave23-cycle-conflict.spec.ts）。
  */
 
 async function edgeList(page: Page) {
@@ -149,16 +149,13 @@ test.describe('Wave23 纯键盘跨块父子连线', () => {
     // 多父/成环由 core analyze 检出 → pendingConflicts → 既有「连线冲突，请裁决」弹窗，
     // 撤销栈自动继承）。该裁决链路由既有指针连线 e2e 与 core 单测覆盖；此处验证键盘
     // 入口能把成环目标正确递交到同一条校验链（成环目标不被候选过滤静默吞掉）。
-    // 注：实际按下确认会让既有指针路径渲染成环边（基线渲染器在成环边上的已知问题，
-    // 非本路引入），故此处不断言弹窗 DOM，仅验证候选递交正确。
+    // 成环递交后的弹窗断言见下方用例（Wave23.5 起死锁已修复）。
   });
 
-  // 挂账：基线渲染器在「成环形状的图」上同步死锁（dev 与生产构建均复现，干净基线
-  // 4836b69 同样复现），ConflictDialog 不可达。按 Wave21 D 路纪律，缺口以 test.fixme
-  // 在 CI 里可见挂账，不删断言凑绿。函数体写全本应断言的步骤，待专门修复波次解除 fixme。
-  // 见 docs/wave23/keyboard-cross-connect.md §挂账。
-  test.fixme(
-    '成环 A→B→A：触发「连线冲突」裁决弹窗（阻塞：基线渲染器成环死锁，见 docs/wave23/keyboard-cross-connect.md §挂账）',
+  // Wave23.5 起 paginate.buildParentOf 增加环防护（fix/cycle-layout-hang），成环不再死锁，
+  // 键盘路径的成环裁决弹窗断言由 test.fixme 转为真断言（与指针/触屏路径 wave23-cycle-conflict.spec.ts 对齐）。
+  test(
+    '成环 A→B→A：触发「连线冲突」裁决弹窗（键盘路径，Wave23.5 死锁修复回归）',
     async ({ page }) => {
       const A = await makeBlock(page, 0, 0, '苹果计划');
       const B = await makeBlock(page, 320, 0, '蓝莓任务');
