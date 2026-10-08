@@ -15,6 +15,8 @@ import { waitForApp, invoke } from './fixtures/load-doc';
  *  - 页数与分页预览（.sheet 数）一致；
  *  - 图片块在 PDF 中以光栅 image XObject 可见（pdfimages -list）；
  *  - 强制矢量失败 → toast「矢量导出失败，已回退位图模式」且仍产出 PDF。
+ *  - Wave20：龘（U+9F98，字库已扩到 GB2312 全字库）矢量直出、可抽取、无回退；
+ *    真正超纲的 Ext-B 字（𠮷 U+20BB7）仍命中缺字形预检→位图回退。
  */
 
 const OUT = path.resolve(process.cwd(), 'test-results/vector-pdf');
@@ -210,11 +212,12 @@ test.describe('Wave14 矢量 PDF 直下载', () => {
     });
   });
 
-  test('含生僻字（龘）文档：缺字形预检命中，回退位图并 toast 专门提示', async ({ page }) => {
-    test.setTimeout(90_000);
+  test('含龘（U+9F98）文档：字库已覆盖，矢量直出成功，龘可抽取且无位图回退', async ({ page }) => {
+    test.setTimeout(120_000);
+    page.on('console', (m) => { if (m.text().includes('[vecpdf-t]')) console.log('PAGE>', m.text()); });
     await waitForApp(page);
     const { doc } = buildStandardFixture('矢量PDF验收');
-    // 追加一个孤块，正文含字体未覆盖的生僻字「龘」（U+9F98，GB2312 二级/扩展）。
+    // Wave20：内嵌字库从 GB2312 一级扩到全字库，龘（回归锚点）现在应矢量直出。
     const rareNode = {
       id: 'v_rare_probe',
       type: 'note',
@@ -236,6 +239,55 @@ test.describe('Wave14 矢量 PDF 直下载', () => {
     await page.waitForSelector('text=导出 / 打印', { timeout: 5000 });
     await page.getByRole('button', { name: /直接下载 PDF/ }).click();
 
+    const download = await pdfPromise;
+    const pdfPath = path.join(OUT, 'vector-da.pdf');
+    await download.saveAs(pdfPath);
+    expect(fs.statSync(pdfPath).size).toBeGreaterThan(5_000);
+
+    // 不应出现「缺字形→回退位图」toast。
+    await expect(
+      page.locator('div[role="status"]', { hasText: '含字体不支持的文字，已回退位图模式' }),
+    ).toBeHidden({ timeout: 3_000 });
+
+    const fontOut = sh(['pdffonts', pdfPath]);
+    const textOut = sh(['pdftotext', pdfPath, '-']);
+    console.log('=== pdffonts (龘) ===\n' + fontOut);
+    console.log('=== pdftotext (龘) ===\n' + textOut);
+
+    // pdfjs 权威断言：龘 作为矢量文本对象可抽取（位图回退会整页栅格，抽不出字）。
+    const pdf = await analyzePdf(pdfPath);
+    console.log('=== pdfjs (龘) ===', JSON.stringify({ text: pdf.text.slice(0, 120), fontRefs: pdf.fontRefCount }));
+    expect(pdf.text, '龘 must be extractable as vector text').toContain('龘');
+    expect(pdf.fontRefCount, 'vector font refs').toBeGreaterThan(0);
+  });
+
+  test('含 Ext-B 生僻字（𠮷 U+20BB7）文档：仍超出字库，缺字形预检命中回退位图', async ({ page }) => {
+    test.setTimeout(90_000);
+    await waitForApp(page);
+    const { doc } = buildStandardFixture('矢量PDF验收');
+    // 𠮷 属 CJK Ext-B（U+20BB7，超出 BMP，本字体 cmap 为 BMP format-4，绝不覆盖）。
+    // 用以证明：扩字库后兜底链路未被破坏，真正超纲的字仍整体回退位图。
+    const extBNode = {
+      id: 'v_extb_probe',
+      type: 'note',
+      x: 2600, y: 900,
+      width: 240, height: 72,
+      content: tipDoc('𠮷字测试 ext-b'),
+      parentId: null, pinned: false, locked: false, collapsed: false, tags: [], style: {},
+    } as unknown as BlockNode;
+    doc.nodes.push(extBNode);
+    await loadVectorDoc(page, doc);
+    await invoke(page, 'setPageSettings', { mode: 'tiles', orientation: 'portrait' });
+    await invoke(page, 'setSelection', []);
+
+    const pdfPromise = page.waitForEvent('download', {
+      timeout: 60_000,
+      predicate: (d) => d.suggestedFilename().endsWith('.pdf'),
+    });
+    await page.keyboard.press('Control+p');
+    await page.waitForSelector('text=导出 / 打印', { timeout: 5000 });
+    await page.getByRole('button', { name: /直接下载 PDF/ }).click();
+
     // 缺字形预检 → 专门文案（区别于一般矢量失败）。
     await expect(
       page.locator('div[role="status"]', { hasText: '含字体不支持的文字，已回退位图模式' }),
@@ -243,7 +295,7 @@ test.describe('Wave14 矢量 PDF 直下载', () => {
 
     // 仍产出位图 PDF。
     const download = await pdfPromise;
-    const pdfPath = path.join(OUT, 'vector-missing-glyph.pdf');
+    const pdfPath = path.join(OUT, 'vector-missing-glyph-extb.pdf');
     await download.saveAs(pdfPath);
     expect(fs.statSync(pdfPath).size).toBeGreaterThan(5_000);
   });

@@ -7,7 +7,8 @@ VecCJK 是 **Noto Sans CJK SC Regular** 的子集字体（SIL Open Font License 
 经以下处理后随本仓库分发：
   1. 从 NotoSansCJK-Regular.ttc 抽取 SC 面（font index 2）；
   2. CFF/OTF 轮廓经 fontTools + cu2qu 转换为 TrueType glyf 轮廓（jsPDF 只认 glyf）；
-  3. pyftsubset 子集化到 GB2312 一级常用字（3755 字）+ ASCII + 全角/常用标点（共 3986 字形）。
+  3. pyftsubset 子集化到 GB2312 一级+二级全部汉字（6763 字）+ ASCII + 全角/常用标点
+     + 回归锚点「龘」U+9F98（共 6995 码位）。由 scripts/build-vec-cjk-font.py 可复现构建。
 
 版权：Copyright 2014-2021 Google LLC. 保留部分权利。
 Noto 是 Google LLC 的注册商标（本派生字体已改名 VecCJK，未沿用 Reserved Font Name）。
