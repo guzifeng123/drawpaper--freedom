@@ -120,7 +120,13 @@ export const TagSchema = z.object({
 });
 
 export const LayoutPrefsSchema = z.object({
-  mode: z.enum(['mindmap-right', 'mindmap-down', 'org-tree', 'radial']).default('mindmap-right'),
+  // Wave21：枚举附加式新增 'flow-layered'（不升 schema 版本、不写迁移）。
+  // 宽容解析：未知/非法 mode 值一律回退 'mindmap-down'（.catch），
+  // 任何历史/未来非法 mode 都不会导致文档打开失败（参照 Wave20 附加 kind 不升版本的思路）。
+  mode: z
+    .enum(['mindmap-right', 'mindmap-down', 'org-tree', 'radial', 'flow-layered'])
+    .catch('mindmap-down')
+    .default('mindmap-right'),
   rankSpacing: finiteNumber.default(90),
   nodeSpacing: finiteNumber.default(28),
 });

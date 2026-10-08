@@ -120,6 +120,19 @@ describe('parseKBNoteDoc: happy path & defaults', () => {
     expect(data.kind).toBe('doc-embed');
     expect(data.targetDocId).toBe('doc_B');
   });
+
+  it('Wave21 layout.mode：枚举附加 flow-layered，未知/非法 mode 宽容回退 mindmap-down', () => {
+    // 合法新值原样承载（不升版本、不迁移）。
+    const d1 = parseKBNoteDoc(
+      doc({ layout: { mode: 'flow-layered', rankSpacing: 90, nodeSpacing: 28 } }),
+    );
+    expect(d1.layout.mode).toBe('flow-layered');
+    // 未知未来值/脏值不炸文档打开，宽容回退 mindmap-down。
+    const d2 = parseKBNoteDoc(
+      doc({ layout: { mode: 'some-future-mode', rankSpacing: 90, nodeSpacing: 28 } }),
+    );
+    expect(d2.layout.mode).toBe('mindmap-down');
+  });
 });
 
 describe('parseKBNoteDoc: rejection', () => {

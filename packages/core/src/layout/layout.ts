@@ -5,7 +5,7 @@ import type { BlockNode, Edge, LayoutMode } from '../model/index.js';
 /**
  * layout 模块：d3-hierarchy 驱动的纯函数树布局（零 DOM、确定性输出）。
  *
- * 支持四种模式（见 model/layout.ts 的 LayoutMode）：
+ * 支持五种模式（见 model/layout.ts 的 LayoutMode）：
  *  - `mindmap-right`：思维导图横向，根在左、子树向右展开（深度轴 = x）。
  *  - `mindmap-down`：思维导图纵向，根在上、子树向下展开（深度轴 = y），
  *    纵向行距由「逐节点实测高度 + rankSpacing」驱动（每个节点占据自己的高度槽）。
@@ -17,6 +17,9 @@ import type { BlockNode, Edge, LayoutMode } from '../model/index.js';
  *  - `radial`：放射（极坐标）树——根在圆心、深度 = 环半径、同层按叶子跨度均分角度。
  *    由 d3-hierarchy `cluster()` 算出 tidy 叶子分布后映射为极坐标
  *    （x=cx+r·sinθ, y=cy+r·cosθ）。详见 layoutRadial 的近似与局限 JSDoc。
+ *  - `flow-layered`（Wave21）：逻辑流分层有向图——自上而下按最长路径分层、
+ *    同层顶对齐成行，纯 TS 手写分层（不引入 dagre/d3-force/elkjs）。
+ *    详见 layoutFlowLayeredInto 的算法与局限 JSDoc。
  *
  * 增量整理见 {@link layoutTreeIncremental}；折叠收紧见 {@link LayoutInput.tighten}。
  */
@@ -193,7 +196,6 @@ export function layoutTree(input: LayoutInput, mode: LayoutMode): LayoutResult {
 
   // 2) 建树（自包含，不依赖 graph 模块）。
   const built = buildNestedTree(input);
-  notes.push(...built.notes);
 
   // pinned 与 manualFixed 同作为「固定锚点」参与避让/绕行，但语义独立、notes 分列。
   const pinned = input.pinned ?? new Set<string>();
@@ -203,28 +205,34 @@ export function layoutTree(input: LayoutInput, mode: LayoutMode): LayoutResult {
     notes.push(`manualFixed：${manualFixed.size} 个节点保持手动坐标（与 pinned 独立）。`);
   }
 
-  // 3) d3 hierarchy（tidy 排布）。固定锚点节点保留在结构中作为分支锚点，
-  //    但其坐标不写入输出（其后代继续在 d3 中排布）。
-  const rootHierarchy = hierarchy<NestedNode>(built.nested, (d) => d.children);
-  rootHierarchy.sort((a, b) => a.data.id.localeCompare(b.data.id));
-
-  // 全局实测宽/高极值（d3 nodeSize 只能取常量，用极值占位保证不重叠）。
-  let maxW = 0;
-  let maxH = 0;
-  for (const id of built.laidOutIds) {
-    const s = sizeOf(id);
-    if (s.width > maxW) maxW = s.width;
-    if (s.height > maxH) maxH = s.height;
-  }
-
   const right = mode === 'mindmap-right';
   const worldBoxes = new Map<string, Box>();
 
-  if (mode === 'radial') {
-    // ---- 放射（极坐标）树：见文件末尾 layoutRadial 近似说明 ----
-    layoutRadialInto(rootHierarchy, sizeOf, fixedSet, input, worldBoxes);
+  if (mode === 'flow-layered') {
+    // ---- 逻辑流分层有向图（Wave21）：纯 TS 最长路径分层，见文件末尾 layoutFlowLayeredInto ----
+    notes.push(...layoutFlowLayeredInto(sizeOf, fixedSet, input, worldBoxes));
   } else {
-    // ---- 笛卡尔三模式 ----
+    notes.push(...built.notes);
+
+    // 3) d3 hierarchy（tidy 排布）。固定锚点节点保留在结构中作为分支锚点，
+    //    但其坐标不写入输出（其后代继续在 d3 中排布）。
+    const rootHierarchy = hierarchy<NestedNode>(built.nested, (d) => d.children);
+    rootHierarchy.sort((a, b) => a.data.id.localeCompare(b.data.id));
+
+    // 全局实测宽/高极值（d3 nodeSize 只能取常量，用极值占位保证不重叠）。
+    let maxW = 0;
+    let maxH = 0;
+    for (const id of built.laidOutIds) {
+      const s = sizeOf(id);
+      if (s.width > maxW) maxW = s.width;
+      if (s.height > maxH) maxH = s.height;
+    }
+
+    if (mode === 'radial') {
+      // ---- 放射（极坐标）树：见文件末尾 layoutRadial 近似说明 ----
+      layoutRadialInto(rootHierarchy, sizeOf, fixedSet, input, worldBoxes);
+    } else {
+      // ---- 笛卡尔三模式 ----
     // tighten：按实测宽紧凑排布（separation 用真实宽度），否则用全局极值常量槽位。
     let nodeSize: [number, number];
     let separation:
@@ -290,6 +298,7 @@ export function layoutTree(input: LayoutInput, mode: LayoutMode): LayoutResult {
       }
       worldBoxes.set(id, { x: left, y: top, w: s.width, h: s.height });
     });
+    }
   }
 
   // 5) 坐标归一化：让被布局簇的最小左上 = (0,0)。pinned 节点不参与归一。
@@ -454,6 +463,167 @@ function layoutRadialInto(
     const cy = r * Math.cos(theta);
     worldBoxes.set(id, { x: cx - s.width / 2, y: cy - s.height / 2, w: s.width, h: s.height });
   });
+}
+
+/**
+ * 逻辑流分层有向图（Wave21，`flow-layered`）：自上而下分层的纯 TS 手写算法。
+ *
+ * 方向语义：根在最上一层，父子边沿 y 轴向下（视觉上即正交折线：父→子竖直落差、
+ * 同层水平排开）；块矩形为轴对齐，不引入 dagre/d3-force/elkjs 或任何新依赖。
+ *
+ * 算法（确定性）：
+ *  1. 主树裁决：边只有父子一种语义。同一 target 的多条入边「首条 wins」
+ *     （与 buildNestedTree 同规则），得 parentOf；反查 childrenOf 即主树。
+ *  2. 根：集合内无 parentOf 的节点（多根森林 = 多棵主树）。指定 rootId 时单根；
+ *     成环（无任何根）时按字典序强取最小节点为根，环边沿主树截断。
+ *  3. 最长路径分层：rank(node) = root→0；否则 rank(parent) + 1。
+ *     带 memo + 递归栈守卫：环上节点命中栈守卫按 rank 0 退化，不死循环、不逆层
+ *     （主树上 rank(child) = rank(parent) + 1 恒成立）。
+ *  4. 行高：每层取该层最大实测高；行顶 y 逐行累计，行间距 = rankSpacing。
+ *  5. 层内排序：rank 0 = 根按字典序；其后每层按「父节点在上一层的栏位顺序」排序、
+ *     同父兄弟按 id 字典序——父群不交叉打散。层内从左到右按实测宽 + nodeSpacing
+ *     顺序铺栏，同层必然不重叠；多根森林各根从左向右排开，根间留同级间距。
+ *  6. 固定锚点（pinned/manualFixed）参与层级计算但其坐标不写入（由调用方注入）。
+ *
+ * 近似与局限（JSDoc 声明）：
+ *  - 多父边在 graph/store 层弹窗裁决主父，本布局只消费裁决后的主树；
+ *    未裁决输入下首条入边 wins（与其它布局模式一致）。
+ *  - 层内不做交叉最小化迭代（barycenter 平移），只保证不重叠与父序稳定。
+ *  - tighten 在本模式下恒为「按实测宽紧凑」（层内栏位即实测宽），仅在 notes 标注。
+ */
+function layoutFlowLayeredInto(
+  sizeOf: (id: string) => MeasuredSize,
+  fixedSet: ReadonlySet<string>,
+  input: LayoutInput,
+  worldBoxes: Map<string, Box>,
+): string[] {
+  const notes: string[] = [];
+  const nodeIds = new Set(input.nodes.map((n) => n.id));
+
+  // 1) 主树：首条入边 wins（与 buildNestedTree 同规则），仅子集内节点。
+  const parentOf = new Map<string, string>();
+  for (const e of input.edges) {
+    if (!nodeIds.has(e.source) || !nodeIds.has(e.target)) continue;
+    if (parentOf.has(e.target)) continue;
+    parentOf.set(e.target, e.source);
+  }
+  const childrenOf = new Map<string, string[]>();
+  for (const [child, p] of parentOf) {
+    const arr = childrenOf.get(p) ?? [];
+    arr.push(child);
+    childrenOf.set(p, arr);
+  }
+
+  // 2) 根裁决。
+  let roots = [...nodeIds].filter((id) => !parentOf.has(id)).sort();
+  if (input.rootId && nodeIds.has(input.rootId)) roots = [input.rootId];
+  if (roots.length === 0) {
+    roots = [...nodeIds].sort().slice(0, 1);
+    notes.push('检测到成环输入：已按字典序强行取根，环边按 parentId 主树退化截断。');
+  }
+  const rootSet = new Set(roots);
+  if (roots.length > 1) {
+    notes.push(`检测到 ${roots.length} 个根：各根独立分层、从左到右排开（多根森林）。`);
+  }
+
+  // 3) 最长路径分层：memo 递归 + 栈守卫（环 → rank 0 退化）。
+  const rankMemo = new Map<string, number>();
+  const inStack = new Set<string>();
+  const computeRank = (id: string): number => {
+    const hit = rankMemo.get(id);
+    if (hit !== undefined) return hit;
+    if (rootSet.has(id)) {
+      rankMemo.set(id, 0);
+      return 0;
+    }
+    if (inStack.has(id)) {
+      // 环上节点：按根级退化（主树截断点），保证不逆层、不死循环。
+      rankMemo.set(id, 0);
+      return 0;
+    }
+    inStack.add(id);
+    const p = parentOf.get(id);
+    const r = p === undefined ? 0 : computeRank(p) + 1;
+    inStack.delete(id);
+    rankMemo.set(id, r);
+    return r;
+  };
+  for (const id of nodeIds) computeRank(id);
+
+  // collapsed：折叠节点在遍历中成为叶子（后代剔除）。
+  const isCollapsed = (id: string): boolean => input.collapsed?.[id] === true;
+
+  // 4) DFS 展开（visited 守卫）：确定每层参与排布的节点集合与遍历序。
+  const visited = new Set<string>();
+  const laidOutIds: string[] = [];
+  const dfs = (id: string): void => {
+    if (visited.has(id)) return;
+    visited.add(id);
+    laidOutIds.push(id);
+    if (isCollapsed(id)) {
+      notes.push(`节点「${id}」折叠：其 ${(childrenOf.get(id) ?? []).length} 个后代从布局剔除。`);
+      return;
+    }
+    for (const c of childrenOf.get(id) ?? []) dfs(c);
+  };
+  for (const r of roots) dfs(r);
+
+  // 5) 行高与行顶：每层最大实测高，行距 = rankSpacing。
+  const rowMaxH = new Map<number, number>();
+  let maxRank = 0;
+  for (const id of laidOutIds) {
+    if (fixedSet.has(id)) continue;
+    const r = rankMemo.get(id) ?? 0;
+    const h = sizeOf(id).height;
+    if ((rowMaxH.get(r) ?? 0) < h) rowMaxH.set(r, h);
+    if (r > maxRank) maxRank = r;
+  }
+  const rowTopAt = new Map<number, number>();
+  let acc = 0;
+  for (let r = 0; r <= maxRank; r++) {
+    rowTopAt.set(r, acc);
+    acc += (rowMaxH.get(r) ?? 0) + input.rankSpacing;
+  }
+
+  // 6) 层内排序：rank0 = 根字典序；其后按父节点在上一层的栏位序、同父按 id。
+  const byRank = new Map<number, string[]>();
+  for (const id of laidOutIds) {
+    const r = rankMemo.get(id) ?? 0;
+    const arr = byRank.get(r) ?? [];
+    arr.push(id);
+    byRank.set(r, arr);
+  }
+  const orderedByRank = new Map<number, string[]>();
+  orderedByRank.set(0, [...(byRank.get(0) ?? [])].sort());
+  for (let r = 1; r <= maxRank; r++) {
+    const prevOrder = orderedByRank.get(r - 1) ?? [];
+    const prevIndex = new Map<string, number>(prevOrder.map((id, i) => [id, i]));
+    const bucket = [...(byRank.get(r) ?? [])];
+    bucket.sort((a, b) => {
+      const pa = parentOf.get(a);
+      const pb = parentOf.get(b);
+      const ia = pa === undefined ? -1 : prevIndex.get(pa) ?? Number.MAX_SAFE_INTEGER;
+      const ib = pb === undefined ? -1 : prevIndex.get(pb) ?? Number.MAX_SAFE_INTEGER;
+      if (ia !== ib) return ia - ib;
+      return a.localeCompare(b);
+    });
+    orderedByRank.set(r, bucket);
+  }
+
+  // 7) 铺栏：同层从左到右按实测宽 + nodeSpacing 顺序摆放（天然不重叠）。
+  for (let r = 0; r <= maxRank; r++) {
+    let cursor = 0;
+    for (const id of orderedByRank.get(r) ?? []) {
+      if (fixedSet.has(id)) continue;
+      const s = sizeOf(id);
+      worldBoxes.set(id, { x: cursor, y: rowTopAt.get(r) ?? 0, w: s.width, h: s.height });
+      cursor += s.width + input.nodeSpacing;
+    }
+  }
+  if (input.tighten) {
+    notes.push('tighten：flow-layered 恒按实测宽紧凑铺栏（折叠后兄弟向心收拢）。');
+  }
+  return notes;
 }
 
 /**

@@ -390,3 +390,164 @@ describe('layout / layoutTreeIncremental 增量整理', () => {
     expect(inc.positions['c']).toEqual(positions0['c']);
   });
 });
+
+describe('layout / flow-layered 逻辑流分层（Wave21）', () => {
+  // fixture：a→b,c；b→d,e；d→f；c→g（rank：a=0，b/c=1，d/e/g=2，f=3）。
+
+  it('单树分层：rank 单调、同层 y 顶对齐、子不早于父', () => {
+    const r = layoutTree(baseInput(), 'flow-layered');
+    const p = r.positions;
+    // 同层顶对齐：b/c 同层、d/e/g 同层。
+    expect(p['b']!.y).toBe(p['c']!.y);
+    expect(p['d']!.y).toBe(p['e']!.y);
+    expect(p['d']!.y).toBe(p['g']!.y);
+    // rank 单调递增。
+    expect(p['a']!.y).toBeLessThan(p['b']!.y);
+    expect(p['b']!.y).toBeLessThan(p['d']!.y);
+    expect(p['d']!.y).toBeLessThan(p['f']!.y);
+    // 子不早于父（每条主树边）。
+    const edges: Array<[string, string]> = [
+      ['a', 'b'],
+      ['a', 'c'],
+      ['b', 'd'],
+      ['b', 'e'],
+      ['d', 'f'],
+      ['c', 'g'],
+    ];
+    for (const [pa, ch] of edges) {
+      expect(p[ch]!.y).toBeGreaterThan(p[pa]!.y);
+    }
+    // 无残留重叠。
+    expect(r.collisions.overlappingPairs).toHaveLength(0);
+  });
+
+  it('单链 DAG：a→b→c→d→e 逐层加深、无重叠', () => {
+    const ids = ['a', 'b', 'c', 'd', 'e'];
+    const nodes = ids.map(makeNode);
+    const edges = ids
+      .slice(1)
+      .map((t, i) => makeEdge(`e_${ids[i]}_${t}`, ids[i]!, t));
+    const r = layoutTree(
+      { nodes, edges, rankSpacing: 90, nodeSpacing: 28, measured: {} },
+      'flow-layered',
+    );
+    for (let i = 1; i < ids.length; i++) {
+      expect(r.positions[ids[i]!]!.y).toBeGreaterThan(r.positions[ids[i - 1]!]!.y);
+    }
+    expect(r.collisions.overlappingPairs).toHaveLength(0);
+  });
+
+  it('多根森林：各根 rank=0 同行、根间不重叠、后代独立分层', () => {
+    const nodes = ['r1', 'r2', 'a1', 'b1', 'c1'].map(makeNode);
+    const edges = [
+      makeEdge('e1', 'r1', 'a1'),
+      makeEdge('e2', 'r2', 'b1'),
+      makeEdge('e3', 'b1', 'c1'),
+    ];
+    const r = layoutTree(
+      { nodes, edges, rankSpacing: 90, nodeSpacing: 28, measured: {} },
+      'flow-layered',
+    );
+    const p = r.positions;
+    // 两根同 rank0 → y 相等。
+    expect(p['r1']!.y).toBe(p['r2']!.y);
+    // 两根 x 不重叠（根间留同级间距）。
+    expect(Math.abs(p['r1']!.x - p['r2']!.x)).toBeGreaterThanOrEqual(DEFAULT_NODE_SIZE.width);
+    // 后代：a1/b1 同 rank1，c1 在 rank2。
+    expect(p['a1']!.y).toBe(p['b1']!.y);
+    expect(p['c1']!.y).toBeGreaterThan(p['b1']!.y);
+    // 无残留重叠、notes 说明多根。
+    expect(r.collisions.overlappingPairs).toHaveLength(0);
+    expect(r.notes.some((n) => n.includes('多根森林'))).toBe(true);
+  });
+
+  it('同层不重叠：交错实测宽下仍零残留碰撞、输出确定', () => {
+    const measured: Record<string, MeasuredSize> = {
+      a: { width: 400, height: 60 },
+      b: { width: 120, height: 100 },
+      c: { width: 300, height: 70 },
+    };
+    const r = layoutTree(baseInput({ measured }), 'flow-layered');
+    expect(r.collisions.overlappingPairs).toHaveLength(0);
+    const r2 = layoutTree(baseInput({ measured }), 'flow-layered');
+    expect(r.positions).toEqual(r2.positions);
+  });
+
+  it('环输入：不死循环、主树退化分层不逆层', () => {
+    // a→b→c→a 纯环：字典序强取 a 为根，主树 a→b→c。
+    const nodes = ['a', 'b', 'c'].map(makeNode);
+    const edges = [
+      makeEdge('e_ab', 'a', 'b'),
+      makeEdge('e_bc', 'b', 'c'),
+      makeEdge('e_ca', 'c', 'a'),
+    ];
+    const r = layoutTree(
+      { nodes, edges, rankSpacing: 90, nodeSpacing: 28, measured: {} },
+      'flow-layered',
+    );
+    // 三节点都有位置（不死循环）。
+    expect(Object.keys(r.positions).sort()).toEqual(['a', 'b', 'c']);
+    // 主树 a→b→c 不逆层。
+    expect(r.positions['a']!.y).toBeLessThan(r.positions['b']!.y);
+    expect(r.positions['b']!.y).toBeLessThan(r.positions['c']!.y);
+    expect(r.notes.some((n) => n.includes('成环'))).toBe(true);
+  });
+
+  it('组合：collapsed 剔除后代、pinned 坐标不变且绕行、仅选中分支子集', () => {
+    // collapsed：b 折叠 → d/e/f 无位置。
+    const rc = layoutTree(baseInput({ collapsed: { b: true } }), 'flow-layered');
+    expect(rc.positions['b']).toBeDefined();
+    expect(rc.positions['d']).toBeUndefined();
+    expect(rc.positions['e']).toBeUndefined();
+    expect(rc.positions['f']).toBeUndefined();
+
+    // pinned：b 钉在 (0,0)，坐标严格不变、无残留重叠。
+    const { nodes, edges } = buildFixture();
+    const bNode = nodes.find((n) => n.id === 'b')!;
+    bNode.x = 0;
+    bNode.y = 0;
+    const rp = layoutTree(
+      { nodes, edges, rankSpacing: 90, nodeSpacing: 28, measured: {}, pinned: new Set(['b']) },
+      'flow-layered',
+    );
+    expect(rp.positions['b']).toEqual({ x: 0, y: 0 });
+    expect(rp.collisions.overlappingPairs).toHaveLength(0);
+
+    // 仅选中分支：只返回子集位置。
+    const subset = [makeNode('a'), makeNode('b')];
+    const rs = layoutTree(
+      { nodes: subset, edges, rankSpacing: 90, nodeSpacing: 28, measured: {} },
+      'flow-layered',
+    );
+    expect(Object.keys(rs.positions).sort()).toEqual(['a', 'b']);
+  });
+
+  it('tighten：notes 标注且不产生重叠', () => {
+    const r = layoutTree(baseInput({ tighten: true }), 'flow-layered');
+    expect(r.collisions.overlappingPairs).toHaveLength(0);
+    expect(r.notes.some((n) => n.includes('tighten'))).toBe(true);
+  });
+
+  it('增量整理：flow-layered 走 incremental 管线、未受影响分支冻结', () => {
+    const positions0 = layoutTree(baseInput(), 'flow-layered').positions;
+    const { nodes, edges } = buildFixture();
+    nodes.push(makeNode('h'));
+    edges.push(makeEdge('e_bh', 'b', 'h'));
+    const inc = layoutTreeIncremental(
+      { positions: positions0 },
+      {
+        nodes,
+        edges,
+        rankSpacing: 90,
+        nodeSpacing: 28,
+        measured: {},
+        changedRootIds: new Set(['b']),
+      },
+      'flow-layered',
+    );
+    for (const id of ['a', 'c', 'g']) {
+      expect(inc.positions[id]).toEqual(positions0[id]);
+    }
+    expect(inc.positions['h']).toBeDefined();
+  });
+});
