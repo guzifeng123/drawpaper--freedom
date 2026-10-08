@@ -282,3 +282,99 @@ function extractPlainTextOf(n: BlockNode): string {
   walk(n.content.data);
   return parts.join('');
 }
+
+// ---- Wave20 块嵌入（doc-embed payload）----
+
+/** 构造一个嵌入块（host type='note'，payload 挂 content.data）。 */
+function embedNode(id: string, emb: { targetDocId: string; targetNodeId: string; titleSnapshot: string }): BlockNode {
+  const node = createNode('note', 0, 0, {
+    content: { format: 'tiptap-json', data: { kind: 'doc-embed', ...emb } },
+  });
+  node.id = id;
+  return node;
+}
+
+describe('extractDocLinks 收录块嵌入', () => {
+  it('嵌入 payload 产生一条出链，四元组 id 与 mark 同口径', () => {
+    const n = embedNode('nE', { targetDocId: 'docB', targetNodeId: 'nB1', titleSnapshot: '目标块' });
+    const links = extractDocLinks('docA', [n], { now: () => 7 });
+    expect(links).toHaveLength(1);
+    expect(links[0]).toMatchObject({
+      sourceDocId: 'docA',
+      sourceNodeId: 'nE',
+      targetDocId: 'docB',
+      targetNodeId: 'nB1',
+      targetTitle: '目标块',
+    });
+    // 与同四元组的 mark 派生 id 一致（反链/删除维护同口径）。
+    expect(links[0]!.id).toBe(deriveLinkId('docA', 'nE', 'docB', 'nB1'));
+  });
+
+  it('嵌入块被删（节点消失）→ 重建自动清引用，无悬挂反链', () => {
+    const withEmbed = [embedNode('nE', { targetDocId: 'docB', targetNodeId: 'nB1', titleSnapshot: 't' })];
+    const first = extractDocLinks('docA', withEmbed, { now: () => 1 });
+    expect(first).toHaveLength(1);
+    // 用户删掉嵌入块：nodes 里没它了。
+    const rebuilt = extractDocLinks('docA', [], { existingLinks: first, now: () => 2 });
+    expect(rebuilt).toEqual([]);
+  });
+
+  it('畸形/未知 kind payload 不产生链接，不炸', () => {
+    const weird = createNode('note', 0, 0, {
+      content: { format: 'tiptap-json', data: { kind: 'doc-embed', targetDocId: '', targetNodeId: '' } },
+    });
+    weird.id = 'nW';
+    expect(extractDocLinks('docA', [weird])).toEqual([]);
+  });
+
+  it('嵌入链接参与反链索引（A 块被 B 嵌入 → A 侧能列出 B）', () => {
+    const docB = createDoc('B');
+    docB.id = 'docB';
+    const b1 = createNode('text', 0, 0);
+    b1.id = 'nB1';
+    docB.nodes = [b1];
+    const docA = createDoc('A');
+    docA.id = 'docA';
+    docA.nodes = [embedNode('nE', { targetDocId: 'docB', targetNodeId: 'nB1', titleSnapshot: 't' })];
+    docA.links = extractDocLinks('docA', docA.nodes, { now: () => 1 });
+    const idx = buildBacklinkIndex([docA, docB]);
+    const hits = idx.get(backlinkKey('docB', 'nB1')) ?? [];
+    expect(hits).toHaveLength(1);
+    expect(hits[0]!.sourceDocId).toBe('docA');
+    // 目标块被删 → 嵌入链接变悬挂（node-missing）。
+    const dangling = findDanglingLinks(docA.links, [docB]);
+    expect(dangling).toHaveLength(0);
+    docB.nodes = [];
+    const dangling2 = findDanglingLinks(docA.links, [docB]);
+    expect(dangling2).toHaveLength(1);
+    expect(dangling2[0]!.reason).toBe('node-missing');
+  });
+});
+
+describe('retitleDocRefMarks 同步嵌入标题快照', () => {
+  it('目标块改名 → 嵌入 payload.titleSnapshot 刷新', () => {
+    const doc = createDoc('A');
+    doc.id = 'docA';
+    doc.nodes = [
+      embedNode('nE', { targetDocId: 'docB', targetNodeId: 'nB1', titleSnapshot: '旧名' }),
+      // 同文档内一个不相关嵌入，不应被动。
+      embedNode('nE2', { targetDocId: 'docC', targetNodeId: 'c1', titleSnapshot: 'C名' }),
+    ];
+    const { doc: out, count } = retitleDocRefMarks(doc, 'docB', 'nB1', '新名');
+    expect(count).toBe(1);
+    const emb = out.nodes[0]!.content.data as { titleSnapshot: string };
+    expect(emb.titleSnapshot).toBe('新名');
+    expect((out.nodes[1]!.content.data as { titleSnapshot: string }).titleSnapshot).toBe('C名');
+    // 重建 links 即拿到新标题。
+    const rebuilt = extractDocLinks('docA', out.nodes, { now: () => 1 });
+    expect(rebuilt.find((l) => l.targetNodeId === 'nB1')!.targetTitle).toBe('新名');
+  });
+
+  it('新标题与快照相同 → 无改动（结构共享）', () => {
+    const doc = createDoc('A');
+    doc.id = 'docA';
+    doc.nodes = [embedNode('nE', { targetDocId: 'docB', targetNodeId: 'nB1', titleSnapshot: '同名' })];
+    const { count } = retitleDocRefMarks(doc, 'docB', 'nB1', '同名');
+    expect(count).toBe(0);
+  });
+});

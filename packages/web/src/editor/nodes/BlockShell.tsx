@@ -8,6 +8,9 @@ import { useIsHydrated } from '../canvas/hydration-store';
 import { createBlockEditor } from '../tiptap/createBlockEditor';
 import { SlashMenu, type SlashCommand } from '../tiptap/slash-menu';
 import { DocRefMention } from '../tiptap/doc-ref-mention';
+import { DocEmbedPicker } from '../tiptap/doc-embed-picker';
+import type { DocRefTarget } from '../../storage/doc-ref-search';
+import type { DocEmbedData } from '../content-defaults';
 import { BlockHoverToolbar } from './block-hover-toolbar';
 import { TableToolbar } from './table-toolbar';
 import { SourceHandles as ConnectHandles, TargetHandles } from './ConnectHandle';
@@ -93,6 +96,8 @@ const BlockShellFull = memo(function BlockShellFull({
   const [editor, setEditor] = useState<Editor | null>(null);
   // 斜杠菜单「图片」：隐藏文件选择器，选中后走统一压缩+OPFS 管线。
   const pickImageRef = useRef<HTMLInputElement>(null);
+  // Wave20：斜杠「嵌入其他画布的块」目标选择器开关。
+  const [embedPickerOpen, setEmbedPickerOpen] = useState(false);
 
   // 进入编辑：挂载真实 Tiptap Editor（特殊块提供 renderEditor 时跳过）
   useEffect(() => {
@@ -190,7 +195,24 @@ const BlockShellFull = memo(function BlockShellFull({
       }
       api.setEditingNode(null);
       api.setBlockType(block.id, cmd.blockType);
+    } else if (cmd.kind === 'embed-pick') {
+      // Wave20：退出编辑态，弹跨画布目标选择器；选定后把本块改造成 doc-embed 嵌入块。
+      api.setEditingNode(null);
+      setEmbedPickerOpen(true);
     }
+  };
+
+  // 选定嵌入目标：host type 切 note，content.data 写入嵌入 payload（只存引用）。
+  const onPickEmbed = (target: DocRefTarget) => {
+    setEmbedPickerOpen(false);
+    api.setBlockType(block.id, 'note');
+    const payload: DocEmbedData = {
+      kind: 'doc-embed',
+      targetDocId: target.docId,
+      targetNodeId: target.nodeId,
+      titleSnapshot: target.nodeTitle,
+    };
+    api.updateContent(block.id, payload);
   };
 
   const shellStyle: React.CSSProperties = {
@@ -293,6 +315,13 @@ const BlockShellFull = memo(function BlockShellFull({
           e.target.value = '';
         }}
       />
+      {embedPickerOpen && (
+        <DocEmbedPicker
+          currentDoc={api.getState().doc}
+          onPick={onPickEmbed}
+          onClose={() => setEmbedPickerOpen(false)}
+        />
+      )}
     </div>
   );
 });

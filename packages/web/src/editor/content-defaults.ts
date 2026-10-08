@@ -1,4 +1,4 @@
-import type { BlockType } from '@drawpaper/core';
+import type { BlockType, DocEmbedData } from '@drawpaper/core';
 import type { BlockContent } from '@drawpaper/core';
 
 /**
@@ -12,7 +12,12 @@ import type { BlockContent } from '@drawpaper/core';
  * - bookmark:   data = { kind:'bookmark', url, title, description }（不抓网，仅存用户输入）。
  * - attachment: data = { kind:'attachment', assetRef, name, size, mime }。
  * - reminder:   data = { kind:'reminder', dueAt:number, note:string }。
+ * - doc-embed（Wave20）: data = { kind:'doc-embed', targetDocId, targetNodeId, titleSnapshot }
+ *   跨画布只读块嵌入；host 复用 type='note'，只存引用不复制正文。契约见
+ *   packages/core/src/model/doc-embed.ts 与 docs/wave20/block-transclusion.md。
  */
+
+export type { DocEmbedData };
 
 /** P1 特殊块（非 Tiptap 富文本编辑）的 data payload 形状。 */
 export interface EquationData {

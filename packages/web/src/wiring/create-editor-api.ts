@@ -248,6 +248,18 @@ export function createEditorApi(store: EditorStoreApi, bridge: ConflictBridge): 
 
     // ---- 保存 ----
     save: () => store.getState().requestSave(),
+
+    // ---- Wave20 块嵌入：点击嵌入主体跳转（与 panels openDocRef 同口径）----
+    openDocRef: (targetDocId, targetNodeId) => {
+      const s = store.getState();
+      if (targetDocId === s.currentDocId) {
+        s.flyToNode(targetNodeId);
+      } else {
+        void s.openDoc(targetDocId).then(() => {
+          store.getState().flyToNode(targetNodeId);
+        });
+      }
+    },
   };
 
   return api;

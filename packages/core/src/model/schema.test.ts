@@ -98,6 +98,28 @@ describe('parseKBNoteDoc: happy path & defaults', () => {
     expect(n['mysteryField']).toBeUndefined();
     expect(n['bogus']).toBeUndefined();
   });
+
+  it('Wave20 块嵌入：v4 schema 宽容承载 doc-embed payload，不升版本、不迁移', () => {
+    // 嵌入块 host 在既有 type='note' 上，payload 挂 content.data（z.unknown 透传）。
+    const d = parseKBNoteDoc(
+      doc({
+        version: 4,
+        nodes: [
+          rawNode({
+            type: 'note',
+            content: {
+              format: 'tiptap-json',
+              data: { kind: 'doc-embed', targetDocId: 'doc_B', targetNodeId: 'n_B1', titleSnapshot: '目标块' },
+            },
+          }),
+        ],
+      }),
+    );
+    expect(d.version).toBe(4);
+    const data = d.nodes[0]!.content.data as { kind: string; targetDocId: string };
+    expect(data.kind).toBe('doc-embed');
+    expect(data.targetDocId).toBe('doc_B');
+  });
 });
 
 describe('parseKBNoteDoc: rejection', () => {

@@ -1,5 +1,5 @@
 import type { BlockNode, DocRefLink, KBNoteDoc } from '../model/index.js';
-import { DOCREF_MARK_NAME, LINK_ID_PREFIX } from '../model/index.js';
+import { DOCREF_MARK_NAME, LINK_ID_PREFIX, parseDocEmbedData } from '../model/index.js';
 
 /**
  * 跨文档 [[双向链接]] 纯函数层（core，零 DOM、零 tiptap 依赖）。
@@ -98,6 +98,12 @@ export function extractDocLinks(
   for (const node of nodes) {
     raw.length = 0;
     collectMarks(node.content.data, raw);
+    // Wave20 块嵌入：content.data 本身就是 doc-embed payload 时也算一条出链
+    // （与行内 docRef mark 共用四元组 id 派生与反链/悬挂机制；嵌入块被删 → 节点消失 → 重建自动清引用）。
+    const emb = parseDocEmbedData(node.content?.data);
+    if (emb) {
+      raw.push({ targetDocId: emb.targetDocId, targetNodeId: emb.targetNodeId, targetTitle: emb.titleSnapshot });
+    }
     for (const r of raw) {
       const id = deriveLinkId(sourceDocId, node.id, r.targetDocId, r.targetNodeId);
       if (seen.has(id)) {
@@ -338,6 +344,13 @@ export function retitleDocRefMarks(
   const nodes = doc.nodes.map((node) => {
     const data = node.content?.data;
     if (!data || typeof data !== 'object') return node;
+    // Wave20 块嵌入：payload 不是 PM doc，单独命中——刷新标题快照（与 mark 同口径回写）。
+    const emb = parseDocEmbedData(data);
+    if (emb && emb.targetDocId === targetDocId && emb.targetNodeId === targetNodeId) {
+      if (emb.titleSnapshot === newTitle) return node;
+      count++;
+      return { ...node, content: { ...node.content, data: { ...emb, titleSnapshot: newTitle } } };
+    }
     const { out, changed } = walkTextNodes(data, (n) => {
       if (!Array.isArray(n.marks)) return n;
       let selfChanged = false;
