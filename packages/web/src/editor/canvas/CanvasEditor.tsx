@@ -28,6 +28,7 @@ import { useCoarsePointer } from '../state/use-coarse-pointer';
 import { computeSnap } from '../lib/geometry';
 import { collectFocusSet, collectConnectedSet, collectEdgeChain, applyManualFixed } from '../lib/graph-trace';
 import { classifyFile, dropOffset } from './drop-classify';
+import { isOpfsAvailable } from '@/storage/opfs';
 import { nodeMatchesFilter } from '../lib/filter-match';
 import { insertBendPoint, type EdgeEnd } from '../edges/edge-geometry';
 import { ConflictDialog } from '../ui/ConflictDialog';
@@ -110,11 +111,22 @@ function CanvasInner({ api }: { api: EditorApi }) {
           // 统一管线：压缩 → OPFS（src 存 assetRef）→ 不可用降级 dataURL。
           await api.ingestImage(f, pos.x + dx, pos.y + dy);
         } else if (kind === 'attachment') {
-          if (!api.putImageAsset) {
-            toast('当前浏览器不支持附件本地存储');
+          // OPFS 不可用（非安全上下文/旧浏览器/隐私模式）：附件无内联降级契约，
+          // 直接 toast 且不建块、不落盘，避免产生引用空 assetRef 的坏附件块。
+          // 两种不可用形态：
+          //  (A) 能力检测直接 false（navigator.storage 不存在）→ 提前 toast；
+          //  (B) getDirectory 存在但运行时抛 NotAllowedError（隐私模式）→
+          //      putImageAsset 内部兜底返回 data: URL（wiring 层降级），
+          //      这里识别 data: 前缀 = OPFS 落盘失败 → 同样 toast 不建块。
+          if (!isOpfsAvailable() || !api.putImageAsset) {
+            toast('当前浏览器不支持附件本地存储（OPFS 不可用），请改用图片或文本');
             continue;
           }
-          await api.putImageAsset(f);
+          const r = await api.putImageAsset(f);
+          if (r.assetRef.startsWith('data:')) {
+            toast('当前浏览器不支持附件本地存储（OPFS 不可用），请改用图片或文本');
+            continue;
+          }
         }
         // unsupported：不建块
       } catch {
