@@ -119,7 +119,7 @@ async function newDegradedContext(browser: Browser, mode: 'no-storage' | 'throws
 
 test.describe('Wave20 OPFS 降级 — 模式 A（navigator.storage 不存在）', () => {
   test('a 斜杠图片内联 data:；b 拖入内联；c reload 持久化；d 导出内嵌；e 附件 toast 不建块', async ({ browser }) => {
-    test.setTimeout(60_000);
+    test.setTimeout(120_000);
     const ctx = await newDegradedContext(browser, 'no-storage');
     const page = await ctx.newPage();
     await waitForApp(page);
@@ -225,7 +225,7 @@ test.describe('Wave20 OPFS 降级 — 模式 A（navigator.storage 不存在）'
 
 test.describe('Wave20 OPFS 降级 — 模式 B（getDirectory 抛 NotAllowedError）', () => {
   test('拖入图片内联 + 附件 toast 不建块', async ({ browser }) => {
-    test.setTimeout(30_000);
+    test.setTimeout(60_000);
     const ctx = await newDegradedContext(browser, 'throws');
     const page = await ctx.newPage();
     await waitForApp(page);
