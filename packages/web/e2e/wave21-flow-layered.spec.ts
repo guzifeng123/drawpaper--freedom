@@ -83,7 +83,15 @@ async function loadFlowDoc(page: Page): Promise<void> {
     };
     (window as unknown as { __drawpaper__: { loadFixture: (d: unknown) => void } }).__drawpaper__.loadFixture(doc);
   });
-  await page.waitForTimeout(200);
+  // 防 bootstrap 异步 openDoc 覆盖：轮询确认灌进去的文档真的在位（≤10s）。
+  await page.waitForFunction(
+    () => {
+      const h = (window as unknown as { __drawpaper__?: { getState: () => { doc: { id: string; nodes: unknown[] } } } }).__drawpaper__;
+      return !!h && h.getState().doc.id === 'wave21-flow' && h.getState().doc.nodes.length === 6;
+    },
+    null,
+    { timeout: 10_000 },
+  );
   await page.keyboard.press('Control+0');
   await page.waitForTimeout(300);
 }
