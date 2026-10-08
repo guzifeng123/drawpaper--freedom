@@ -4,6 +4,7 @@
 
 ## 未发布（Unreleased）
 
+<<<<<<< HEAD
 ### 同步
 
 - **同步墓碑表有界化（Wave20 R 路）**：web 传输层 `runSync` 在每文档 merge 收敛后、
@@ -14,6 +15,11 @@
   新增 `SyncRunResult.prunedTombstones / prunedEdgeTombstones / retainedTombstones /
   tombstoneWatermark` 统计（仅 console.debug，不弹 UI）。详见
   `docs/wave20/tombstone-prune.md`。
+=======
+### 修复
+
+- **OPFS 不可用时拖入附件不再静默无反馈**：非安全上下文 / 旧浏览器 / 隐私模式下，拖入 .pdf 等非图片附件现在会 toast 提示「当前浏览器不支持附件本地存储」，且不产生引用空 assetRef 的坏附件块。图片（拖入/斜杠/粘贴）在 OPFS 不可用时仍降级为 data: URL 内联，reload 后经 IDB 持久化仍可见，导出 SVG 正常内嵌。新增 e2e `wave20-opfs-degraded.spec.ts` 用 `context.addInitScript` 覆写 `navigator.storage` 端到端验证两种不可用形态（storage 不存在 / getDirectory 抛 NotAllowedError）。详见 `docs/wave20/opfs-degraded.md`。
+>>>>>>> origin/fix/asset-opfs-degraded
 
 ## 0.1.0-rc.11（2026-10-08）
 
