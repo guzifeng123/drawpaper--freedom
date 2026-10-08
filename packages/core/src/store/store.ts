@@ -3,6 +3,7 @@ import { createStore } from 'zustand/vanilla';
 import { immer } from 'zustand/middleware/immer';
 import type { StoreApi } from 'zustand/vanilla';
 import type {
+  BlockContent,
   BlockNode,
   BlockStyle,
   BlockType,
@@ -286,8 +287,9 @@ export interface EditorActions {
   resizeNode(id: string, width: number, height: number): void;
   /** 更新块样式（颜色/背景/边框补丁）。 */
   updateNodeStyle(id: string, patch: Partial<BlockStyle>): void;
-  /** 切换块类型（斜杠菜单 / hover 工具条）；内容重置为该类型空稿，尺寸取默认。 */
-  setBlockType(id: string, type: BlockType): void;
+  /** 切换块类型（斜杠菜单 / hover 工具条）；内容重置为该类型空稿，尺寸取默认。
+   *  content 可选：web 侧传入类型专属空稿（如表格 2x2 网格）；缺省为通用空段落。 */
+  setBlockType(id: string, type: BlockType, content?: BlockContent): void;
 
   // ---- 边（父子）----
   /** 新增父子边；若产生多父/成环，挂起冲突等待 resolveConflicts。 */
@@ -1092,7 +1094,7 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
           });
         },
 
-        setBlockType: (id, type) => {
+        setBlockType: (id, type, content) => {
           const node = get().doc.nodes.find((n) => n.id === id);
           if (!node) return;
           const prev = {
@@ -1111,7 +1113,8 @@ export function createEditorStore(init: KBNoteDoc, deps: StoreDeps = {}): Editor
                 const next: BlockNode = {
                   ...n,
                   type,
-                  content: { format: 'tiptap-json', data: emptyDocData() },
+                  // web 侧传入类型专属空稿（表格 2x2 网格等）；缺省回退通用空段落。
+                  content: content ?? { format: 'tiptap-json', data: emptyDocData() },
                   width: size.width,
                   height: size.height,
                 };

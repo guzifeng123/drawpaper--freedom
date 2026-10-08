@@ -4,7 +4,15 @@
 
 ## 未发布（Unreleased）
 
-（暂无）
+### 表格块
+
+- **修复斜杠菜单 / hover 工具条切到「表格」得到空块**：此前切类型一律重置为通用空段落，表格块里没有任何 `<table>`、工具条按钮无从操作；现在切到表格（及其他 P1 块型）会带上类型专属空稿（表格 = 2×2 网格）。
+- **修复新建空表格渲染崩溃**：空单元格曾塞空文本节点（ProseMirror 拒绝，React 渲染抛 `Empty text nodes are not allowed`），改为空段落。
+- **Markdown 导出现在真的产出 GFM 管道表格**：此前表格只把单元格文字漏成散行、表头行还被块标题吃掉；现在导出 `.md` 含 `| 表头 | … |` 与分隔行，竖线转义、colspan 按列展开。
+
+### 内部工程
+
+- 新增 `e2e/wave20-table-toolbar.spec.ts`：表格工具栏按钮（增删行列/表头切换/按钮合并拆分）、撤销重做、单元格打字后 reload 持久化、Markdown 导出含表共 8 条 e2e；连跑 `table-drag-merge` 不回退。详见 `docs/wave20/table-toolbar.md`。
 
 ## 0.1.0-rc.11（2026-10-08）
 

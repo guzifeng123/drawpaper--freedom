@@ -36,6 +36,10 @@ export function docToMarkdown(doc: KBNoteDoc): string {
       out.push(`- [${node.todo?.checked ? 'x' : ' '}] ${body.replace(/\n+/g, ' ')}`);
     } else if (node.type === 'bullet') {
       out.push(`- ${body.replace(/\n+/g, ' ')}`);
+    } else if (node.type === 'table') {
+      // 表格块：tiptapToMarkdown 已产出 GFM 管道表格。直接整块输出，
+      // 不把首行当块标题（否则表头行被 # 吃掉、与分隔行断裂，表格语法失效）。
+      if (body) out.push(body, '');
     } else {
       // 标题行：用块内第一行文本或块类型占位。
       const firstLine = body.split('\n')[0]?.trim() ?? '';
