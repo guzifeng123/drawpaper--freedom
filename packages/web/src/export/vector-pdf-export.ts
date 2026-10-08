@@ -76,10 +76,10 @@ function collectSvgText(svgMarkup: string): string {
 }
 
 /**
- * 缺字形预检：内嵌字体仅覆盖 GB2312 一级常用字（+ASCII/全角标点）。
- * 正文若含二级生僻字，矢量 PDF 会静默出现空白缺字。这里在渲染前扫描所有导出文本，
- * 发现字体不支持的字符（非 ASCII 且不在 cmap）就抛带标记错误，由调用方整体回退位图，
- * 避免交付缺字 PDF。
+ * 缺字形预检：内嵌字体覆盖 GB2312 一级+二级全部汉字（+ASCII/全角标点/龘锚点）。
+ * 正文若仍含超出字库的字（如 CJK Ext-B 的 𠮷 U+20BB7），矢量 PDF 会静默出现空白缺字。
+ * 这里在渲染前扫描所有导出文本，发现字体不支持的字符（非 ASCII 且不在 cmap）就抛带标记错误，
+ * 由调用方整体回退位图，避免交付缺字 PDF。
  */
 function assertNoMissingGlyphs(svgPages: string[]): void {
   const coverage = getCoverageSet();

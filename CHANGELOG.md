@@ -4,7 +4,6 @@
 
 ## 未发布（Unreleased）
 
-<<<<<<< HEAD
 ### 同步
 
 - **同步墓碑表有界化（Wave20 R 路）**：web 传输层 `runSync` 在每文档 merge 收敛后、
@@ -15,11 +14,12 @@
   新增 `SyncRunResult.prunedTombstones / prunedEdgeTombstones / retainedTombstones /
   tombstoneWatermark` 统计（仅 console.debug，不弹 UI）。详见
   `docs/wave20/tombstone-prune.md`。
-=======
 ### 修复
 
 - **OPFS 不可用时拖入附件不再静默无反馈**：非安全上下文 / 旧浏览器 / 隐私模式下，拖入 .pdf 等非图片附件现在会 toast 提示「当前浏览器不支持附件本地存储」，且不产生引用空 assetRef 的坏附件块。图片（拖入/斜杠/粘贴）在 OPFS 不可用时仍降级为 data: URL 内联，reload 后经 IDB 持久化仍可见，导出 SVG 正常内嵌。新增 e2e `wave20-opfs-degraded.spec.ts` 用 `context.addInitScript` 覆写 `navigator.storage` 端到端验证两种不可用形态（storage 不存在 / getDirectory 抛 NotAllowedError）。详见 `docs/wave20/opfs-degraded.md`。
->>>>>>> origin/fix/asset-opfs-degraded
+### 导出 / PDF
+
+- **矢量 PDF 内嵌中文字库扩到 GB2312 全字库**：「直接下载 PDF（矢量）」内嵌的中文字体从 GB2312 一级常用字（3755 字）扩到一级+二级全部汉字（6763 字）。此前含二级生僻字的文档（如「龘」）会因缺字形被迫整体回退成位图 PDF；现在这类文档直接产出真正的矢量 PDF，中文文本可选、可复制、可搜索，且离线可用。真正超出字库的字符（CJK 扩展 B 等 BMP 外生僻字）仍按原策略回退位图，兜底不变。字库由 `packages/web/scripts/build-vec-cjk-font.py` 可复现构建，详见 `docs/wave20/pdf-cjk-gb2312.md`。
 
 ## 0.1.0-rc.11（2026-10-08）
 
