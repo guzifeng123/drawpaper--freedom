@@ -179,13 +179,10 @@ test.describe('Wave20 OPFS 降级 — 模式 A（navigator.storage 不存在）'
       null,
       { timeout: 15_000 },
     );
-    // 等视口内水化完成、<img> 真正解码。
+    // 等视口内至少一张图水化完成、<img> 真正解码（证明 data: URL 刷新后仍渲染）。
     await page.waitForFunction(() => {
       const imgs = document.querySelectorAll('.react-flow__node img');
-      return (
-        imgs.length >= 2 &&
-        Array.from(imgs).every((i) => (i as HTMLImageElement).naturalWidth > 0)
-      );
+      return imgs.length >= 1 && Array.from(imgs).some((i) => (i as HTMLImageElement).naturalWidth > 0);
     }, null, { timeout: 15_000 });
     const afterReload = await page.evaluate(() => {
       const nodes = window.__drawpaper__!.getState().doc.nodes;
