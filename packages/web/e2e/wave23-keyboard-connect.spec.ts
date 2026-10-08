@@ -9,7 +9,9 @@ import { test, expect, type Page } from '@playwright/test';
  *  - 取消路径：C 后 Esc 无新边、模式退回 select；
  *  - 自环候选不存在（源块自身被排除）；
  *  - 重复连接走「已存在」提示；
- *  - 成环（A→B→A）触发既有冲突裁决弹窗，而非静默失败。
+ *  - 成环（A→B→A）目标在候选中可见、不被静默吞掉；
+ *  - 成环触发「连线冲突」裁决弹窗：以 test.fixme 挂账（基线渲染器成环死锁，见
+ *    docs/wave23/keyboard-cross-connect.md §挂账）。
  */
 
 async function edgeList(page: Page) {
@@ -150,4 +152,33 @@ test.describe('Wave23 纯键盘跨块父子连线', () => {
     // 注：实际按下确认会让既有指针路径渲染成环边（基线渲染器在成环边上的已知问题，
     // 非本路引入），故此处不断言弹窗 DOM，仅验证候选递交正确。
   });
+
+  // 挂账：基线渲染器在「成环形状的图」上同步死锁（dev 与生产构建均复现，干净基线
+  // 4836b69 同样复现），ConflictDialog 不可达。按 Wave21 D 路纪律，缺口以 test.fixme
+  // 在 CI 里可见挂账，不删断言凑绿。函数体写全本应断言的步骤，待专门修复波次解除 fixme。
+  // 见 docs/wave23/keyboard-cross-connect.md §挂账。
+  test.fixme(
+    '成环 A→B→A：触发「连线冲突」裁决弹窗（阻塞：基线渲染器成环死锁，见 docs/wave23/keyboard-cross-connect.md §挂账）',
+    async ({ page }) => {
+      const A = await makeBlock(page, 0, 0, '苹果计划');
+      const B = await makeBlock(page, 320, 0, '蓝莓任务');
+      // 已有 A→B
+      await page.evaluate(({ A, B }) => window.__drawpaper__!.invoke('addEdge', A, B), { A, B });
+      await page.waitForTimeout(100);
+
+      // 焦点 B，键盘发起 B→A（成环尝试）
+      await page.evaluate((id) => window.__drawpaper__!.invoke('setSelection', [id]), B);
+      await page.waitForTimeout(100);
+      await page.keyboard.press('c');
+      await expect(page.getByRole('listbox', { name: '可连接的目标块' })).toBeVisible();
+      await page.keyboard.type('苹果', { delay: 30 });
+      await page.waitForTimeout(150);
+      await expect(page.locator('[role="option"]').filter({ hasText: '苹果计划' })).toBeVisible();
+
+      // 确认 → 走 onConnect → api.addEdge → core analyze 检出成环 → pendingConflicts
+      // → 既有「连线冲突，请裁决」弹窗（而非静默失败）。当前基线在此步卡死主线程。
+      await page.keyboard.press('Enter');
+      await expect(page.getByText('连线冲突，请裁决')).toBeVisible({ timeout: 3000 });
+    },
+  );
 });
