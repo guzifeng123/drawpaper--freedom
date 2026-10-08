@@ -73,9 +73,14 @@ system.json.version 双路版本比对。其余 x64 冒烟（NSIS 7+ 断言、MS
 
 | 轮次 | run id | build (x64) | build (arm64 交叉) | arm64-native | publish | 结论 |
 |---|---|---|---|---|---|---|
-| 1 | 待填 | 待填 | 待填 | 待填 | 待填（预期 skipped） | 待填 |
+| 1 | [#149 (37806486195)](https://github.com/guzifeng123/drawpaper--freedom/actions/runs/37806486195) | success | success | success | skipped（非 tag，预期） | 一轮即绿，时间盒内（≤3 轮）达成 |
+
+两轮关键证据（均 success，未走挂账）：
+- x64 build job：`Smoke (x64): headless CLI suite (version / usage / lifecycle + diag privacy canary)` success；
+  其后 portable / `--native-autosave-selftest` / `--update-check-probe` / 卸载兜底 / MSI 全链均 success（既有断言零删除、零弱化）。
+- arm64-native job：`Arch evidence` → 静默安装 → 窗口标题 → **headless CLI suite** → 静默卸载 全链 success；
+  `Upload arm64-native logs on failure` 按 failure() 条件正确 skipped。
 
 ## 挂账项
 
-（暂无——若某条断言在 `windows-11-arm` 上因宿主能力缺失无法通过，在此附失败证据
-`::error` annotation / step 日志链接后挂账；x64 断言不得挂账。）
+（无。四条断言在 `windows-11-arm` 原生宿主上一轮即全部通过，无需挂账；x64 断言亦未缺。）
