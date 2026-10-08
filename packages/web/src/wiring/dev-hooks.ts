@@ -155,6 +155,12 @@ export interface DrawpaperDevHook {
   opfsReadAssetB64(ref: string): Promise<string | null>;
   /** Wave14：向注入的 fake 同步目录写字节文件（assets/<ref>），模拟对端落盘资产。 */
   syncFakeWriteBytes(path: string, b64: string): void;
+  // ---- Wave20 R 路 墓碑裁剪：e2e 注入合成墓碑（仅测试用，不造真实删除）----
+  /**
+   * 向本地库注入一份带 `count` 条合成节点墓碑的文档（全部 lamport ≤ vv，即全部安全），
+   * 供 e2e 一轮同步触发 pruneTombstones。返回文档 id 与注入墓碑数。
+   */
+  syncSeedTombstoneDoc(count: number): { id: string; tombstones: number };
   // ---- Wave16 F：资产内容寻址 + 孤儿 GC e2e seam ----
   /** 跑一次 v3→v4 资产 reconcile（nanoid→hash），返回摘要。 */
   opfsReconcile(): Promise<unknown>;
@@ -488,6 +494,43 @@ export function installDevHooks(): void {
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i) ?? 0;
       void injectedFake.writeBytes(path, bytes);
+    },
+    syncSeedTombstoneDoc(count: number) {
+      const id = 'seed-tomb-doc';
+      const client = syncStamper.clientId;
+      const nodes: Record<string, { t: [number, string] }> = {};
+      for (let i = 1; i <= count; i += 1) nodes[`sn${i}`] = { t: [i, client] };
+      const doc: KBNoteDoc = {
+        format: 'knowledge-block-notes',
+        version: 4,
+        id,
+        title: 'seed-tomb',
+        board: { createdAt: 0, updatedAt: Date.now() },
+        nodes: [],
+        edges: [],
+        tags: [],
+        layout: { mode: 'mindmap-right', rankSpacing: 90, nodeSpacing: 28 },
+        viewport: { x: 0, y: 0, zoom: 1 },
+        page: {
+          size: 'A4',
+          orientation: 'portrait',
+          marginMm: 15,
+          mode: 'fit',
+          showPageBreak: true,
+          colorMode: 'color',
+          header: false,
+          footer: false,
+          showPageNumbers: false,
+          edgeLabels: true,
+          pageBreaks: [],
+        },
+        assetRefs: [],
+        links: [],
+        // vv[client]=count：使全部合成墓碑 lamport(1..count) ≤ W=min(vv)=count，即全部安全可裁。
+        sync: { vv: { [client]: count }, nodes },
+      } as KBNoteDoc;
+      void db.docs.put(doc);
+      return { id, tombstones: count };
     },
     async opfsReconcile() {
       return reconcileAssetRefs();
