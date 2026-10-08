@@ -100,6 +100,13 @@ const DETOUR_GAP_FACTOR = 1;
 /** pinned 绕行最大迭代轮数。 */
 const DETOUR_MAX_ROUNDS = 3;
 
+/**
+ * flow-layered 层内交叉最小化：barycenter 启发式的最大扫轮次。
+ * 实际执行 = 向下/向上交替扫，每扫仅在「相邻层边交叉总数」严格下降时接受，
+ * 总轮次 ≤ 2×FLOW_MAX_SWEEPS（有界、确定性、必然终止）。
+ */
+const FLOW_MAX_SWEEPS = 24;
+
 /** 内部嵌套节点（供 d3 hierarchy 消费）。 */
 interface NestedNode {
   id: string;
@@ -112,6 +119,63 @@ interface Box {
   y: number;
   w: number;
   h: number;
+}
+
+/**
+ * 计算分层图中「相邻层之间父子边」的交叉总数（纯函数；Wave22 导出，供迭代与测试共用）。
+ *
+ * 交叉定义：对同一相邻层对 `(r, r+1)` 的两条边 `e1=(u1,v1)`、`e2=(u2,v2)`，
+ * 若 `column(u1) < column(u2)` 但 `column(v1) > column(v2)`（两端都不同），计一次交叉。
+ *  - 共享端点（同父或同子）不算交叉；
+ *  - 仅纳入恰好跨越相邻两层的边（`rank(target) = rank(source) + 1`）；
+ *    跨越多层或向上的逆向回边不计数（与 barycenter 邻居口径一致，见 layoutFlowLayeredInto）。
+ *
+ * @param order  每层节点从左到右的顺序（`order[r] = id 数组`）；列下标即数组下标。
+ * @param edges  全部父子边（source=父/上层，target=子/下层）。
+ * @param rankOf id → 层号。
+ * @returns 相邻层边的交叉对数（非负整数）。
+ */
+export function countLayerCrossings(
+  order: ReadonlyMap<number, readonly string[]>,
+  edges: ReadonlyArray<{ source: string; target: string }>,
+  rankOf: ReadonlyMap<string, number>,
+): number {
+  // 列索引（仅 order 内的节点有列）。
+  const col = new Map<string, number>();
+  for (const ids of order.values()) {
+    ids.forEach((id, i) => col.set(id, i));
+  }
+  // 按相邻层对 (r, r+1) 归集边。
+  const byBoundary = new Map<number, Array<[string, string]>>();
+  for (const e of edges) {
+    const rs = rankOf.get(e.source);
+    const rt = rankOf.get(e.target);
+    if (rs === undefined || rt === undefined) continue;
+    if (rt !== rs + 1) continue;
+    const arr = byBoundary.get(rs) ?? [];
+    arr.push([e.source, e.target]);
+    byBoundary.set(rs, arr);
+  }
+  let total = 0;
+  for (const arr of byBoundary.values()) {
+    // 过滤掉端点未参与排布（被折叠/固定/未排）的边，按上层列序排。
+    const live = arr.filter(
+      ([u, v]) => col.get(u) !== undefined && col.get(v) !== undefined,
+    );
+    live.sort((a, b) => (col.get(a[0]) ?? 0) - (col.get(b[0]) ?? 0));
+    for (let i = 0; i < live.length; i++) {
+      for (let j = i + 1; j < live.length; j++) {
+        const ui = col.get(live[i]![0])!;
+        const uj = col.get(live[j]![0])!;
+        if (ui === uj) continue; // 共享上层父
+        const vi = col.get(live[i]![1])!;
+        const vj = col.get(live[j]![1])!;
+        if (vi === vj) continue; // 共享下层子
+        if (vi > vj) total++; // 上层升序、下层逆序 → 交叉
+      }
+    }
+  }
+  return total;
 }
 
 /**
@@ -480,15 +544,23 @@ function layoutRadialInto(
  *     带 memo + 递归栈守卫：环上节点命中栈守卫按 rank 0 退化，不死循环、不逆层
  *     （主树上 rank(child) = rank(parent) + 1 恒成立）。
  *  4. 行高：每层取该层最大实测高；行顶 y 逐行累计，行间距 = rankSpacing。
- *  5. 层内排序：rank 0 = 根按字典序；其后每层按「父节点在上一层的栏位顺序」排序、
- *     同父兄弟按 id 字典序——父群不交叉打散。层内从左到右按实测宽 + nodeSpacing
- *     顺序铺栏，同层必然不重叠；多根森林各根从左向右排开，根间留同级间距。
- *  6. 固定锚点（pinned/manualFixed）参与层级计算但其坐标不写入（由调用方注入）。
+ *  5. 层内初始排序：rank 0 = 根按字典序；其后每层按「父节点在上一层的栏位顺序」排序、
+ *     同父兄弟按 id 字典序——父群不交叉打散。
+ *  6. 层内 barycenter 交叉最小化迭代（Wave22）：在初始父序之上做有界启发式——
+ *     向下扫按「上层父邻居列重心」、向上扫按「下层子邻居列重心」重排层内节点；
+ *     每扫仅在相邻层父子边交叉总数（见 countLayerCrossings）严格下降时接受，否则停；
+ *     总扫次 ≤ 2×FLOW_MAX_SWEEPS。重排只在「同层 + 同主树根块」内发生，多根森林不穿插；
+ *     rank 不变、固定锚点不参与、id 字典序 tie-break（确定性、可终止）。
+ *  7. 铺栏：精炼后的层序从左到右按实测宽 + nodeSpacing 顺序铺栏，同层必然不重叠、顶对齐；
+ *     多根森林各根从左向右排开，根间留同级间距。
+ *  8. 固定锚点（pinned/manualFixed）参与层级计算但不参与层内重排，坐标由调用方注入。
  *
  * 近似与局限（JSDoc 声明）：
  *  - 多父边在 graph/store 层弹窗裁决主父，本布局只消费裁决后的主树；
- *    未裁决输入下首条入边 wins（与其它布局模式一致）。
- *  - 层内不做交叉最小化迭代（barycenter 平移），只保证不重叠与父序稳定。
+ *    未裁决输入下首条入边 wins（与其它布局模式一致）。barycenter 邻居口径覆盖全部
+ *    相邻层边（含未裁决的多父边），因此多父 DAG 的父子边交叉会被一并压低。
+ *  - barycenter 为贪心启发式：单调改善、有界终止，但不保证全局最优交叉数。
+ *  - 跨越多层或向上的逆向回边不纳入交叉计数（纯函数环防护已保证不死循环、不逆层）。
  *  - tighten 在本模式下恒为「按实测宽紧凑」（层内栏位即实测宽），仅在 notes 标注。
  */
 function layoutFlowLayeredInto(
@@ -554,19 +626,22 @@ function layoutFlowLayeredInto(
   const isCollapsed = (id: string): boolean => input.collapsed?.[id] === true;
 
   // 4) DFS 展开（visited 守卫）：确定每层参与排布的节点集合与遍历序。
+  //    rootOf：每个被排节点归属的主树根（多根森林按根切块，barycenter 只在块内重排）。
   const visited = new Set<string>();
   const laidOutIds: string[] = [];
-  const dfs = (id: string): void => {
+  const rootOf = new Map<string, string>();
+  const dfs = (id: string, root: string): void => {
     if (visited.has(id)) return;
     visited.add(id);
     laidOutIds.push(id);
+    rootOf.set(id, root);
     if (isCollapsed(id)) {
       notes.push(`节点「${id}」折叠：其 ${(childrenOf.get(id) ?? []).length} 个后代从布局剔除。`);
       return;
     }
-    for (const c of childrenOf.get(id) ?? []) dfs(c);
+    for (const c of childrenOf.get(id) ?? []) dfs(c, root);
   };
-  for (const r of roots) dfs(r);
+  for (const r of roots) dfs(r, r);
 
   // 5) 行高与行顶：每层最大实测高，行距 = rankSpacing。
   const rowMaxH = new Map<number, number>();
@@ -610,11 +685,124 @@ function layoutFlowLayeredInto(
     orderedByRank.set(r, bucket);
   }
 
-  // 7) 铺栏：同层从左到右按实测宽 + nodeSpacing 顺序摆放（天然不重叠）。
+  // 7) 层内 barycenter 交叉最小化迭代（Wave22）。
+  //    - rank 不变（只在层内重排）；固定锚点（pinned/manualFixed）不参与重排、不参与邻居列。
+  //    - 重排只在「同层 + 同主树根块」内发生：多根森林的根块顺序恒等于 rank0 根字典序，
+  //      不同根子树不得互相穿插。
+  //    - 邻居只取恰好相邻两层的边（rank(target)=rank(source)+1），且限定同根块。
+  //    - 向下扫按「上层父邻居列重心」、向上扫按「下层子邻居列重心」排序；
+  //      无该方向邻居的节点重心 = 当前列（原位不动）；并列按 id 字典序（确定性）。
+  //    - 每扫一轮仅当相邻层边交叉总数严格下降才接受并继续；任一轮无改善即停。
+  //    - 总轮次 ≤ 2×FLOW_MAX_SWEEPS，确定性、必然终止。
+  const upperNbrs = new Map<string, string[]>();
+  const lowerNbrs = new Map<string, string[]>();
+  const pushTo = (m: Map<string, string[]>, key: string, val: string): void => {
+    const arr = m.get(key);
+    if (arr) arr.push(val);
+    else m.set(key, [val]);
+  };
+  for (const e of input.edges) {
+    const ru = rankMemo.get(e.source);
+    const rt = rankMemo.get(e.target);
+    if (ru === undefined || rt === undefined) continue;
+    if (rt !== ru + 1) continue;
+    pushTo(upperNbrs, e.target, e.source);
+    pushTo(lowerNbrs, e.source, e.target);
+  }
+
+  // 初始「可重排」层序 = 贪心父序铺栏去掉固定锚点（与改造前铺栏顺序一致）。
+  const reorderOf = (r: number): string[] =>
+    (orderedByRank.get(r) ?? []).filter((id) => !fixedSet.has(id));
+  const cloneOrder = (): Map<number, string[]> => {
+    const m = new Map<number, string[]>();
+    for (let r = 0; r <= maxRank; r++) m.set(r, reorderOf(r));
+    return m;
+  };
+  const colIn = (ord: Map<number, string[]>, r: number, id: string): number =>
+    ord.get(r)?.indexOf(id) ?? -1;
+
+  // 对某一层按「refR 层邻居的列重心」排序，排序在同根块内进行（块顺序保持不变）。
+  const sortLayerByBarycenter = (
+    ord: Map<number, string[]>,
+    targetR: number,
+    refR: number,
+    neighborsOf: (id: string) => string[],
+  ): void => {
+    const ids = ord.get(targetR);
+    if (!ids || ids.length <= 1) return;
+    const bary = new Map<string, number>();
+    for (const id of ids) {
+      const ownRoot = rootOf.get(id);
+      const nbrs = neighborsOf(id).filter((u) => {
+        if (rootOf.get(u) !== ownRoot) return false; // 只在同根块内取邻居
+        return colIn(ord, refR, u) >= 0;
+      });
+      if (nbrs.length === 0) {
+        bary.set(id, colIn(ord, targetR, id)); // 无邻居 → 保持原列
+      } else {
+        let sum = 0;
+        for (const u of nbrs) sum += colIn(ord, refR, u);
+        bary.set(id, sum / nbrs.length);
+      }
+    }
+    const out: string[] = [];
+    let i = 0;
+    while (i < ids.length) {
+      let j = i;
+      const root = rootOf.get(ids[i]!);
+      while (j < ids.length && rootOf.get(ids[j]!) === root) j++;
+      const block = ids.slice(i, j);
+      block.sort((a, b) => {
+        const ba = bary.get(a)!;
+        const bb = bary.get(b)!;
+        if (ba !== bb) return ba - bb;
+        return a.localeCompare(b);
+      });
+      out.push(...block);
+      i = j;
+    }
+    ord.set(targetR, out);
+  };
+
+  const runSweep = (ord: Map<number, string[]>, dir: 'down' | 'up'): void => {
+    if (dir === 'down') {
+      for (let r = 1; r <= maxRank; r++) {
+        sortLayerByBarycenter(ord, r, r - 1, (id) => upperNbrs.get(id) ?? []);
+      }
+    } else {
+      for (let r = maxRank - 1; r >= 0; r--) {
+        sortLayerByBarycenter(ord, r, r + 1, (id) => lowerNbrs.get(id) ?? []);
+      }
+    }
+  };
+
+  let best = cloneOrder();
+  let bestCross = countLayerCrossings(best, input.edges, rankMemo);
+  const crossBefore = bestCross;
+  let sweeps = 0;
+  for (let pass = 0; pass < 2 * FLOW_MAX_SWEEPS; pass++) {
+    const dir = pass % 2 === 0 ? 'down' : 'up';
+    const trial = cloneOrder();
+    runSweep(trial, dir);
+    const c = countLayerCrossings(trial, input.edges, rankMemo);
+    if (c < bestCross) {
+      best = trial;
+      bestCross = c;
+      sweeps = pass + 1;
+    } else {
+      break; // 任一轮无严格改善即停
+    }
+  }
+  if (bestCross < crossBefore) {
+    notes.push(
+      `barycenter：层内交叉最小化迭代（${sweeps} 扫），相邻层父子边交叉 ${crossBefore}→${bestCross}。`,
+    );
+  }
+
+  // 8) 铺栏：同层从左到右按实测宽 + nodeSpacing 顺序摆放（天然不重叠、顶对齐成行）。
   for (let r = 0; r <= maxRank; r++) {
     let cursor = 0;
-    for (const id of orderedByRank.get(r) ?? []) {
-      if (fixedSet.has(id)) continue;
+    for (const id of best.get(r) ?? []) {
       const s = sizeOf(id);
       worldBoxes.set(id, { x: cursor, y: rowTopAt.get(r) ?? 0, w: s.width, h: s.height });
       cursor += s.width + input.nodeSpacing;

@@ -24,6 +24,15 @@
 - **RF Controls 可访问性挂账收口（docs/wave9 §9）**：缩放四按钮（放大 / 缩小 /
   适应视图 / 锁定视口）补中文 aria-label，axe 区域扫描零 violation。
   详见 `docs/wave22/mobile-narrow-shell.md`。
+### 布局
+
+- **逻辑流分层（flow-layered）层内交叉最小化（Wave22）**：在最长路径分层确定之后、
+  坐标写入之前，插入有界 barycenter 启发式迭代——向下/向上交替扫，按父/子邻居列重心
+  重排层内节点，仅在相邻层父子边交叉总数严格下降时接受，否则停；总扫次有界
+  （`2×24`），确定性、必然终止。多父 DAG 的父子边视觉交叉被压低（实测一例 4→2），
+  单链/单树/多根森林维持零交叉且层序不变。纯 TS 手写、零新依赖（未引 dagre/elkjs），
+  不升 schema、不改枚举；pinned 绕行、选中分支、collapsed、增量整理继续复用。
+  详见 `docs/wave22/flow-barycenter.md`。
 
 ## 0.1.0-rc.13（2026-10-08）
 
