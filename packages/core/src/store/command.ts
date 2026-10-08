@@ -1,6 +1,17 @@
 import type { KBNoteDoc } from '../model/index.js';
 
 /**
+ * 默认撤销历史上限：undoStack 最多保留的命令条数。
+ *
+ * 取值理由：覆盖一次正常人工编辑会话的撤销深度——连续输入 / 拖拽会被 coalesce
+ * 合并为少量手势条，宏（executeMacro）整体只占 1 条，真实「独立撤销点」远小于此；
+ * 200 条足以让用户回退到本次会话早期，同时给超长会话反复编辑、以及超大文档上每条
+ * 命令闭包所持有的节点坐标 / 边引用等，设一个硬顶，消除 undoStack 随会话单调增长的
+ * 内存膨胀（10k 块文档上尤其明显）。显式传入 maxHistory 可覆盖；传 <= 0 表示不限制。
+ */
+export const DEFAULT_MAX_HISTORY = 200;
+
+/**
  * Command 命令栈：所有对文档的写操作都封装为 Command 对象，天然支持撤销/重做与宏。
  *
  * 语义：每条 Command 是一个「文档 → 文档」的纯变换。栈中保存的是「从某一基线文档出发」
@@ -51,6 +62,13 @@ export interface CommandStackOptions {
   now?: () => number;
   /** 合并时间窗（ms），默认 800。 */
   coalesceWindowMs?: number;
+  /**
+   * undoStack 最多保留的命令条数（coalesce 合并条、executeMacro 宏条各算 1 条）。
+   * push / executeMacro 后若超出上限，丢弃最旧的一条（shift），使其不再可撤销；
+   * 剩余命令彼此 undo/redo 仍自洽（见模块说明：丢掉 C1 不破坏 C2..Cn 的逆序链）。
+   * 缺省 = DEFAULT_MAX_HISTORY（200）。传 <= 0 表示不限制（无硬顶）。
+   */
+  maxHistory?: number;
 }
 
 interface TimedCommand extends Command {
@@ -84,11 +102,24 @@ export function createCommandStack(
 ): CommandStack {
   const now = opts.now ?? (() => Date.now());
   const windowMs = opts.coalesceWindowMs ?? 800;
+  // <= 0 视为不限制（无硬顶）；缺省走 DEFAULT_MAX_HISTORY。
+  const cap = opts.maxHistory ?? DEFAULT_MAX_HISTORY;
 
   let current: KBNoteDoc = init;
   const undoStack: TimedCommand[] = [];
   const redoStack: TimedCommand[] = [];
   let lastPoppedName: string | undefined;
+
+  /**
+   * 裁剪硬顶：超出上限时丢弃最旧命令（shift），使其不可再撤销。
+   * 一次 push 最多让栈长 +1，但用 while 兜底恒保证长度 ≤ cap。
+   * 丢掉最旧命令只意味着无法回到它执行之前；剩余命令的逆序链仍自洽，无需快照重写。
+   */
+  function trimOldest() {
+    while (cap > 0 && undoStack.length > cap) {
+      undoStack.shift();
+    }
+  }
 
   return {
     canUndo() {
@@ -116,6 +147,7 @@ export function createCommandStack(
       current = cmd.execute(current);
       undoStack.push({ ...cmd, pushedAt: now() });
       redoStack.length = 0;
+      trimOldest();
       return current;
     },
 
@@ -155,6 +187,7 @@ export function createCommandStack(
       current = macro.execute(current);
       undoStack.push(macro);
       redoStack.length = 0;
+      trimOldest();
       return current;
     },
 
