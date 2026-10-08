@@ -15,6 +15,7 @@ import { OutlinePanel } from '@/panels/OutlinePanel';
 import { TagFilterBar } from '@/panels/TagFilterBar';
 import { BacklinksPanel } from '@/panels/BacklinksPanel';
 import { BlockDeleteConfirmDialog } from '@/panels/BlockDeleteConfirmDialog';
+import { StorageQuotaDialog } from '@/panels/StorageQuotaDialog';
 import { Toaster } from '@/panels/lib/toast';
 import { AiPanel } from '@/ai/AiPanel';
 import { setDocRefClickHandler, installDocRefClickDelegate, setDanglingTargets, applyDanglingClasses, docRefTargetKey } from '@/editor/tiptap/doc-ref-mark';
@@ -344,6 +345,8 @@ export default function App() {
       </button>
       {/* Wave7 P2.1：删块反链影响确认框（有 incoming/outgoing 链接时才弹出） */}
       <BlockDeleteConfirmDialog />
+      {/* Wave21：浏览器存储配额不足引导弹窗（Tauri 桌面端内部不弹） */}
+      <StorageQuotaDialog />
       {/* Wave12：原生关闭守卫三选框（仅桌面端绑定且脏时出现） */}
       <CloseGuardDialog />
     </div>

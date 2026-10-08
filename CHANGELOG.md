@@ -41,6 +41,26 @@
   并标注标定依据。性能指标从「仅 console.log」升级为 CI 必跑硬阈值：500 块拖拽/缩放/
   平移 fps 中位数 ≥24 + 交互期间长任务 ≤2 个；2000 块 TTI <8s + 最长长任务 <3s。
   阈值经本机单核限频 5 轮实测标定，详见 `docs/wave21/large-doc-perf.md`。
+### 修复 / Safari（WebKit）兼容
+
+- **浏览器存储配额不足时引导导出，不再只弹一句 toast**：写入 IndexedDB/OPFS 遇到
+  `QuotaExceededError`（或启动预检 `navigator.storage.estimate()` 占用 ≥95%）时，
+  弹出「本地存储空间不足」引导框，展示已用/配额/占用比，并按宿主能力给出动作：
+  「导出当前文档 .kbnote」恒可用；有 Web Share 的移动 Safari 给「分享…」，无 Web Share
+  的桌面 Safari/WebKit 自动降级为「下载整库备份 .kbpack」。`navigator.share` 不存在或
+  分享失败时不再静默，自动改为下载 .kbnote/.kbpack。Tauri 桌面端不弹这套浏览器引导
+  （host 门控，走原生 Save 对话框）。不支持 `estimate()` 的旧 Safari 不猜测、不弹窗，
+  仅给兜底文案。新增 `storage/quota-policy.ts` 纯函数（压力比/档位/动作矩阵/字节格式化）
+  与 vitest；详见 `docs/wave21/webkit-compat.md`。
+
+### 内部工程
+
+- 新增 chromium 回归 `e2e/wave21-quota-compat.spec.ts`（弹窗动作矩阵、无 FSA 形下
+  .kbnote/.kbpack 下载真实触发、stub Web Share 真调用）；新增独立
+  `playwright.webkit.config.ts` + `e2e/wave21-webkit-compat.spec.ts`（project=webkit，
+  仅本机/具备 WebKit 系统依赖的环境手动跑，web-ci 不改、不调用；默认 chromium 套件已
+  testIgnore 该 spec）。webkit 引擎二进制已下载但本机缺 `libgstcodecparsers` 等系统库
+  无法启动，真机 Safari/iPad 验证项见文档挂账清单。
 
 ## 0.1.0-rc.12（2026-10-08）
 

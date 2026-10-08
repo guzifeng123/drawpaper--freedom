@@ -42,6 +42,12 @@ export interface WiringUiState {
    */
   closeGuardOpen: boolean;
 
+  /**
+   * Wave21：浏览器「本地存储空间不足」引导弹窗（仅 Web/PWA，Tauri 桌面端不弹）。
+   * estimate 为预检/失败时读到的 usage/quota（null = estimate 不可用，旧 Safari）。
+   */
+  quotaDialog: { open: boolean; estimate: { usage: number; quota: number } | null };
+
   // ============================================================
   // Wave7 P2.1：删除块时的跨文档反链影响确认
   // ============================================================
@@ -71,6 +77,7 @@ export interface WiringUiState {
   setSyncOpen(open: boolean): void;
   setCloseGuardOpen(open: boolean): void;
   setBlockDeleteRequest(req: WiringUiState['blockDeleteRequest']): void;
+  setQuotaDialog(open: boolean, estimate?: { usage: number; quota: number } | null): void;
 }
 
 export const useWiringUi = create<WiringUiState>((set) => ({
@@ -88,6 +95,7 @@ export const useWiringUi = create<WiringUiState>((set) => ({
   syncOpen: false,
   closeGuardOpen: false,
   blockDeleteRequest: null,
+  quotaDialog: { open: false, estimate: null },
   setExportOpen: (open) => set({ exportOpen: open }),
   setSearchOpen: (open) => set({ searchOpen: open }),
   setActiveSearchIndex: (i) => set({ activeSearchIndex: i }),
@@ -102,6 +110,8 @@ export const useWiringUi = create<WiringUiState>((set) => ({
   setSyncOpen: (open) => set({ syncOpen: open }),
   setCloseGuardOpen: (open) => set({ closeGuardOpen: open }),
   setBlockDeleteRequest: (req) => set({ blockDeleteRequest: req }),
+  setQuotaDialog: (open, estimate = null) =>
+    set({ quotaDialog: { open, estimate: estimate ?? null } }),
 }));
 
 /** 非 React 侧（快捷键 / 适配层）直接读最新 UI 态。 */
