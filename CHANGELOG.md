@@ -4,7 +4,16 @@
 
 ## 未发布（Unreleased）
 
-（暂无）
+### 同步
+
+- **同步墓碑表有界化（Wave20 R 路）**：web 传输层 `runSync` 在每文档 merge 收敛后、
+  push 盖章前统一调用 core 的 `pruneTombstones`，把长期高频删除累积的墓碑表
+  （`sync.nodes[*].t` / `sync.edges[*].t`）按安全水位 `W=min(vv)` 压回默认 1000 条阈值；
+  仅裁剪「全部已知客户端都已观测」的安全墓碑，落后客户端未越过的删除绝不裁（宁可暂时
+  超阈值也不越线）。裁剪是本地遗忘，对端仍持的墓碑后续合并自然带回、被删实体不复活。
+  新增 `SyncRunResult.prunedTombstones / prunedEdgeTombstones / retainedTombstones /
+  tombstoneWatermark` 统计（仅 console.debug，不弹 UI）。详见
+  `docs/wave20/tombstone-prune.md`。
 
 ## 0.1.0-rc.11（2026-10-08）
 

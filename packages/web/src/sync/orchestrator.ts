@@ -6,6 +6,8 @@ import {
   serializeKBNote,
   advanceWatermark,
   emptyCursor,
+  pruneTombstones,
+  DEFAULT_MAX_TOMBSTONES,
   type KBNoteDoc,
   type SyncManifest,
   type CollabConflict,
@@ -72,6 +74,45 @@ export interface SyncRunResult {
   assetsPushed: number;
   /** 本轮推送失败的资产数（OPFS 缺失或通道上传失败；尽力而为，不阻断文档同步）。 */
   assetsFailed: number;
+  // ---- Wave20 R 路：墓碑水位裁剪（本地遗忘，非全局 gc）统计 ----
+  /** 本轮被裁剪掉的墓碑总数（节点 + 边）。0 = 未触发裁剪（阈值内 / 无安全集）。 */
+  prunedTombstones: number;
+  /** 本轮被裁剪掉的边墓碑数（prunedTombstones 的子集，便于观测）。 */
+  prunedEdgeTombstones: number;
+  /** 裁剪后仍保留的墓碑总数（跨本轮处理的所有文档求和；每文档 = retainedCount）。 */
+  retainedTombstones: number;
+  /** 本轮最后一次「实际发生裁剪」观测到的安全水位 W = min(合并后 vv[c])（调试观测；未裁剪为 0）。 */
+  tombstoneWatermark: number;
+}
+
+/**
+ * 对单个「本轮收敛后 / 待推送」文档跑一次墓碑水位裁剪（Wave20 R 路接线）。
+ *
+ * 契约（docs/wave14/tombstone-bounds.md §5）：
+ * - 用文档自身合并后的 sync.vv 派生安全水位（W = min(vv[c])），不用任一对端单独 vv；
+ * - 纯函数、不改入参；未触发裁剪时返回同一引用（调用方据此可保持引用稳定）；
+ * - 裁剪是「本地遗忘」：对端仍持有的墓碑后续 merge 会自然带回（core merge 已固化），
+ *   绝不在此处绕过 merge 或做全局宣告。
+ *
+ * 统计聚合进 result；返回裁剪后文档，供后续 stampForPersist / 落盘 / 推送使用。
+ * 调用时机必须在 stampForPersist 之前。
+ */
+function pruneDocTombstones(doc: KBNoteDoc, result: SyncRunResult): KBNoteDoc {
+  const r = pruneTombstones(doc, { maxTombstones: DEFAULT_MAX_TOMBSTONES });
+  result.retainedTombstones += r.retainedCount;
+  if (r.prunedCount > 0) {
+    result.prunedTombstones += r.prunedCount;
+    result.prunedEdgeTombstones += r.prunedEdges.length;
+    // 水位只在「实际发生裁剪」时记录：未触发裁剪的文档（尤其空 vv 的新文档）
+    // 不应把真实裁剪文档的水位覆盖成 0。
+    result.tombstoneWatermark = r.watermark;
+    // console.debug 级、不弹 UI、不打扰用户；生产构建无此输出。
+    console.debug(
+      '[sync] tombstone prune',
+      { docId: doc.id, pruned: r.prunedCount, retained: r.retainedCount, watermark: r.watermark },
+    );
+  }
+  return r.doc;
 }
 
 /**
@@ -82,7 +123,19 @@ export async function runSync(channel: SyncChannel): Promise<SyncRunResult> {
   ui.setBusy(true);
   ui.clearConflicts();
   ui.setError('');
-  const result: SyncRunResult = { push: 0, pull: 0, merged: 0, conflicts: 0, skipped: 0, assetsPushed: 0, assetsFailed: 0 };
+  const result: SyncRunResult = {
+    push: 0,
+    pull: 0,
+    merged: 0,
+    conflicts: 0,
+    skipped: 0,
+    assetsPushed: 0,
+    assetsFailed: 0,
+    prunedTombstones: 0,
+    prunedEdgeTombstones: 0,
+    retainedTombstones: 0,
+    tombstoneWatermark: 0,
+  };
   try {
     // 1) 刷盘当前文档。
     editorStore.getState().requestSave();
@@ -118,11 +171,14 @@ export async function runSync(channel: SyncChannel): Promise<SyncRunResult> {
     const bundle = planBundle(localManifest, remoteManifest);
 
     // 4a) push：本地独有/领先 → 上传。
+    // Wave20 R 路：盖章/推送前先按合并后文档自身 vv 裁剪墓碑（push-only 文档同样执行）。
     for (const id of bundle.pushDocIds) {
-      const doc = await db.docs.get(id);
-      if (!doc) continue;
-      await channel.pushDoc(id, serializeKBNote(syncStamper.stampForPersist(doc)));
-      await writeBase(id, syncStamper.stampForPersist(doc));
+      const raw = await db.docs.get(id);
+      if (!raw) continue;
+      const doc = pruneDocTombstones(raw, result);
+      const stamped = syncStamper.stampForPersist(doc);
+      await channel.pushDoc(id, serializeKBNote(stamped));
+      await writeBase(id, stamped);
       result.push += 1;
     }
 
@@ -147,6 +203,11 @@ export async function runSync(channel: SyncChannel): Promise<SyncRunResult> {
       } else {
         merged = remoteDoc;
       }
+
+      // Wave20 R 路：mergeSnapshots 收敛后、落库/盖章/推送前，用合并后文档自身 sync.vv
+      // 裁剪墓碑。裁剪结果替换后续落盘对象（saveDoc / applyRemoteDoc / writeBase）。
+      // 注意：绝不在此绕过 merge——被裁墓碑由对端后续 merge 自然带回（core 已固化）。
+      merged = pruneDocTombstones(merged, result);
 
       // 落库。
       await storageAdapter.saveDoc(merged);
