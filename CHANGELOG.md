@@ -4,7 +4,21 @@
 
 ## 未发布（Unreleased）
 
-（暂无）
+### 内部工程
+
+纯 CI/工程加固，无用户可见行为变化（release-windows）：
+
+- **arm64-native headless CLI 冒烟接入（Wave23 E）**：把 x64 build job 内联的
+  `--diag-export` 隐私金丝雀断言抽成跨架构共享脚本
+  `apps/desktop-tauri/ci/smoke-cli.ps1`（参数 `-ExePath`/`-InstallDir` + `-Arch`）。
+  x64 内联步骤改为调用该脚本（断言集合只增不减：保留零 `*.kbnote`/零 `assets/`/
+  秘密串零命中/system.json 字段/manifest 恰三字段的金丝雀，另加 exe ProductVersion
+  与 `system.json.version` 双路版本比对）；`arm64-native` job 在「静默安装」后、
+  「卸载」前插入同一脚本的 `-Arch arm64` 调用，使原生 ARM64 安装目录的 exe 也跑同一份
+  无头 CLI 断言（版本 / 用法标记 / 有界退出不留进程 / diag 隐私金丝雀）。
+  编排不变：`build`/`arm64-native` 无 needs、`publish.needs` 仍只 `build`、
+  arm64-native 仍不上传 release 资产。详见 `docs/wave23/arm64-cli-smoke.md`。
+
 
 ## 0.1.0-rc.14（2026-10-08）
 

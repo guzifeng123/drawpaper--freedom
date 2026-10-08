@@ -38,6 +38,7 @@ on:
       - 'chore/ci-exe-hardening'
       - 'chore/arm64-runner-smoke'
       - 'feat/updater-fallback-probe'
+      - 'chore/arm64-cli-smoke'
   workflow_dispatch:
 
 permissions:
@@ -1183,7 +1184,16 @@ jobs:
           }
           Write-Host "Smoke OK: welcome doc created on first run, flag persisted on second (marker files $firstHits -> $secondHits)"
 
-      - name: 'Smoke (x64): --diag-export privacy canary (no .kbnote/asset leak)'
+      # Wave23 E: the headless CLI assertion suite (version / usage-marker /
+      # bounded headless lifecycle / --diag-export privacy canary) used to live
+      # inline here. It is now extracted to the SHARED script
+      # apps/desktop-tauri/ci/smoke-cli.ps1 so the identical suite also runs on
+      # the native arm64 runner. The script's assertion set is equal-or-stronger
+      # than this inline block: it keeps the full privacy canary (no *.kbnote,
+      # no assets/, canary string zero hits, system.json fields, manifest
+      # exactly name/size/mtime) and additionally re-checks BOTH the exe file
+      # ProductVersion AND the diag system.json.version against tauri.conf.
+      - name: 'Smoke (x64): headless CLI suite (version / usage / lifecycle + diag privacy canary)'
         if: matrix.arch == 'x64'
         shell: pwsh
         timeout-minutes: 5
@@ -1206,99 +1216,12 @@ jobs:
               }
             }
           }
-          if (-not $installDir) { Write-Error 'Smoke FAIL: install dir not found at diag-export smoke' }
+          if (-not $installDir) { Write-Error 'Smoke FAIL: install dir not found at CLI smoke' }
           $exe = Join-Path $installDir 'drawpaper.exe'
           if (-not (Test-Path $exe)) { $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName }
           Write-Host "App exe = $exe"
-
-          # Plant a canary: a .kbnote whose BODY is a unique secret string, plus
-          # an assets/ file with the same bytes. The diag export MUST never
-          # read/pack these bytes.
-          $dataDir = Join-Path $env:APPDATA 'com.drawpaper.app'
-          New-Item -ItemType Directory -Force -Path (Join-Path $dataDir 'assets') | Out-Null
-          $canary = "CANARY-7f3a9b2e4d5c-never-leak-body-" + [guid]::NewGuid().ToString('N')
-          Set-Content -Path (Join-Path $dataDir 'SECRET-canary.kbnote') -Value $canary -NoNewline -Encoding utf8
-          Set-Content -Path (Join-Path $dataDir 'assets' 'img.png') -Value $canary -NoNewline -Encoding utf8
-          Write-Host "Planted canary (body length=$($canary.Length)) at $dataDir"
-
-          $outZip = Join-Path $env:TEMP 'dp-diag.zip'
-          Remove-Item $outZip -ErrorAction SilentlyContinue
-          # Clear any residual drawpaper process from the prior single-instance smoke.
-          Get-Process drawpaper -ErrorAction SilentlyContinue | Stop-Process -Force
-          Start-Sleep -Seconds 1
-
-          # GUI-subsystem exe: Start-Process redirect can lose the handle, so wrap
-          # with cmd /c to capture the Rust eprintln diagnostics ([diag-export] ...).
-          $outLog = Join-Path $env:TEMP 'dp-diag.out'
-          Remove-Item $outLog -ErrorAction SilentlyContinue
-          Write-Host "Running: cmd /c `"$exe`" --diag-export `"$outZip`" > `"$outLog`" 2>&1"
-          cmd /c "`"$exe`" --diag-export `"$outZip`" > `"$outLog`" 2>&1"
-          $code = $LASTEXITCODE
-          Write-Host "::group::diag-export captured stdout/stderr"
-          if (Test-Path $outLog) { Get-Content $outLog | ForEach-Object { Write-Host "  | $_" } } else { Write-Host "  (no output file)" }
-          Write-Host "::endgroup::"
-          Write-Host "diag-export exit code = $code"
-          if ($code -ne 0) { Write-Error "Smoke FAIL: --diag-export exited $code" }
-          if (-not (Test-Path $outZip)) { Write-Error 'Smoke FAIL: diag zip not produced' }
-          $zipLen = (Get-Item $outZip).Length
-          Write-Host "diag zip = $outZip ($zipLen bytes)"
-          # Print first bytes to confirm it is a real ZIP (PK\x03\x04) before Expand.
-          $fs = [System.IO.File]::OpenRead($outZip)
-          $buf = New-Object byte[] 8; [void]$fs.Read($buf,0,8); $fs.Close()
-          $hex = ($buf | ForEach-Object { $_.ToString('x2') }) -join ' '
-          Write-Host "zip header bytes: $hex"
-
-          # Extract and assert.
-          $extract = Join-Path $env:TEMP 'dp-diag-extract'
-          Remove-Item $extract -Recurse -Force -ErrorAction SilentlyContinue
-          try {
-            Expand-Archive -Path $outZip -DestinationPath $extract -Force -ErrorAction Stop
-          } catch {
-            Write-Host "Expand-Archive failed: $_"
-            Write-Error "Smoke FAIL: Expand-Archive could not unpack the zip crate output"
-          }
-          Write-Host "::group::Extracted diag zip entries"
-          Get-ChildItem $extract -Recurse -File | ForEach-Object {
-            Write-Host ("  - {0}  ({1} bytes)" -f $_.FullName.Substring($extract.Length+1), $_.Length)
-          }
-          Write-Host "::endgroup::"
-
-          # 1) no *.kbnote entry.
-          $kbnote = Get-ChildItem $extract -Recurse -File -Filter '*.kbnote' -ErrorAction SilentlyContinue
-          if ($kbnote) { $kbnote | ForEach-Object { Write-Host "LEAK: $($_.FullName)" }; Write-Error 'Smoke FAIL: zip contains a *.kbnote entry' }
-          # 2) no assets/ entry.
-          $assets = Get-ChildItem $extract -Recurse -File | Where-Object { $_.FullName -match '[\\/]assets[\\/]' }
-          if ($assets) { $assets | ForEach-Object { Write-Host "LEAK: $($_.FullName)" }; Write-Error 'Smoke FAIL: zip contains an assets/ entry' }
-          # 3) canary body string zero hits across ALL extracted files.
-          $leak = Get-ChildItem $extract -Recurse -File | Select-String -SimpleMatch -Pattern $canary -List -ErrorAction SilentlyContinue
-          if ($leak) { $leak | ForEach-Object { Write-Host "LEAK in $($_.Path): $($_.Line)" }; Write-Error 'Smoke FAIL: canary body string found inside diagnostic zip!' }
-          Write-Host "Privacy OK: no *.kbnote, no assets/, canary string zero hits"
-
-          # 4) system.json fields.
-          $sysPath = Join-Path $extract 'system.json'
-          if (-not (Test-Path $sysPath)) { Write-Error 'Smoke FAIL: system.json missing' }
-          $sys = Get-Content -Raw $sysPath | ConvertFrom-Json
-          Write-Host ("system.json: version={0} os={1} os_version={2} arch={3} webview2={4} collected_at={5}" -f $sys.version, $sys.os, $sys.os_version, $sys.arch, $sys.webview2_runtime_version, $sys.collected_at)
-          if (-not $sys.version) { Write-Error 'Smoke FAIL: system.version empty' }
-          if (-not $sys.arch) { Write-Error 'Smoke FAIL: system.arch empty' }
-          if ($null -eq $sys.webview2_runtime_version) { Write-Error 'Smoke FAIL: system.webview2_runtime_version missing' }
-          if ($sys.webview2_runtime_version -eq 'unknown') { Write-Host '::warning title=wv2-detect::webview2_runtime_version came back unknown on the runner' }
-
-          # 5) manifest entries have exactly name/size/mtime.
-          $manPath = Join-Path $extract 'files-manifest.json'
-          if (-not (Test-Path $manPath)) { Write-Error 'Smoke FAIL: files-manifest.json missing' }
-          $man = Get-Content -Raw $manPath | ConvertFrom-Json
-          Write-Host ("files-manifest.json lists {0} file(s)" -f $man.Count)
-          $bad = @()
-          foreach ($e in $man) {
-            $props = @($e.PSObject.Properties.Name | Sort-Object)
-            # Sort-Object yields alphabetic order: mtime, name, size (m<n<s).
-            if (($props -join ',') -ne 'mtime,name,size') { $bad += ($props -join ',') }
-          }
-          if ($bad.Count -gt 0) { Write-Error ("Smoke FAIL: manifest entries with unexpected fields: " + ($bad -join ' | ')) }
-          $names = $man | ForEach-Object { $_.name }
-          Write-Host "  manifest still lists canary by name (metadata-only): $($names -contains 'SECRET-canary.kbnote')"
-          Write-Host "Smoke OK: diag-export privacy canary passed"
+          & 'apps/desktop-tauri/ci/smoke-cli.ps1' -ExePath $exe -Arch x64
+          Write-Host "Smoke OK: headless CLI suite passed (x64)"
 
       - name: 'Smoke (x64): portable mode (marker + data-dir trigger + isolation + reinstall)'
         if: matrix.arch == 'x64'
@@ -2328,6 +2251,44 @@ jobs:
             Write-Error 'Smoke FAIL: drawpaper process did not present a main window whose title contains "drawpaper" within 20s'
           }
           Write-Host "Smoke OK: arm64 process alive and main window title contains 'drawpaper'"
+
+      # Wave23 E: the SAME headless CLI assertion suite the x64 build job runs is
+      # executed here against the NATIVE arm64 install. This upgrades arm64-native
+      # from "install / GUI-window-title / uninstall" to also covering the
+      # headless CLI surface (version / usage-marker / bounded headless lifecycle /
+      # --diag-export privacy canary). The window-title step above stays as-is
+      # (it is not a GUI interaction smoke); arm64-native still uploads NO
+      # release assets (publish continues to ship the cross-built arm64 bundle).
+      - name: 'Smoke (arm64 native): headless CLI suite (version / usage / lifecycle + diag privacy canary)'
+        shell: pwsh
+        timeout-minutes: 5
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "[arch] PROCESSOR_ARCHITECTURE='$env:PROCESSOR_ARCHITECTURE'"
+          if ($env:PROCESSOR_ARCHITECTURE -ne 'ARM64') { Write-Error "FAIL: not on ARM64 runner" }
+          # Discover install dir / exe exactly like the install step above.
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'drawpaper'),
+            (Join-Path $env:ProgramFiles 'drawpaper')
+          )
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'drawpaper') }
+          $installDir = $null
+          foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
+          if (-not $installDir) {
+            foreach ($root in @((Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+              if ($root -and (Test-Path $root)) {
+                $hit = Get-ChildItem $root -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { $installDir = $hit.FullName; break }
+              }
+            }
+          }
+          if (-not $installDir) { Write-Error 'Smoke FAIL: install dir not found at CLI smoke' }
+          $exe = Join-Path $installDir 'drawpaper.exe'
+          if (-not (Test-Path $exe)) { $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName }
+          Write-Host "App exe = $exe"
+          & 'apps/desktop-tauri/ci/smoke-cli.ps1' -ExePath $exe -Arch arm64
+          Write-Host "Smoke OK: headless CLI suite passed (arm64 native)"
 
       - name: 'Smoke (arm64 native): silent uninstall, install dir removed'
         shell: pwsh
