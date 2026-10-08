@@ -30,6 +30,7 @@ import {
   type DropPosition,
 } from './lib/outline-dnd';
 import { useToast } from './lib/toast';
+import { useWiringUi } from '@/wiring/ui-store';
 
 const TYPE_ICON: Record<BlockNode['type'], React.ComponentType<{ className?: string }>> = {
   text: FileText,
@@ -380,11 +381,25 @@ export const OutlinePanel = React.memo(function OutlinePanel({ api }: { api: Pan
 
   const noopMove = React.useCallback(() => undefined, []);
 
+  // Wave22：窄屏（≤639px）遮罩——点击关闭大纲浮层（状态走既有 ui-store，语义不变）。
+  const narrowBackdrop = (
+    <div
+      className="narrow-backdrop fixed inset-0 z-[9] bg-black/40 sm:hidden"
+      onClick={() => useWiringUi.getState().setOutlineOpen(false)}
+    />
+  );
+
   if (!doc) {
     return (
-      <aside className="absolute left-60 top-16 z-10 flex w-64 flex-col rounded-lg border bg-card/95 shadow-sm">
-        <div className="px-3 py-2 text-xs text-muted-foreground">打开文档后显示大纲</div>
-      </aside>
+      <>
+        {narrowBackdrop}
+        <aside
+          data-testid="outline-panel"
+          className="absolute left-60 top-16 z-10 flex w-64 flex-col rounded-lg border bg-card/95 shadow-sm max-sm:bottom-2 max-sm:left-2 max-sm:top-14 max-sm:w-[min(18rem,90vw)]"
+        >
+          <div className="px-3 py-2 text-xs text-muted-foreground">打开文档后显示大纲</div>
+        </aside>
+      </>
     );
   }
 
@@ -407,7 +422,12 @@ export const OutlinePanel = React.memo(function OutlinePanel({ api }: { api: Pan
   );
 
   return (
-    <aside className="absolute left-60 top-16 z-10 flex w-64 flex-col rounded-lg border bg-card/95 shadow-sm">
+    <>
+      {narrowBackdrop}
+      <aside
+        data-testid="outline-panel"
+        className="absolute left-60 top-16 z-10 flex w-64 flex-col rounded-lg border bg-card/95 shadow-sm max-sm:bottom-2 max-sm:left-2 max-sm:top-14 max-sm:w-[min(18rem,90vw)]"
+      >
       <div className="flex items-center gap-1 border-b px-2 py-1.5">
         <span className="text-xs font-semibold text-muted-foreground">大纲</span>
         <div className="relative ml-auto flex-1 max-w-32">
@@ -457,7 +477,8 @@ export const OutlinePanel = React.memo(function OutlinePanel({ api }: { api: Pan
           </>
         )}
       </ScrollArea>
-    </aside>
+      </aside>
+    </>
   );
 });
 

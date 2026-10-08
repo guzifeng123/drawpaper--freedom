@@ -78,7 +78,16 @@ export const SearchPanel = React.memo(function SearchPanel({ api }: { api: Panel
   };
 
   return (
-    <div className="absolute right-4 top-14 z-30 flex w-96 flex-col rounded-lg border bg-card shadow-lg">
+    <>
+      {/* Wave22 窄屏（≤639px）遮罩：点击关闭搜索；桌面无此层。 */}
+      <div
+        className="narrow-backdrop fixed inset-0 z-20 bg-black/40 sm:hidden"
+        onClick={() => api.closeSearch()}
+      />
+      <div
+        data-testid="search-panel"
+        className="absolute right-4 top-14 z-30 flex w-96 flex-col rounded-lg border bg-card shadow-lg max-sm:left-2 max-sm:right-2 max-sm:w-[min(18rem,90vw)]"
+      >
       <div className="flex items-center gap-2 border-b px-3 py-2">
         <Search className="h-4 w-4 text-muted-foreground" />
         <Input
@@ -133,6 +142,7 @@ export const SearchPanel = React.memo(function SearchPanel({ api }: { api: Panel
           )}
         </div>
       </ScrollArea>
-    </div>
+      </div>
+    </>
   );
 });

@@ -532,6 +532,31 @@ function CanvasInner({ api }: { api: EditorApi }) {
       }
     : null;
 
+  // Wave22（docs/wave9 §9 挂账）：React Flow Controls 四按钮补中文 aria-label。
+  // RF v12 自带英文 aria-label（Zoom in / Zoom out / Fit view / Lock view），
+  // 这里按按钮 class 覆写为中文；按钮随 ReactFlow 一次性挂载，MutationObserver
+  // 兜底后续挂载（仅 childList 变化触发，不监听属性，不干扰交互锁定态切换）。
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const LABELS: Array<[RegExp, string]> = [
+      [/controls-zoomin/, '放大'],
+      [/controls-zoomout/, '缩小'],
+      [/controls-fitview/, '适应视图'],
+      [/controls-interactive/, '锁定视口'],
+    ];
+    const applyLabels = () => {
+      el.querySelectorAll<HTMLButtonElement>('.react-flow__controls-button').forEach((b) => {
+        const hit = LABELS.find(([re]) => re.test(b.className));
+        if (hit) b.setAttribute('aria-label', hit[1]);
+      });
+    };
+    applyLabels();
+    const mo = new MutationObserver(applyLabels);
+    mo.observe(el, { childList: true, subtree: true });
+    return () => mo.disconnect();
+  }, []);
+
   return (
     <div
       className={`relative h-full w-full ${dragOver ? 'ring-2 ring-inset ring-blue-400' : ''}`}
