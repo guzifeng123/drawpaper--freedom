@@ -273,3 +273,76 @@ describe('buildChildCountMap', () => {
     expect(m.leaf ?? 0).toBe(0);
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * P1 Wave23.5 环/多父输入有界退化硬ening（cycle-layout-hang）。
+ * 任何从 edges 构造树/遍历的纯函数遇到 A→B、B→A 环或多父输入，
+ * 必须有界返回（不抛/不挂）且输出确定。
+ * ------------------------------------------------------------------ */
+describe('cycle hardening / cyclic & multi-parent inputs are bounded', () => {
+  // A→B、B→A 成环；外加 C→D 无环分支做混合。
+  const cycleEdges: Edge[] = [
+    edge('ab', 'A', 'B'),
+    edge('ba', 'B', 'A'),
+    edge('cd', 'C', 'D'),
+  ];
+  const cycleNodes = [node('A'), node('B'), node('C'), node('D')];
+  // 多父无环：A→C、B→C。
+  const multiParentEdges: Edge[] = [edge('ac', 'A', 'C'), edge('bc', 'B', 'C')];
+  const mpNodes = [node('A'), node('B'), node('C')];
+
+  it('buildMainTree on a 2-cycle produces an acyclic forest (no infinite walk)', () => {
+    const tree = buildMainTree(cycleNodes, cycleEdges);
+    // parentId 指针不可成环：从每个节点沿 parentId 上行，链内不可重复（acyclic）、必然终止。
+    for (const id of Object.keys(tree.nodes)) {
+      const chainSeen = new Set<string>();
+      let cur: string | null | undefined = id;
+      while (cur != null) {
+        expect(chainSeen.has(cur)).toBe(false);
+        chainSeen.add(cur);
+        cur = tree.nodes[cur]?.parentId ?? null;
+      }
+    }
+    // 环上闭合边必须被裁决掉：A、B 中恰好一个有父（首边 wins = B 的父是 A）。
+    expect(tree.nodes['B']!.parentId).toBe('A');
+    expect(tree.nodes['A']!.parentId).toBe(null);
+  });
+
+  it('enumerateSubtree on cyclic-derived tree returns bounded & deterministic', () => {
+    const tree = buildMainTree(cycleNodes, cycleEdges);
+    const fromA = enumerateSubtree(tree, 'A');
+    const fromB = enumerateSubtree(tree, 'B');
+    expect([...fromA].sort()).toEqual(['A', 'B']);
+    expect([...fromB].sort()).toEqual(['B']);
+    // 确定性：再算一次结果一致。
+    expect(enumerateSubtree(tree, 'A')).toEqual(fromA);
+  });
+
+  it('getFocusViewSet / getAncestorChain / getDescendantSet bounded on cycle', () => {
+    const tree = buildMainTree(cycleNodes, cycleEdges);
+    expect(getAncestorChain(tree, 'B')).toEqual(['B', 'A']);
+    expect(getDescendantSet(tree, 'A').sort()).toEqual(['A', 'B']);
+    const focus = getFocusViewSet(tree, 'A');
+    expect(focus.focus).toContain('A');
+    expect(focus.focus).toContain('B');
+  });
+
+  it('detectConflicts reports the cycle; analyzeGraph bounded on cyclic input', () => {
+    const { cycles, multiParents } = detectConflicts(cycleNodes, cycleEdges);
+    expect(cycles.length).toBeGreaterThanOrEqual(1);
+    const analysis = analyzeGraph(cycleNodes, cycleEdges);
+    expect(analysis.cycles.length).toBeGreaterThanOrEqual(1);
+    // 有界：两次分析结果确定一致。
+    expect(analyzeGraph(cycleNodes, cycleEdges)).toEqual(analysis);
+    expect(multiParents).toEqual([]);
+  });
+
+  it('multi-parent input: buildMainTree picks first parent, traversal bounded', () => {
+    const tree = buildMainTree(mpNodes, multiParentEdges);
+    expect(tree.nodes['C']!.parentId).toBe('A'); // 首条入边 wins
+    expect(enumerateSubtree(tree, 'A').sort()).toEqual(['A', 'C']);
+    const { multiParents } = detectConflicts(mpNodes, multiParentEdges);
+    expect(multiParents.length).toBe(1);
+    expect(multiParents[0]!.nodeId).toBe('C');
+  });
+});
