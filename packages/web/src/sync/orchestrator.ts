@@ -81,7 +81,7 @@ export interface SyncRunResult {
   prunedEdgeTombstones: number;
   /** 裁剪后仍保留的墓碑总数（跨本轮处理的所有文档求和；每文档 = retainedCount）。 */
   retainedTombstones: number;
-  /** 本轮最后一次裁剪调用观测到的安全水位 W = min(合并后 vv[c])（调试观测）。 */
+  /** 本轮最后一次「实际发生裁剪」观测到的安全水位 W = min(合并后 vv[c])（调试观测；未裁剪为 0）。 */
   tombstoneWatermark: number;
 }
 
@@ -100,10 +100,12 @@ export interface SyncRunResult {
 function pruneDocTombstones(doc: KBNoteDoc, result: SyncRunResult): KBNoteDoc {
   const r = pruneTombstones(doc, { maxTombstones: DEFAULT_MAX_TOMBSTONES });
   result.retainedTombstones += r.retainedCount;
-  result.tombstoneWatermark = r.watermark;
   if (r.prunedCount > 0) {
     result.prunedTombstones += r.prunedCount;
     result.prunedEdgeTombstones += r.prunedEdges.length;
+    // 水位只在「实际发生裁剪」时记录：未触发裁剪的文档（尤其空 vv 的新文档）
+    // 不应把真实裁剪文档的水位覆盖成 0。
+    result.tombstoneWatermark = r.watermark;
     // console.debug 级、不弹 UI、不打扰用户；生产构建无此输出。
     console.debug(
       '[sync] tombstone prune',
