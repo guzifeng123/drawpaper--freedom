@@ -4,7 +4,17 @@
 
 ## 未发布（Unreleased）
 
-（暂无）
+### 修复 / 性能
+
+- **撤销栈加有界历史上限，修复长会话 / 超大文档内存单调膨胀（Wave22）**：core 命令栈
+  `createCommandStack` 新增 `maxHistory` 选项，缺省 `DEFAULT_MAX_HISTORY = 200`。
+  push / 宏超过上限时静默丢弃最旧一条（shift），使 undoStack 长度恒 ≤ 上限；
+  coalesce 合并条与一键整理宏整体各算 1 条计入。丢弃最旧命令后剩余命令的逆序撤销链
+  仍自洽（停在最旧存活命令之后的状态，文档不损坏），无需快照重写。对正常人工会话
+  （独立撤销点远少于 200）无感知；超长会话无法再撤销到 200 步之前，但每步 undo/redo
+  始终正确。`maxHistory <= 0` 可关闭上限。纯 core 内部改动，不升 schema 版本、不写迁移。
+  详见 `docs/wave22/undo-history-cap.md`。
+
 
 ## 0.1.0-rc.13（2026-10-08）
 
