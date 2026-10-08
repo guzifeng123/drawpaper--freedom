@@ -170,15 +170,20 @@ function DocRow({
  * 左侧可折叠文档列表。
  */
 export const DocsListPanel = React.memo(function DocsListPanel({ api }: { api: PanelsApi }) {
-  const [collapsed, setCollapsed] = React.useState(false);
+  // Wave22：窄屏（≤639px）默认收起为 40px 轨道，避免 288px 展开态+遮罩永久压住画布；
+  // 桌面保持默认展开。仅初始值按视口取一次，后续展开/收起完全由用户点按驱动（语义不变）。
+  const [collapsed, setCollapsed] = React.useState(
+    () => typeof window !== 'undefined' && window.innerWidth < 640,
+  );
 
   if (collapsed) {
     return (
-      <aside className="absolute bottom-4 left-4 top-16 z-10 flex w-10 flex-col items-center rounded-lg border bg-card/95 py-2 shadow-sm">
+      <aside className="absolute bottom-4 left-4 top-16 z-10 flex w-10 flex-col items-center rounded-lg border bg-card/95 py-2 shadow-sm max-sm:bottom-2 max-sm:top-14">
         <button
           type="button"
           onClick={() => setCollapsed(false)}
           title="展开文档列表"
+          aria-label="展开文档列表"
           className="rounded p-1 text-muted-foreground hover:bg-accent"
         >
           <FileText className="h-4 w-4" />
@@ -188,37 +193,48 @@ export const DocsListPanel = React.memo(function DocsListPanel({ api }: { api: P
   }
 
   return (
-    <aside className="absolute bottom-4 left-4 top-16 z-10 flex w-56 flex-col rounded-lg border bg-card/95 shadow-sm">
-      <div className="flex items-center justify-between border-b px-2 py-1.5">
-        <span className="text-xs font-semibold text-muted-foreground">文档</span>
-        <div className="flex items-center">
-          <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => api.newDoc()} title="新建文档">
-            <FilePlus2 className="h-4 w-4" />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-6 w-6"
-            onClick={() => setCollapsed(true)}
-            title="收起列表"
-          >
-            <ChevronDown className="h-4 w-4" />
-          </Button>
+    <>
+      {/* Wave22 窄屏（≤639px）遮罩：点击收起文档列表；桌面无此层。 */}
+      <div
+        className="narrow-backdrop fixed inset-0 z-[9] bg-black/40 sm:hidden"
+        onClick={() => setCollapsed(true)}
+      />
+      <aside
+        data-testid="docs-list-panel"
+        className="absolute bottom-4 left-4 top-16 z-10 flex w-56 flex-col rounded-lg border bg-card/95 shadow-sm max-sm:bottom-2 max-sm:left-0 max-sm:top-14 max-sm:w-[min(18rem,90vw)] max-sm:rounded-l-none"
+      >
+        <div className="flex items-center justify-between border-b px-2 py-1.5">
+          <span className="text-xs font-semibold text-muted-foreground">文档</span>
+          <div className="flex items-center">
+            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => api.newDoc()} title="新建文档">
+              <FilePlus2 className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setCollapsed(true)}
+              title="收起列表"
+              aria-label="收起文档列表"
+            >
+              <ChevronDown className="h-4 w-4" />
+            </Button>
+          </div>
         </div>
-      </div>
-      <ScrollArea className="flex-1 p-1">
-        {api.docs.length === 0 ? (
-          <div className="px-2 py-6 text-center text-xs text-muted-foreground">
-            还没有文档
-          </div>
-        ) : (
-          <div className="flex flex-col gap-0.5">
-            {api.docs.map((d) => (
-              <DocRow key={d.id} doc={d} active={d.id === api.currentDocId} api={api} />
-            ))}
-          </div>
-        )}
-      </ScrollArea>
-    </aside>
+        <ScrollArea className="flex-1 p-1">
+          {api.docs.length === 0 ? (
+            <div className="px-2 py-6 text-center text-xs text-muted-foreground">
+              还没有文档
+            </div>
+          ) : (
+            <div className="flex flex-col gap-0.5">
+              {api.docs.map((d) => (
+                <DocRow key={d.id} doc={d} active={d.id === api.currentDocId} api={api} />
+              ))}
+            </div>
+          )}
+        </ScrollArea>
+      </aside>
+    </>
   );
 });

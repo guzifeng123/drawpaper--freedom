@@ -248,21 +248,31 @@ export default function App() {
       <TagFilterBar api={panelsApi} />
       {/* 反链面板（右侧可折叠，文档级/块级联动 editingNodeId） */}
       {backlinksOpen ? (
-        <div className="absolute right-4 top-14 z-20 flex h-[70vh] w-72 flex-col rounded-lg border bg-card/95 shadow-lg">
-          <div className="flex justify-end px-1 pt-1">
-            <button
-              type="button"
-              aria-label="关闭反链面板"
-              className="rounded p-1 text-muted-foreground hover:bg-accent"
-              onClick={() => useWiringUi.getState().setBacklinksOpen(false)}
-            >
-              ×
-            </button>
+        <>
+          {/* Wave22 窄屏（≤639px）遮罩：点击关闭反链面板；桌面无此层。 */}
+          <div
+            className="narrow-backdrop fixed inset-0 z-[15] bg-black/40 sm:hidden"
+            onClick={() => useWiringUi.getState().setBacklinksOpen(false)}
+          />
+          <div
+            data-testid="backlinks-panel"
+            className="absolute right-4 top-14 z-20 flex h-[70vh] w-72 flex-col rounded-lg border bg-card/95 shadow-lg max-sm:bottom-2 max-sm:left-2 max-sm:right-2 max-sm:top-14 max-sm:h-[calc(100dvh-4.5rem)] max-sm:w-[min(18rem,90vw)]"
+          >
+            <div className="flex justify-end px-1 pt-1">
+              <button
+                type="button"
+                aria-label="关闭反链面板"
+                className="rounded p-1 text-muted-foreground hover:bg-accent"
+                onClick={() => useWiringUi.getState().setBacklinksOpen(false)}
+              >
+                ×
+              </button>
+            </div>
+            <div className="min-h-0 flex-1">
+              <BacklinksPanel api={panelsApi} />
+            </div>
           </div>
-          <div className="min-h-0 flex-1">
-            <BacklinksPanel api={panelsApi} />
-          </div>
-        </div>
+        </>
       ) : null}
       {/* AI 辅助面板（右侧可开关） */}
       {aiPanelOpen ? (
@@ -292,7 +302,7 @@ export default function App() {
 
       {/* 一键整理 ghost 预览：应用 / 取消 */}
       {layoutPreview ? (
-        <div className="absolute bottom-6 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full bg-slate-800/90 px-4 py-2 text-white shadow-lg">
+        <div className="absolute bottom-6 left-1/2 z-20 flex -translate-x-1/2 items-center gap-2 rounded-full bg-slate-800/90 px-4 py-2 text-white shadow-lg max-sm:bottom-[calc(1.5rem+env(safe-area-inset-bottom))] max-sm:max-w-[92vw] max-sm:flex-wrap max-sm:justify-center">
           <span className="text-xs opacity-80">整理预览</span>
           <button
             className="rounded-full bg-emerald-500 px-3 py-1 text-xs font-medium hover:bg-emerald-400"

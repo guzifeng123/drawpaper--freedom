@@ -86,7 +86,7 @@ function TitleRename({ api }: { api: PanelsApi }) {
     return (
       <button
         type="button"
-        className="max-w-[200px] truncate rounded px-1 text-sm font-semibold hover:bg-accent"
+        className="max-w-[200px] truncate rounded px-1 text-sm font-semibold hover:bg-accent max-sm:max-w-[38vw]"
         title="重命名文档"
         onDoubleClick={() => setEditing(true)}
       >
@@ -244,7 +244,7 @@ export const TopToolbar = React.memo(function TopToolbar({ api }: { api: PanelsA
   const focusRoot = api.selectedNodeIds.length === 1 ? api.selectedNodeIds[0]! : null;
 
   return (
-    <header className="absolute left-0 right-0 top-0 z-20 flex h-12 items-center gap-2 border-b bg-card/85 px-3 backdrop-blur">
+    <header className="topbar-shell absolute left-0 right-0 top-0 z-20 flex h-12 items-center gap-2 border-b bg-card/85 px-3 backdrop-blur">
       <span className="text-sm font-bold tracking-tight">drawpaper</span>
       <Separator orientation="vertical" className="!h-5" />
 

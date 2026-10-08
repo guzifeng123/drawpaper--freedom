@@ -207,3 +207,36 @@ body {
     transition: none !important;
   }
 }
+
+/* ============================================================
+   Wave22 手机窄屏外壳（≤639px，即 < tailwind sm）。
+   断点选择：640px——iPhone SE/13/14（375–390px）与多数安卓小屏在此以下；
+   ≥640px（平板/桌面）保持既有布局零变化。所有规则只写在本媒体查询内，
+   组件标记里用 max-sm: 前缀做同语义覆写；状态机、手势、连线一律不动。
+   ============================================================ */
+@media (max-width: 639px) {
+  /* 顶栏：一行不换行、横向滑动收纳全部按钮（滚动条隐藏），子项不压缩。 */
+  .topbar-shell {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none; /* Firefox */
+    -webkit-overflow-scrolling: touch;
+  }
+  .topbar-shell::-webkit-scrollbar {
+    display: none; /* Safari / Chrome */
+  }
+  .topbar-shell > * {
+    flex-shrink: 0;
+  }
+
+  /* React Flow 缩放控件：向右让出左侧文档栏轨道（left-4 16px + w-10 40px），
+     底部/左侧落进刘海屏安全区。RF 内联 style 定位，这里必须 !important。 */
+  .react-flow__controls {
+    left: calc(4.5rem + env(safe-area-inset-left, 0px)) !important;
+    bottom: calc(0.625rem + env(safe-area-inset-bottom, 0px)) !important;
+  }
+  .react-flow__minimap {
+    right: calc(0.625rem + env(safe-area-inset-right, 0px)) !important;
+    bottom: calc(0.625rem + env(safe-area-inset-bottom, 0px)) !important;
+  }
+}
