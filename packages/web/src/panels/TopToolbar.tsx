@@ -362,6 +362,14 @@ export const TopToolbar = React.memo(function TopToolbar({ api }: { api: PanelsA
         >
           <Radar className="h-4 w-4" /> 放射
         </Toggle>
+        <Toggle
+          size="sm"
+          pressed={layoutPrefs.mode === 'flow-layered'}
+          onPressedChange={() => pickLayout('flow-layered')}
+          title="逻辑流分层有向图（自上而下分层）"
+        >
+          <Waypoints className="h-4 w-4" /> 逻辑流
+        </Toggle>
       </Toolbar>
 
       {/* 间距弹层 */}
