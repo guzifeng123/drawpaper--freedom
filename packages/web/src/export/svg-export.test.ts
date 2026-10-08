@@ -30,7 +30,7 @@ function result(): PaginateResult {
     worldRect: { x: 0, y: 0, width: 700, height: 1000 },
     nodeIds: ['n1', 'n2'],
     edgeIds: ['e1'],
-    continuations: [{ token: 'cont:e1x', edgeId: 'e1x', pageIndex: 0, x: 10, y: 10, peerPageIndex: 1 }],
+    continuations: [{ token: 'cont:e1x', edgeId: 'e1x', pageIndex: 0, x: 10, y: 10, peerPageIndex: 1, angle: 0, role: 'out' }],
     scale: 1,
     nodeDrawOffsets: { n1: { x: 60, y: 60 }, n2: { x: 360, y: 60 } },
     headerText: '页眉',

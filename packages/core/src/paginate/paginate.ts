@@ -8,7 +8,7 @@ import {
   FLOW_INDENT_PER_LEVEL,
   FLOW_BLOCK_GAP_PX,
 } from './constants.js';
-import { planBentEdgeSegments } from './edge-crossing.js';
+import { planBentEdgeSegments, unitDir, dirToAngle } from './edge-crossing.js';
 
 /**
  * paginate 模块：A4 分页「视图模型」（纯逻辑，零 DOM）。
@@ -32,6 +32,18 @@ export interface ContinuationMarker {
   y: number;
   /** 指向对端：对端在第几页。 */
   peerPageIndex: number;
+  /**
+   * 边在该续接点的前进方向角（页面本地 SVG 坐标，弧度；y 轴向下，0=+x，顺时针为正）。
+   * 成对两页共享同一角度（切页边界切线方向）——出页侧箭头朝该方向（朝外），
+   * 入页侧箭头亦朝该方向（朝内/朝目标节点）。
+   */
+  angle: number;
+  /**
+   * 'out' = 边从本页出发去往 peer 页（该逻辑边源端/上游侧的页）；
+   * 'in'  = 边从 peer 页进入本页（目标端/下游侧的页）。
+   * 成对 marker 必为 out/in 各一。
+   */
+  role: 'out' | 'in';
 }
 
 /** 孤块警告：与主体分离、被排到单独页/或溢出裁切的块。 */
@@ -510,8 +522,9 @@ function runTilesGrid(
       for (const pi of samePageEdges) pages[pi]!.edgeIds.push(e.id);
       for (const cp of crossPairs) {
         const token = `cont:${e.id}:${cp.seg}`;
-        addContinuationAtPoint(pages[cp.pageA]!, token, e.id, cp.pageA, cp.pointA, pageOriginWorld[cp.pageA]!, cr, scale, cp.pageB);
-        addContinuationAtPoint(pages[cp.pageB]!, token, e.id, cp.pageB, cp.pointB, pageOriginWorld[cp.pageB]!, cr, scale, cp.pageA);
+        const angle = dirToAngle(cp.dir);
+        addContinuationAtPoint(pages[cp.pageA]!, token, e.id, cp.pageA, cp.pointA, pageOriginWorld[cp.pageA]!, cr, scale, cp.pageB, angle, 'out');
+        addContinuationAtPoint(pages[cp.pageB]!, token, e.id, cp.pageB, cp.pointB, pageOriginWorld[cp.pageB]!, cr, scale, cp.pageA, angle, 'in');
       }
       continue;
     }
@@ -519,8 +532,11 @@ function runTilesGrid(
     const token = `cont:${e.id}`;
     const srcR = nodeRect(input, e.source);
     const tgtR = nodeRect(input, e.target);
-    addContinuation(pages[ps]!, token, e.id, ps, pt, srcR, pageOriginWorld[ps]!, cr, scale);
-    addContinuation(pages[pt]!, token, e.id, pt, ps, tgtR, pageOriginWorld[pt]!, cr, scale);
+    const srcAnchor = anchorPoint(srcR, e.sourceHandle ?? 'right');
+    const tgtAnchor = anchorPoint(tgtR, e.targetHandle ?? 'left');
+    const angle = dirToAngle(unitDir(srcAnchor, tgtAnchor));
+    addContinuation(pages[ps]!, token, e.id, ps, pt, srcR, pageOriginWorld[ps]!, cr, scale, angle, 'out');
+    addContinuation(pages[pt]!, token, e.id, pt, ps, tgtR, pageOriginWorld[pt]!, cr, scale, angle, 'in');
   }
   for (const p of pages) p.edgeIds.sort();
 
@@ -538,13 +554,15 @@ function addContinuation(
   pageOriginWorld: { x: number; y: number },
   cr: ReturnType<typeof contentRect>,
   scale: number,
+  angle: number,
+  role: 'out' | 'in',
 ): void {
   // 端点换算到页面本地，再夹到内容区边界附近。
   const lx = cr.x + (endpointWorld.x - pageOriginWorld.x) * scale;
   const ly = cr.y + (endpointWorld.y - pageOriginWorld.y) * scale;
   const clampedX = Math.min(Math.max(lx, cr.x), cr.x + cr.width);
   const clampedY = Math.min(Math.max(ly, cr.y), cr.y + cr.height);
-  page.continuations.push({ token, edgeId, pageIndex, x: clampedX, y: clampedY, peerPageIndex });
+  page.continuations.push({ token, edgeId, pageIndex, x: clampedX, y: clampedY, peerPageIndex, angle, role });
 }
 
 /** 由节点矩形 + 句柄朝向给出锚点世界坐标。 */
@@ -572,12 +590,14 @@ function addContinuationAtPoint(
   cr: ReturnType<typeof contentRect>,
   scale: number,
   peerPageIndex: number,
+  angle: number,
+  role: 'out' | 'in',
 ): void {
   const lx = cr.x + (worldPoint.x - pageOriginWorld.x) * scale;
   const ly = cr.y + (worldPoint.y - pageOriginWorld.y) * scale;
   const clampedX = Math.min(Math.max(lx, cr.x), cr.x + cr.width);
   const clampedY = Math.min(Math.max(ly, cr.y), cr.y + cr.height);
-  page.continuations.push({ token, edgeId, pageIndex, x: clampedX, y: clampedY, peerPageIndex });
+  page.continuations.push({ token, edgeId, pageIndex, x: clampedX, y: clampedY, peerPageIndex, angle, role });
 }
 
 /**
@@ -596,6 +616,9 @@ function applyTilesBreaks(
   if (breaks.length === 0 || pages.length === 0) return pages;
   const out: PageSheet[] = [];
   const posOf = (id: string): { x: number; y: number } => input.layout.positions[id] ?? { x: 0, y: 0 };
+  // 切页产生的 sub 共享原页 index，最终重编号会把它们映射到同一新页；
+  // 给每个 sub 分配全局唯一临时 index（> 原页数），保证 band 内成对 peer 正确重映射。
+  let provisional = pages.length;
 
   for (const page of pages) {
     const lo = axis === 'x' ? page.worldRect.x : page.worldRect.y;
@@ -622,11 +645,14 @@ function applyTilesBreaks(
       bandOfNode.set(id, bii);
     }
 
+    const subs: PageSheet[] = [];
     for (let k = 0; k < bandEdges.length - 1; k++) {
       const bLo = bandEdges[k]!;
       const bHi = bandEdges[k + 1]!;
       const sub: PageSheet = {
         ...page,
+        index: provisional++,
+        pageNumber: 0,
         worldRect:
           axis === 'x'
             ? { x: bLo, y: page.worldRect.y, width: bHi - bLo, height: page.worldRect.height }
@@ -647,13 +673,74 @@ function applyTilesBreaks(
           y: cr.y + (r.y - sub.worldRect.y),
         };
       }
-      // 边：同带整段；跨带成续接标记。
+      // 边：同带整段；跨带（源/目标节点在本页内不同带）暂留，下面补成对续接标记。
       for (const e of input.edges ?? []) {
         if (!sub.nodeIds.includes(e.source) || !sub.nodeIds.includes(e.target)) continue;
         sub.edgeIds.push(e.id);
       }
-      out.push(sub);
+      subs.push(sub);
     }
+
+    // ① 原页已有的「跨网格页」续接标记按世界落点重新归到正确的带（之前整页切分被丢弃，
+    //    导致成对记号只剩 peer 页一半）。
+    const scale = page.scale || 1;
+    for (const c of page.continuations) {
+      const worldX = page.worldRect.x + (c.x - cr.x) / scale;
+      const worldY = page.worldRect.y + (c.y - cr.y) / scale;
+      const along = axis === 'x' ? worldX : worldY;
+      let bii = bandEdges.length - 2;
+      for (let k = 0; k < bandEdges.length - 1; k++) {
+        if (along >= bandEdges[k]! && along < bandEdges[k + 1]!) {
+          bii = k;
+          break;
+        }
+      }
+      const sub = subs[bii]!;
+      sub.continuations.push({
+        ...c,
+        x: cr.x + (worldX - sub.worldRect.x) * scale,
+        y: cr.y + (worldY - sub.worldRect.y) * scale,
+      });
+    }
+
+    // ② 跨带边（源节点在一个带、目标节点在另一个带）退化为成对续接标记：
+    //    出页侧（源带）箭头朝切页方向、入页侧（目标带）同角度朝内。
+    for (const e of input.edges ?? []) {
+      if (!page.nodeIds.includes(e.source) || !page.nodeIds.includes(e.target)) continue;
+      const bs = bandOfNode.get(e.source);
+      const bt = bandOfNode.get(e.target);
+      if (bs === undefined || bt === undefined || bs === bt) continue;
+      const srcR = nodeRect(input, e.source);
+      const tgtR = nodeRect(input, e.target);
+      const sA = anchorPoint(srcR, e.sourceHandle ?? 'right');
+      const tA = anchorPoint(tgtR, e.targetHandle ?? 'left');
+      const angle = dirToAngle(unitDir(sA, tA));
+      const token = `cont:${e.id}:band`;
+      const outSub = subs[bs]!;
+      const inSub = subs[bt]!;
+      outSub.continuations.push({
+        token,
+        edgeId: e.id,
+        pageIndex: outSub.index,
+        x: cr.x + (sA.x - outSub.worldRect.x) * scale,
+        y: cr.y + (sA.y - outSub.worldRect.y) * scale,
+        peerPageIndex: inSub.index,
+        angle,
+        role: 'out',
+      });
+      inSub.continuations.push({
+        token,
+        edgeId: e.id,
+        pageIndex: inSub.index,
+        x: cr.x + (tA.x - inSub.worldRect.x) * scale,
+        y: cr.y + (tA.y - inSub.worldRect.y) * scale,
+        peerPageIndex: outSub.index,
+        angle,
+        role: 'in',
+      });
+    }
+
+    for (const sub of subs) out.push(sub);
   }
   // 重编页号 + 续接标记 peer 重映射（非切页保留页上的跨页标记仍成对互指）。
   const oldToNew = new Map<number, number>();
@@ -829,10 +916,12 @@ export function paginateFlow(input: PaginateInput): PaginateResult {
       startNewPage();
       pageStartStreamY = streamY;
     }
-    const placeH = hasKids ? clusterH : needH;
     page.nodeIds.push(item.id);
     page.nodeDrawOffsets![item.id] = { x, y: cr.y + cursorY };
-    cursorY += placeH;
+    // 只按本块自身高度推进游标：首个子块在下一次循环自然落在 (cursorY + gap)。
+    // 之前按 clusterH（父+首子）推进，等于把首子高度预占两次——块间距被拉宽一倍，
+    // 多根森林/父子链末尾页孤悬大量空白。clusterH 仅用于「父块带首子」的翻页判断。
+    cursorY += needH;
     streamY += item.height + FLOW_BLOCK_GAP_PX;
   }
   if (pages.length === 0 || page.nodeIds.length > 0) pages.push(page);

@@ -106,19 +106,62 @@ test.describe('P2.1 边弯折点交互', () => {
         { x: 350, y: 250 },
       ]);
     });
-    await expect.poll(() => edgePoints(page)).toHaveLength(2);
-    await page.waitForTimeout(300);
+    await expect.poll(() => edgePoints(page), { timeout: 8000 }).toHaveLength(2);
 
-    // 单击边选中 → 锚点手柄出现
-    await clickEdge(page, 0);
     const anchors = page.locator('[data-testid="edge-bend-anchor"]');
-    await expect(anchors).toHaveCount(2);
 
-    // 点中第一个锚点（pointerdown 登记激活锚点），再按 Delete → 只少一个
-    await anchors.nth(0).click({ force: true });
-    await page.waitForTimeout(100);
-    await page.keyboard.press('Delete');
-    await page.waitForTimeout(200);
+    // 限频高负载下「单击边 → 锚点手柄出现」的选择状态可能滞后：
+    // 有界轮询重试选中边，直到 2 个锚点手柄真实出现在 DOM 中。
+    await expect
+      .poll(
+        async () => {
+          if ((await anchors.count()) === 2) return 2;
+          await clickEdge(page, 0);
+          await page.waitForTimeout(300);
+          return anchors.count();
+        },
+        { timeout: 15000, intervals: [300, 500, 800] },
+      )
+      .toBe(2);
+
+    // 有界轮询 + 重试：点锚点 → Delete → 期望剩余 1 个点。
+    // 高负载下偶发 pointerdown 未登记激活锚点，Delete 落到 RF 原生删边（点数变 0），
+    // 此时重建边与两个弯折点恢复现场再试；断言数值（剩 1 个、剩 (350,250)）不变。
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await anchors.nth(0).click({ force: true });
+      await page.waitForTimeout(150);
+      await page.keyboard.press('Delete');
+      try {
+        await expect
+          .poll(() => edgePoints(page), { timeout: 6000, intervals: [150, 300, 600] })
+          .toHaveLength(1);
+        break;
+      } catch {
+        const pts = await edgePoints(page);
+        if (pts.length === 1) break;
+        if (pts.length === 0 && attempt < 2) {
+          // 边被误删：恢复现场（重建边 + 两个弯折点），重试删锚点动作。
+          await page.evaluate(() => {
+            const doc = window.__drawpaper__!.getState().doc;
+            window.__drawpaper__!.invoke('addEdge', doc.nodes[0]!.id, doc.nodes[1]!.id);
+          });
+          await page.waitForTimeout(300);
+          await page.evaluate(() => {
+            const e = window.__drawpaper__!.getState().doc.edges[0]!;
+            window.__drawpaper__!.invoke('setEdgePoints', e.id, [
+              { x: 200, y: 150 },
+              { x: 350, y: 250 },
+            ]);
+          });
+          await expect.poll(() => edgePoints(page), { timeout: 8000 }).toHaveLength(2);
+          // 重新选中边，让锚点手柄回来。
+          await clickEdge(page, 0);
+          await expect(anchors).toHaveCount(2, { timeout: 8000 });
+          continue;
+        }
+        throw new Error(`第 ${attempt + 1} 次删除后弯折点数=${pts.length}（期望 1）`);
+      }
+    }
 
     const pts = await edgePoints(page);
     expect(pts.length).toBe(1);

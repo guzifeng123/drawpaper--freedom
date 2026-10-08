@@ -215,9 +215,10 @@ export default function App() {
         <CanvasEditor api={editorApi} />
       </div>
 
-      {/* 画布分页虚线叠加层（世界坐标 → 屏幕坐标由 viewport 折算） */}
+      {/* 画布分页虚线叠加层（世界坐标 → 屏幕坐标由 viewport 折算）。
+          z 必须高于画布/工具 chrome，否则原点手柄与分页符手柄被压在底下抓不到。 */}
       {overlayResult && overlayResult.pages.length > 0 && (
-        <div className="pointer-events-none absolute inset-0 z-[5]">
+        <div className="pointer-events-none absolute inset-0 z-30">
           <PageBreakOverlay
             result={overlayResult}
             viewport={viewport}

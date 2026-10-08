@@ -174,21 +174,30 @@ export const PageBreakOverlay = React.memo(function PageBreakOverlay({
       })}
 
       {/* 分页原点拖动手柄 */}
-      {result.pages.length > 0 && onDragOrigin ? (
-        <div
-          data-testid="page-origin-handle"
-          className="pointer-events-auto absolute h-4 w-4 cursor-move rounded-full border-2 border-white bg-sky-500 shadow"
-          style={{
-            left: (result.pages[0]?.worldRect.x ?? 0) * zoom + vx,
-            top: (result.pages[0]?.worldRect.y ?? 0) * zoom + vy,
-            touchAction: 'none',
-          }}
-          onPointerDown={onPointerDown}
-          onPointerMove={onPointerMove}
-          onPointerUp={onPointerUp}
-          title="拖动调整分页原点"
-        />
-      ) : null}
+      {result.pages.length > 0 && onDragOrigin ? (() => {
+        // 手柄代表分页原点角点；但默认视口（fitView 后）角点常落在屏幕 (0,0)，
+        // 被顶部工具栏（z-20）压住抓不到。把手柄夹紧到视口安全区，并抬高层级。
+        const rawLeft = (result.pages[0]?.worldRect.x ?? 0) * zoom + vx;
+        const rawTop = (result.pages[0]?.worldRect.y ?? 0) * zoom + vy;
+        const left = Math.max(rawLeft, 56);
+        const top = Math.max(rawTop, 56);
+        return (
+          <div
+            data-testid="page-origin-handle"
+            className="pointer-events-auto absolute h-4 w-4 cursor-move rounded-full border-2 border-white bg-sky-500 shadow"
+            style={{
+              left,
+              top,
+              touchAction: 'none',
+              zIndex: 30,
+            }}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            title="拖动调整分页原点"
+          />
+        );
+      })() : null}
     </div>
   );
 });
