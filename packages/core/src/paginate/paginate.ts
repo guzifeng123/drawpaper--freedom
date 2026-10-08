@@ -141,12 +141,34 @@ function sizeOf(input: PaginateInput, id: string): MeasuredSize {
   return input.measured[id] ?? DEFAULT_NODE_SIZE;
 }
 
-/** 由 edges 构建 parentOf（首条入边 wins），只保留 active 内的边。 */
+/**
+ * 沿 parentOf 向上追溯：从 start 出发能否到达 target（带 visited 防环）。
+ * 若 target 已是 start 的祖先，则再加一条 edge start→target 会在 parent 指针上闭合环。
+ * 与 graph/buildMainTree 的 reachesUpward 同语义：保证 parentOf 恒为森林（无环）。
+ */
+function reachesUpward(start: string, target: string, parentOf: Map<string, string>): boolean {
+  const seen = new Set<string>();
+  let cur: string | undefined = start;
+  while (cur !== undefined) {
+    if (cur === target) return true;
+    if (seen.has(cur)) return false;
+    seen.add(cur);
+    cur = parentOf.get(cur);
+  }
+  return false;
+}
+
+/**
+ * 由 edges 构建 parentOf（首条入边 wins），只保留 active 内的边。
+ * 环防护：若某条边会在 parent 指针上闭合环（target 已是 source 的祖先），则跳过该边，
+ * 保证 parentOf 恒为森林（与 graph/buildMainTree 同策略）。多父边「首条 wins」不变。
+ */
 function buildParentOf(edges: Edge[] | undefined, active: Set<string>): Map<string, string> {
   const parentOf = new Map<string, string>();
   for (const e of edges ?? []) {
     if (!active.has(e.source) || !active.has(e.target)) continue;
     if (parentOf.has(e.target)) continue;
+    if (reachesUpward(e.source, e.target, parentOf)) continue; // 会成环则跳过
     parentOf.set(e.target, e.source);
   }
   return parentOf;
@@ -177,9 +199,14 @@ function activeNodeSet(input: PaginateInput): { active: Set<string>; notes: stri
   const parentOf = buildParentOf(input.edges, active);
   // 折叠后代剔除
   const collapsed = input.collapsed ?? {};
+  // 环防护（P1）：buildParentOf 已跳过闭合环的边、parentOf 恒为森林；此处再加 visited 双保险，
+  // 即便未来有任何路径喂入含环 parentOf，上行也必然有界返回（绝不主线程死锁）。
   const isFoldedDescendant = (id: string): boolean => {
+    const seen = new Set<string>();
     let cur = parentOf.get(id);
     while (cur) {
+      if (seen.has(cur)) break;
+      seen.add(cur);
       if (collapsed[cur]) return true;
       cur = parentOf.get(cur);
     }

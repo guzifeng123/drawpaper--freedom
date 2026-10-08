@@ -774,3 +774,49 @@ describe('layout / flow-layered 层内 barycenter 交叉最小化（Wave22）', 
     expect(countLayerCrossings(order, edges, rankOf)).toBeLessThanOrEqual(4);
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * P1 Wave23.5 环/多父输入有界退化硬ening（cycle-layout-hang）。
+ * layoutTree 全 5 种 mode 直接喂含环 edges（A→B、B→A）与多父 edges，
+ * 必须有界返回（不抛/不挂）、不喂 d3 含环树、输出确定。
+ * ------------------------------------------------------------------ */
+describe('cycle hardening / layoutTree bounded on cyclic & multi-parent', () => {
+  const modes = ['mindmap-right', 'mindmap-down', 'org-tree', 'radial', 'flow-layered'] as const;
+
+  function layoutInput(nodes: BlockNode[], edges: Edge[]) {
+    const measured: Record<string, MeasuredSize> = {};
+    for (const n of nodes) measured[n.id] = { width: n.width, height: n.height };
+    return { nodes, edges, rankSpacing: 40, nodeSpacing: 16, measured };
+  }
+
+  it.each(modes)('mode=%s : cyclic A→B,B→A returns bounded & deterministic', (mode) => {
+    const nodes = [makeNode('A'), makeNode('B')];
+    const edges = [makeEdge('ab', 'A', 'B'), makeEdge('ba', 'B', 'A')];
+    const input = layoutInput(nodes, edges);
+    // 不抛、不挂；连跑两次结果逐字节一致。
+    const r1 = layoutTree(input, mode);
+    const r2 = layoutTree(input, mode);
+    expect(r1.positions).toEqual(r2.positions);
+    // 两个节点都应被落点（环被截断后仍布局）。
+    expect(Object.keys(r1.positions).sort()).toEqual(['A', 'B']);
+  });
+
+  it.each(modes)('mode=%s : multi-parent A→C,B→C returns bounded & deterministic', (mode) => {
+    const nodes = [makeNode('A'), makeNode('B'), makeNode('C')];
+    const edges = [makeEdge('ac', 'A', 'C'), makeEdge('bc', 'B', 'C')];
+    const input = layoutInput(nodes, edges);
+    const r1 = layoutTree(input, mode);
+    const r2 = layoutTree(input, mode);
+    expect(r1.positions).toEqual(r2.positions);
+    expect(Object.keys(r1.positions).sort()).toEqual(['A', 'B', 'C']);
+  });
+
+  it('layoutTreeIncremental also bounded on cyclic input', () => {
+    const nodes = [makeNode('A'), makeNode('B')];
+    const edges = [makeEdge('ab', 'A', 'B'), makeEdge('ba', 'B', 'A')];
+    const input = layoutInput(nodes, edges);
+    const current = { positions: { A: { x: 0, y: 0 }, B: { x: 300, y: 0 } } };
+    const r = layoutTreeIncremental(current, { ...input, changedRootIds: new Set(['A']) }, 'mindmap-down');
+    expect(Object.keys(r.positions).sort()).toEqual(['A', 'B']);
+  });
+});
