@@ -10,8 +10,8 @@ import { test, expect, type Page } from '@playwright/test';
  *  - 自环候选不存在（源块自身被排除）；
  *  - 重复连接走「已存在」提示；
  *  - 成环（A→B→A）目标在候选中可见、不被静默吞掉；
- *  - 成环触发「连线冲突」裁决弹窗：以 test.fixme 挂账（基线渲染器成环死锁，见
- *    docs/wave23/keyboard-cross-connect.md §挂账）。
+ *  - 成环弹窗：真断言（修复已随 fix/cycle-layout-hang 合入）——B→A 成环触发
+ *    「连线冲突，请裁决」弹窗有界出现，①Esc 取消回退、②Space+Enter 断边裁决。
  */
 
 async function edgeList(page: Page) {
@@ -153,32 +153,62 @@ test.describe('Wave23 纯键盘跨块父子连线', () => {
     // 非本路引入），故此处不断言弹窗 DOM，仅验证候选递交正确。
   });
 
-  // 挂账：基线渲染器在「成环形状的图」上同步死锁（dev 与生产构建均复现，干净基线
-  // 4836b69 同样复现），ConflictDialog 不可达。按 Wave21 D 路纪律，缺口以 test.fixme
-  // 在 CI 里可见挂账，不删断言凑绿。函数体写全本应断言的步骤，待专门修复波次解除 fixme。
-  // 见 docs/wave23/keyboard-cross-connect.md §挂账。
-  test.fixme(
-    '成环 A→B→A：触发「连线冲突」裁决弹窗（阻塞：基线渲染器成环死锁，见 docs/wave23/keyboard-cross-connect.md §挂账）',
-    async ({ page }) => {
-      const A = await makeBlock(page, 0, 0, '苹果计划');
-      const B = await makeBlock(page, 320, 0, '蓝莓任务');
-      // 已有 A→B
-      await page.evaluate(({ A, B }) => window.__drawpaper__!.invoke('addEdge', A, B), { A, B });
-      await page.waitForTimeout(100);
+  // 真断言（成环布局死锁已由 fix/cycle-layout-hang 修复，见 docs/wave23/cycle-layout-hang.md）：
+  // 纯键盘发起 B→A 成环 → 「连线冲突，请裁决」弹窗有界出现、页面保持可交互。
+  // ① Esc 取消 → 触发边 B→A 精确回退（edges 恢复 1 条）、弹窗关闭；
+  // ② 重新键盘发起 B→A → 弹窗再现 → 键盘 Space 勾选断边复选框 + Tab 到「确定」Enter
+  //    → 裁决落定，图恢复无环（edges 仍 1 条：A→B 保留、B→A 被断边）。
+  // 连线发起与目标选择全程纯键盘；弹窗内部操作优先用键盘（Esc/Space/Tab/Enter）。
+  test('成环 A→B→A：触发「连线冲突」裁决弹窗；①Esc 取消回退、②断边裁决', async ({ page }) => {
+    const A = await makeBlock(page, 0, 0, '苹果计划');
+    const B = await makeBlock(page, 320, 0, '蓝莓任务');
+    // 已有 A→B
+    await page.evaluate(({ A, B }) => window.__drawpaper__!.invoke('addEdge', A, B), { A, B });
+    await page.waitForTimeout(100);
 
-      // 焦点 B，键盘发起 B→A（成环尝试）
+    // 键盘发起 B→A：焦点 B → c → 选 A → Enter（与成功连线用例同一套纯键盘入口）
+    const triggerCycle = async () => {
       await page.evaluate((id) => window.__drawpaper__!.invoke('setSelection', [id]), B);
-      await page.waitForTimeout(100);
+      await page.waitForTimeout(80);
       await page.keyboard.press('c');
       await expect(page.getByRole('listbox', { name: '可连接的目标块' })).toBeVisible();
       await page.keyboard.type('苹果', { delay: 30 });
-      await page.waitForTimeout(150);
+      await page.waitForTimeout(120);
       await expect(page.locator('[role="option"]').filter({ hasText: '苹果计划' })).toBeVisible();
-
-      // 确认 → 走 onConnect → api.addEdge → core analyze 检出成环 → pendingConflicts
-      // → 既有「连线冲突，请裁决」弹窗（而非静默失败）。当前基线在此步卡死主线程。
       await page.keyboard.press('Enter');
-      await expect(page.getByText('连线冲突，请裁决')).toBeVisible({ timeout: 3000 });
-    },
-  );
+    };
+
+    const dialog = page.getByText('连线冲突，请裁决');
+
+    // ===== ① Esc 取消 → 触发边回退、弹窗关闭 =====
+    await triggerCycle();
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText('成环了')).toBeVisible();
+    // 页面保持可交互（修复前此处主线程死锁，弹窗后任何操作都超时）
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden({ timeout: 3000 });
+    let edges = await edgeList(page);
+    expect(edges.length).toBe(1); // B→A 精确回退，只剩 A→B
+
+    // ===== ② 重新发起 → Space 勾选断边 + Enter「确定」裁决 =====
+    await triggerCycle();
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    // 弹窗焦点落在第一个可聚焦元素（断边复选框）；Space 勾选它。
+    // 若焦点顺序使 Space 未命中复选框，退化为最小化点击该 input（连线发起仍纯键盘）。
+    const checkbox = page.locator('input[type="checkbox"]').first();
+    if (!(await checkbox.isChecked())) {
+      await page.keyboard.press('Space');
+    }
+    if (!(await checkbox.isChecked())) {
+      await checkbox.check();
+    }
+    await expect(checkbox).toBeChecked();
+    // Tab 到「确定」按钮并 Enter（先 Tab 经过复选框后落按钮）
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Tab');
+    await page.keyboard.press('Enter');
+    await expect(dialog).toBeHidden({ timeout: 3000 });
+    edges = await edgeList(page);
+    expect(edges.length).toBe(1); // 断边裁决后：A→B 保留，B→A 被删，图恢复无环
+  });
 });
