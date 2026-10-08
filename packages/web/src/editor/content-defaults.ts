@@ -41,14 +41,10 @@ export interface ReminderData {
 
 /** 新建一个空表格 doc（2 行 2 列，首行为表头）。 */
 function emptyTableDoc(): unknown {
-  const cell = (): unknown => ({
-    type: 'tableCell',
-    content: [{ type: 'paragraph', content: [{ type: 'text', text: '' }] }],
-  });
-  const header = (): unknown => ({
-    type: 'tableHeader',
-    content: [{ type: 'paragraph', content: [{ type: 'text', text: '' }] }],
-  });
+  // 空段落不塞空文本节点（ProseMirror 拒绝空 text node，渲染直接抛错）。
+  const para = () => ({ type: 'paragraph', content: [] });
+  const cell = (): unknown => ({ type: 'tableCell', content: [para()] });
+  const header = (): unknown => ({ type: 'tableHeader', content: [para()] });
   const row = (cells: unknown[]): unknown => ({ type: 'tableRow', content: cells });
   return {
     type: 'doc',

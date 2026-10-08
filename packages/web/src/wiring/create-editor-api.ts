@@ -16,6 +16,7 @@ import type { ConflictBridge } from './conflict-bridge';
 import { getWiringUi } from './ui-store';
 import { requestDeleteNodes } from './block-delete-guard';
 import { ingestImageFile } from '@/storage/image-pipeline';
+import { defaultContentForType } from '@/editor/content-defaults';
 
 /**
  * createEditorApi —— 把 C 的真实 EditorStore 适配为 D 的结构型 EditorApi。
@@ -153,7 +154,9 @@ export function createEditorApi(store: EditorStoreApi, bridge: ConflictBridge): 
     // Wave7 P2.1：删块先走反链影响守卫——无影响直删，有影响弹确认框。
     deleteNodes: (ids) => void requestDeleteNodes(store, ids),
     updateContent: (id, data) => store.getState().updateContent(id, data),
-    setBlockType: (id, type) => store.getState().setBlockType(id, type),
+    // 切类型时带上类型专属空稿（表格→2x2 网格、代码块→codeBlock 等），
+    // 否则 core 默认空段落会让「表格块」里没有任何 table 节点，工具栏无从操作。
+    setBlockType: (id, type) => store.getState().setBlockType(id, type, defaultContentForType(type)),
     moveNode: (id, x, y) => store.getState().moveNode(id, x, y),
     resizeNode: (id, w, h) => store.getState().resizeNode(id, w, h),
     setMeasuredSizes: (patches) => {
