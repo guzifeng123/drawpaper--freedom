@@ -21,7 +21,9 @@ export default defineConfig({
   testDir: './e2e',
   // Wave8 离线回归跑生产预览（独立 playwright.offline.config.ts），dev server 无 SW，
   // 这里显式忽略 offline 目录，避免 dev 套件误跑离线用例。
-  testIgnore: '**/offline/**',
+  // Wave21：webkit 专用兼容 spec 只在 playwright.webkit.config.ts（project=webkit）下跑，
+  // 绝不让默认 chromium 套件误跑（其断言按 WebKit 无 FSA 写）。
+  testIgnore: ['**/offline/**', '**/wave21-webkit-compat.spec.ts'],
   fullyParallel: true,
   forbidOnly: !!process.env['CI'],
   retries: 0,

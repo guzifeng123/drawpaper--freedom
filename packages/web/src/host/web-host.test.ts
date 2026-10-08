@@ -68,9 +68,45 @@ describe('WebHostAdapter 降级路径（无 File System Access）', () => {
     vi.mocked(document.createElement).mockRestore();
   });
 
-  it('share：navigator.share 不存在时静默返回（不抛错）', async () => {
+  it('share：navigator.share 不存在时降级为 <a download> .kbnote（不静默）', async () => {
     const adapter = new WebHostAdapter();
-    // jsdom 无 navigator.share
-    await expect(adapter.share({ title: 't' })).resolves.toBeUndefined();
+    // jsdom 无 navigator.share。
+    URL.createObjectURL = vi.fn(() => 'blob:fake-share');
+    URL.revokeObjectURL = vi.fn();
+    let anchor: HTMLAnchorElement | null = null;
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const origCreate = document.createElement.bind(document);
+    vi.spyOn(document, 'createElement').mockImplementation((tag: string) => {
+      const el = origCreate(tag);
+      if (tag === 'a') anchor = el as HTMLAnchorElement;
+      return el;
+    });
+
+    await adapter.share({ title: '我的笔记', text: '{"v":1}' });
+
+    expect(anchor!.download).toBe('我的笔记.kbnote');
+    expect(clickSpy).toHaveBeenCalled();
+    clickSpy.mockRestore();
+    vi.mocked(document.createElement).mockRestore();
+  });
+
+  it('share：navigator.share 存在时调用系统分享，不触发下载', async () => {
+    const adapter = new WebHostAdapter();
+    const shareSpy = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'share', { value: shareSpy, configurable: true, writable: true });
+    await adapter.share({ title: 't', text: 'hello' });
+    expect(shareSpy).toHaveBeenCalledWith(expect.objectContaining({ title: 't', text: 'hello' }));
+    delete (navigator as unknown as { share?: unknown }).share;
+  });
+
+  it('share：用户取消（AbortError）静默，不兜底下载', async () => {
+    const adapter = new WebHostAdapter();
+    const clickSpy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const shareSpy = vi.fn().mockRejectedValue(new DOMException('aborted', 'AbortError'));
+    Object.defineProperty(navigator, 'share', { value: shareSpy, configurable: true, writable: true });
+    await adapter.share({ title: 't', text: 'hello' });
+    expect(clickSpy).not.toHaveBeenCalled();
+    clickSpy.mockRestore();
+    delete (navigator as unknown as { share?: unknown }).share;
   });
 });

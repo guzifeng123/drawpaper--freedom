@@ -15,6 +15,7 @@ import {
   shouldCreateWelcomeDoc,
   writeWelcomeFlag,
 } from '../wiring/welcome-doc';
+import { checkQuotaPressure, raiseQuotaDialog } from '../wiring/quota-watch';
 
 /**
  * React 单例 editor store：注入浏览器 storage / host，启动时打开最近文档或新建空白。
@@ -69,11 +70,13 @@ export const editorStore = createEditorStore(blankInitialDoc(), {
   fsa: activeFileManager,
 });
 
-// Wave7 robustness：FSA 写盘配额/失败不再静默，弹 toast 告知用户
-//（另存为路径仍会走 web-host 的 anchor 下载兜底，这里只做提示）。
+// Wave7 robustness / Wave21 WebKit 兼容：FSA 写盘配额/失败不再静默。
+//  - quota（QuotaExceededError）：Web/PWA 弹「导出到文件 / 分享」引导弹窗
+//    （raiseQuotaDialog 内部 Tauri 桌面端 no-op，走原生 Save 对话框）；
+//  - write-failed：轻 toast（另存为路径仍会走 web-host 的 anchor 下载兜底）。
 setStorageQuotaWarningHook((kind) => {
   if (kind === 'quota') {
-    pushToast('error', '浏览器存储配额不足，自动保存/落盘可能失败，请清理浏览器数据或用「导出 .kbnote」另存');
+    void raiseQuotaDialog();
   } else {
     pushToast('warn', '写入本地文件失败，已降级为浏览器下载');
   }
@@ -109,6 +112,10 @@ async function bootstrap(): Promise<void> {
     /* 无活动句柄或未授权 */
   }
   startSearchSync();
+  // Wave21：启动时预检一次浏览器配额（临界才弹引导，10 分钟节流；Tauri 内部 no-op）。
+  void checkQuotaPressure().catch(() => {
+    /* estimate 不支持/失败时静默——防御性，不阻塞启动 */
+  });
 }
 
 /** doc 变更防抖重建 MiniSearch；searchQuery 变化时即时查询。 */

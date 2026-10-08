@@ -21,6 +21,10 @@ import { syncController } from '@/sync/sync-controller';
 import { FakeDirectoryHandle } from '@/sync/directory-handle';
 import { syncStamper } from '@/sync/stamper';
 import { exportAllToKbpackBlob, importKbpackBundle } from '@/sync/kbpack-transfer';
+import { estimateStorageQuota, isFsaSupported } from '@/storage/fsa';
+import { webCanShare } from '@/host/web-host';
+import { raiseQuotaDialog, closeQuotaDialog, checkQuotaPressure, __resetQuotaWatchThrottle } from './quota-watch';
+import { getWiringUi } from './ui-store';
 import {
   listConflictCopies,
   registerConflictCopy,
@@ -183,6 +187,22 @@ export interface DrawpaperDevHook {
   welcomeClearFlag(): void;
   /** 按当前宿主检测 + 标记跑一次真实「首次运行创建」决策；返回是否创建。 */
   welcomeRunFirstRunFlow(): { created: boolean; title?: string };
+  // ---- Wave21 WebKit/Safari 存储兼容：配额弹窗 e2e seam ----
+  /** 拉起「存储空间不足」引导弹窗（e2e 直接触发；Tauri 下内部 no-op）。 */
+  quotaRaise(): Promise<void>;
+  /** 关闭配额弹窗。 */
+  quotaClose(): void;
+  /** 弹窗是否打开（e2e 断言用）。 */
+  quotaDialogOpen(): boolean;
+  /** 真实读一次 navigator.storage.estimate()（不支持返回 null）。 */
+  quotaEstimate(): Promise<{ usage: number; quota: number } | null>;
+  /** 跑一次写入前预检（临界才弹；返回档位）。 */
+  quotaCheck(): Promise<string>;
+  /** 重置临界弹窗节流窗口（e2e 复跑前调用）。 */
+  quotaResetThrottle(): void;
+  /** 宿主能力探测（e2e 能力矩阵断言）：Web Share / FSA。 */
+  webCanShare(): boolean;
+  webFsaSupported(): boolean;
 }
 
 declare global {
@@ -569,6 +589,31 @@ export function installDevHooks(): void {
       editorStore.getState().loadDoc(buildWelcomeDoc());
       writeWelcomeFlag();
       return { created: true as const, title: editorStore.getState().doc.title };
+    },
+    // Wave21 WebKit/Safari 存储兼容 e2e seam
+    async quotaRaise() {
+      await raiseQuotaDialog();
+    },
+    quotaClose() {
+      closeQuotaDialog();
+    },
+    quotaDialogOpen() {
+      return getWiringUi().quotaDialog.open;
+    },
+    async quotaEstimate() {
+      return estimateStorageQuota();
+    },
+    async quotaCheck() {
+      return checkQuotaPressure();
+    },
+    quotaResetThrottle() {
+      __resetQuotaWatchThrottle();
+    },
+    webCanShare() {
+      return webCanShare();
+    },
+    webFsaSupported() {
+      return isFsaSupported();
     },
   };
 }
