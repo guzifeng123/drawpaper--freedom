@@ -53,7 +53,7 @@ function makeResult(): PaginateResult {
         worldRect: { x: 0, y: 0, width: 500, height: 700 },
         nodeIds: ['n1'],
         edgeIds: [],
-        continuations: [{ token: 'A', edgeId: 'e1', pageIndex: 0, x: 140, y: 25, peerPageIndex: 1 }],
+        continuations: [{ token: 'A', edgeId: 'e1', pageIndex: 0, x: 140, y: 25, peerPageIndex: 1, angle: 0, role: 'out' }],
         scale: 1,
       },
       {
@@ -62,7 +62,7 @@ function makeResult(): PaginateResult {
         worldRect: { x: 500, y: 0, width: 500, height: 700 },
         nodeIds: ['n2'],
         edgeIds: [],
-        continuations: [{ token: 'A', edgeId: 'e1', pageIndex: 1, x: 10, y: 25, peerPageIndex: 0 }],
+        continuations: [{ token: 'A', edgeId: 'e1', pageIndex: 1, x: 10, y: 25, peerPageIndex: 0, angle: 0, role: 'in' }],
         scale: 1,
       },
     ],
@@ -97,6 +97,26 @@ describe('PrintSheets', () => {
       .filter((g) => g.querySelector('circle'))
       .map((g) => g.textContent);
     expect(contTexts).toEqual(['1', '1']);
+  });
+
+  it('续接标记渲染沿切线方向的箭头，且成对 out/in 自洽', () => {
+    render(<PrintSheets result={makeResult()} doc={makeDoc()} settings={baseSettings} edgeLabelsVisible />);
+    const gs = Array.from(
+      document.querySelectorAll('.drawpaper-print-container svg g[data-continuation]'),
+    );
+    expect(gs.length).toBe(2);
+    // 每个 g 内含一个箭头三角 path + 圆圈。
+    for (const g of gs) {
+      expect(g.querySelectorAll('path').length).toBe(1);
+      expect(g.querySelectorAll('circle').length).toBe(1);
+    }
+    const roles = gs.map((g) => g.getAttribute('data-role')).sort();
+    expect(roles).toEqual(['in', 'out']);
+    // 同 token、同角度（切线自洽）。
+    const tokens = gs.map((g) => g.getAttribute('data-continuation'));
+    expect(tokens[0]).toBe(tokens[1]);
+    const angles = gs.map((g) => g.getAttribute('data-angle'));
+    expect(angles[0]).toBe(angles[1]);
   });
 
   it('孤块黄色角标', () => {

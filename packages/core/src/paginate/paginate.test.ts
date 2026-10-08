@@ -221,6 +221,48 @@ describe('paginate / tiles', () => {
     const pagesWithNode = r.pages.filter((p) => p.nodeIds.includes('near'));
     expect(pagesWithNode).toHaveLength(1);
   });
+
+  it('跨页边成对续接标记：angle 两侧相等、out/in 成对、方向沿边走向', () => {
+    // n1(0,0) → n2(1000,0) 水平向右跨页。
+    const input = tilesInput(
+      { n1: { x: 0, y: 0 }, n2: { x: 1000, y: 0 } },
+      { n1: { width: 260, height: 80 }, n2: { width: 260, height: 80 } },
+      [makeEdge('e_dir', 'n1', 'n2')],
+    );
+    const r = paginateTiles(input);
+    const all = r.pages.flatMap((p) => p.continuations);
+    expect(all).toHaveLength(2);
+    const [a, b] = all;
+    // 同 token、peer 互指。
+    expect(a!.token).toBe(b!.token);
+    expect(a!.peerPageIndex).toBe(b!.pageIndex);
+    expect(b!.peerPageIndex).toBe(a!.pageIndex);
+    // out/in 成对（源侧=out，目标侧=in）。
+    const roles = [a!.role, b!.role].sort().join(',');
+    expect(roles).toBe('in,out');
+    // 两侧角度相等（切页边界切线自洽），水平向右 → angle≈0。
+    expect(a!.angle).toBeCloseTo(b!.angle, 6);
+    expect(a!.angle).toBeCloseTo(0, 3);
+    // out 侧在源节点所在页。
+    const outMarker = a!.role === 'out' ? a! : b!;
+    expect(outMarker.pageIndex).toBe(
+      r.pages.findIndex((p) => p.nodeIds.includes('n1')),
+    );
+  });
+
+  it('竖直跨页边：angle≈π/2（边向下走）', () => {
+    // top 右锚点 (260,40)；bottom 左锚点落在 x=260 → 边走向纯竖直向下。
+    const input = tilesInput(
+      { top: { x: 0, y: 0 }, bottom: { x: 260, y: 1500 } },
+      { top: { width: 260, height: 80 }, bottom: { width: 260, height: 80 } },
+      [makeEdge('e_v', 'top', 'bottom')],
+    );
+    const r = paginateTiles(input);
+    const all = r.pages.flatMap((p) => p.continuations);
+    expect(all).toHaveLength(2);
+    expect(all[0]!.angle).toBeCloseTo(all[1]!.angle, 6);
+    expect(all[0]!.angle).toBeCloseTo(Math.PI / 2, 3);
+  });
 });
 
 describe('paginate / tiles 空白页裁剪与重编号', () => {
@@ -382,5 +424,86 @@ describe('paginate / flow', () => {
     const r = paginateFlow(input);
     const warn = r.orphans.find((o) => o.nodeId === 'big');
     expect(warn?.severity).toBe('error');
+  });
+
+  it('多根森林：各根子树全部到场、零截断、块间距均匀（不孤悬空白）', () => {
+    // 3 个互不相连的根 r0/r1/r2，各带 2 个 80px 子块。
+    const positions: Record<string, { x: number; y: number }> = {};
+    const measured: Record<string, MeasuredSize> = {};
+    const edges: Edge[] = [];
+    const ids: string[] = [];
+    for (let ri = 0; ri < 3; ri++) {
+      const root = `r${ri}`;
+      ids.push(root);
+      positions[root] = { x: 0, y: 0 };
+      measured[root] = { width: 260, height: 80 };
+      for (let ci = 0; ci < 2; ci++) {
+        const kid = `r${ri}k${ci}`;
+        ids.push(kid);
+        positions[kid] = { x: 0, y: 0 };
+        measured[kid] = { width: 260, height: 80 };
+        edges.push(makeEdge(`e_${kid}`, root, kid));
+      }
+    }
+    const r = paginateFlow(flowInput(positions, measured, edges));
+    // 每个块恰好一页、零截断。
+    for (const id of ids) {
+      const pagesWith = r.pages.filter((p) => p.nodeIds.includes(id));
+      expect(pagesWith, `${id} 应只出现一次`).toHaveLength(1);
+    }
+    // 9 块 × 88px = 792px < 内容区 ~1010 → 应全部落在一页（修正前因双占首子高度，
+    // 块间距被拉宽一倍而撑出多页）。
+    expect(r.pages.length).toBe(1);
+    // 流序相邻块的纵向间距恒为 88（块高 80 + 间隙 8），无额外空白。
+    // 与 DFS 展开顺序无关：按 y 排序后，相邻两快的差都必须是 88。
+    const page = r.pages[0]!;
+    const ys = ids
+      .map((id) => page.nodeDrawOffsets![id]!.y)
+      .sort((a, b) => a - b);
+    for (let i = 1; i < ys.length; i++) {
+      const gap = ys[i]! - ys[i - 1]!;
+      // 首块无前导间距（80），其后相邻块 = 块高 80 + 间隙 8 = 88；
+      // 绝不能出现 ~176 的双占间距（游标按 clusterH 推进的旧病征）。
+      const ok = Math.abs(gap - 80) < 1 || Math.abs(gap - 88) < 1;
+      expect(ok, `相邻流块间距 ${gap} 异常`).toBe(true);
+    }
+    expect(ys[0]!).toBeCloseTo(contentRect({ orientation: 'portrait', marginMm: 15 }).y, 1);
+  });
+
+  it('多根森林跨页：根不在页边被截断、不出现某根孤悬整页空白', () => {
+    // 2 个根，各带 3 个 300px 块 → 自然要翻页；验证每根都完整归属、无块越出内容区。
+    const positions: Record<string, { x: number; y: number }> = {};
+    const measured: Record<string, MeasuredSize> = {};
+    const edges: Edge[] = [];
+    const ids: string[] = [];
+    for (let ri = 0; ri < 2; ri++) {
+      const root = `rr${ri}`;
+      ids.push(root);
+      positions[root] = { x: 0, y: 0 };
+      measured[root] = { width: 260, height: 300 };
+      for (let ci = 0; ci < 3; ci++) {
+        const kid = `rr${ri}k${ci}`;
+        ids.push(kid);
+        positions[kid] = { x: 0, y: 0 };
+        measured[kid] = { width: 260, height: 300 };
+        edges.push(makeEdge(`e_${kid}`, root, kid));
+      }
+    }
+    const r = paginateFlow(flowInput(positions, measured, edges));
+    const cr = contentRect({ orientation: 'portrait', marginMm: 15 });
+    for (const p of r.pages) {
+      for (const id of p.nodeIds) {
+        const off = p.nodeDrawOffsets![id]!;
+        const h = measured[id]!.height;
+        expect(off.y).toBeGreaterThanOrEqual(cr.y - 1);
+        expect(off.y + h).toBeLessThanOrEqual(cr.y + cr.height + 1);
+      }
+      // 每页至少 2 个块（不允许某一页只挂一个根、其余大片空白的失衡分页）。
+      expect(p.nodeIds.length).toBeGreaterThanOrEqual(2);
+    }
+    for (const id of ids) {
+      const pagesWith = r.pages.filter((p) => p.nodeIds.includes(id));
+      expect(pagesWith).toHaveLength(1);
+    }
   });
 });

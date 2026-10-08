@@ -195,7 +195,7 @@ export function PrintSheets({ result, doc, settings, edgeLabelsVisible }: PrintS
                   if (!n) return null;
                   const emb = parseDocEmbedData(n.content.data);
                   return (
-                    <div key={id} className="mb-3 rounded border p-2">
+                    <div key={id} data-node-id={id} className="mb-3 rounded border p-2">
                       {emb ? <PrintEmbedBlock embed={emb} gray={gray} /> : <TiptapStatic doc={n.content.data} gray={gray} />}
                     </div>
                   );
@@ -316,28 +316,56 @@ export function PrintSheets({ result, doc, settings, edgeLabelsVisible }: PrintS
                     });
                   })()}
 
-                  {/* 跨页续接标记：同编号小圆圈 */}
-                  {page.continuations.map((c) => (
-                    <g key={c.token + c.pageIndex}>
-                      <circle
-                        cx={c.x}
-                        cy={c.y}
-                        r={MARKER_R}
-                        fill="#fff"
-                        stroke={gray ? '#333' : '#0ea5e9'}
-                        strokeWidth={1.5}
-                      />
-                      <text
-                        x={c.x}
-                        y={c.y + 3}
-                        fontSize={8}
-                        textAnchor="middle"
-                        fill={gray ? '#333' : '#0ea5e9'}
+                  {/* 跨页续接标记：同编号小圆圈 + 沿切线方向的小箭头 */}
+                  {page.continuations.map((c) => {
+                    // 边在该续接点的前进方向（页面本地坐标）。
+                    const dx = Math.cos(c.angle);
+                    const dy = Math.sin(c.angle);
+                    // 箭头尖在圆外缘朝外/朝内（out 沿前进方向出页；in 沿前进方向入页朝目标节点）。
+                    const tipR = MARKER_R + 3;
+                    const baseR = MARKER_R - 2;
+                    const tipX = c.x + dx * tipR;
+                    const tipY = c.y + dy * tipR;
+                    const px = -dy;
+                    const py = dx;
+                    const halfW = 3.5;
+                    const b1x = c.x + dx * baseR + px * halfW;
+                    const b1y = c.y + dy * baseR + py * halfW;
+                    const b2x = c.x + dx * baseR - px * halfW;
+                    const b2y = c.y + dy * baseR - py * halfW;
+                    const arrowColor = gray ? '#333' : '#0ea5e9';
+                    return (
+                      <g
+                        key={c.token + c.pageIndex}
+                        data-continuation={c.token}
+                        data-role={c.role}
+                        data-angle={c.angle.toFixed(4)}
+                        data-peer-page={c.peerPageIndex}
                       >
-                        {tokenToNumber.get(c.token) ?? ''}
-                      </text>
-                    </g>
-                  ))}
+                        <path
+                          d={`M ${tipX} ${tipY} L ${b1x} ${b1y} L ${b2x} ${b2y} Z`}
+                          fill={arrowColor}
+                        />
+                        <circle
+                          cx={c.x}
+                          cy={c.y}
+                          r={MARKER_R}
+                          fill="#fff"
+                          stroke={arrowColor}
+                          strokeWidth={1.5}
+                        />
+                        <text
+                          x={c.x}
+                          y={c.y + 3}
+                          fontSize={8}
+                          textAnchor="middle"
+                          fill={arrowColor}
+                        >
+                          {tokenToNumber.get(c.token) ?? ''}
+                        </text>
+                      </g>
+                    );
+                  })}
                 </svg>
               </>
             )}

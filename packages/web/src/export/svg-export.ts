@@ -162,10 +162,23 @@ function renderSheet(
     .join('\n  ');
 
   const contSvg = sheet.continuations
-    .map(
-      (c) =>
-        `<g class="cont"><circle cx="${c.x}" cy="${c.y}" r="7" fill="#e0f2fe" stroke="#0284c7"/><text x="${c.x}" y="${c.y + 3}" font-size="8" text-anchor="middle" fill="#075985">${tokenToNumber?.get(c.token) ?? escXml(c.token.replace('cont:', ''))}</text></g>`,
-    )
+    .map((c) => {
+      // 沿边切线方向的小箭头：out 出页朝 peer、in 入页朝目标节点（两侧同角度自洽）。
+      const angle = c.angle ?? 0;
+      const R = 7;
+      const dx = Math.cos(angle);
+      const dy = Math.sin(angle);
+      const px = -dy;
+      const py = dx;
+      const tipX = c.x + dx * (R + 3);
+      const tipY = c.y + dy * (R + 3);
+      const b1x = c.x + dx * (R - 2) + px * 3.5;
+      const b1y = c.y + dy * (R - 2) + py * 3.5;
+      const b2x = c.x + dx * (R - 2) - px * 3.5;
+      const b2y = c.y + dy * (R - 2) - py * 3.5;
+      const num = tokenToNumber?.get(c.token) ?? escXml(c.token.replace('cont:', ''));
+      return `<g class="cont" data-role="${c.role ?? ''}" data-angle="${angle.toFixed(4)}"><path d="M ${tipX.toFixed(1)} ${tipY.toFixed(1)} L ${b1x.toFixed(1)} ${b1y.toFixed(1)} L ${b2x.toFixed(1)} ${b2y.toFixed(1)} Z" fill="#0284c7"/><circle cx="${c.x}" cy="${c.y}" r="${R}" fill="#e0f2fe" stroke="#0284c7"/><text x="${c.x}" y="${c.y + 3}" font-size="8" text-anchor="middle" fill="#075985">${num}</text></g>`;
+    })
     .join('\n  ');
 
   const header = sheet.headerText

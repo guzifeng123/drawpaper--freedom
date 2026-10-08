@@ -54,6 +54,26 @@ export interface SegmentPair {
   pointA: Pt;
   /** 终点世界坐标（落点）。 */
   pointB: Pt;
+  /**
+   * 边在跨页处的「前进方向」（世界坐标，已归一化；翻译/缩放不改变其朝向）。
+   * pageA 侧为出页方向（朝 peer），pageB 侧为入页方向（朝本页内）；
+   * 两侧共享同一方向向量——即同一逻辑边在切页边界的切线方向。
+   */
+  dir: Pt;
+}
+
+/** 单位化方向向量；零向量兜底为 (1,0)，保证角度有限。 */
+export function unitDir(a: Pt, b: Pt): Pt {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-9) return { x: 1, y: 0 };
+  return { x: dx / len, y: dy / len };
+}
+
+/** 方向向量 → 页面本地 SVG 角度（弧度，y 轴向下；0 = +x，顺时针为正）。 */
+export function dirToAngle(dir: Pt): number {
+  return Math.atan2(dir.y, dir.x);
 }
 
 /**
@@ -74,7 +94,14 @@ export function planBentEdgeSegments(
     if (pa === pb) {
       samePageEdges.push(pa);
     } else {
-      crossPairs.push({ seg: i, pageA: pa, pageB: pb, pointA: a, pointB: b });
+      crossPairs.push({
+        seg: i,
+        pageA: pa,
+        pageB: pb,
+        pointA: a,
+        pointB: b,
+        dir: unitDir(a, b),
+      });
     }
   }
   return { samePageEdges, crossPairs };

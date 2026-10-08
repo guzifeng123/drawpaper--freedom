@@ -56,12 +56,13 @@ describe('flow 手动分页符', () => {
     n3: { width: 200, height: 300 },
   };
 
-  it('无手动符：n0/n1 各自独占页（簇规则），n2/n3 同页', () => {
+  it('无手动符：簇规则下 n0/n1 同页、n2/n3 同页（游标按本块推进，不双占首子高度）', () => {
     const input: PaginateInput = { layout, measured, settings: baseSettings(), nodes, edges };
     const r = paginateFlow(input);
-    expect(r.pages[0]!.nodeIds).toEqual(['n0']);
-    expect(r.pages[1]!.nodeIds).toEqual(['n1']);
-    expect(r.pages[2]!.nodeIds).toEqual(['n2', 'n3']);
+    // 300px 块 + 8px 间隙、内容区 ~1010px：n0(0)+n1(308)=608，n2 带首子簇需 616 → 翻页；
+    // 翻页后 n2(0)+n3(308)=616 同页。共 2 页（修正前每父块预占首子高度，n0/n1 各独占一页）。
+    expect(r.pages[0]!.nodeIds).toEqual(['n0', 'n1']);
+    expect(r.pages[1]!.nodeIds).toEqual(['n2', 'n3']);
   });
 
   it('手动符在 n3 流坐标处：n3 另起一页', () => {
@@ -69,8 +70,8 @@ describe('flow 手动分页符', () => {
     s.pageBreaks = [{ at: 924 }]; // n3 的流 y = 308*3 = 924（自然在 n2/n3 同页内）
     const input: PaginateInput = { layout, measured, settings: s, nodes, edges };
     const r = paginateFlow(input);
-    expect(r.pages[2]!.nodeIds).toEqual(['n2']);
-    expect(r.pages[3]!.nodeIds).toEqual(['n3']);
+    expect(r.pages[1]!.nodeIds).toEqual(['n2']);
+    expect(r.pages[2]!.nodeIds).toEqual(['n3']);
   });
 });
 
