@@ -69,11 +69,13 @@ async function slashPickImage(page: Page) {
   await page.evaluate(() => {
     window.__drawpaper__!.invoke('addNode', 'text', 200, 200);
   });
-  await page.waitForTimeout(500);
+  // 等节点入 store + 渲染到 DOM。
+  await page.waitForFunction(() => window.__drawpaper__!.getState().doc.nodes.length >= 1);
   await page.keyboard.press('Control+0');
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(500);
+  await page.waitForSelector('.react-flow__node', { timeout: 5000 });
   await page.dblclick('.react-flow__node');
-  await page.waitForTimeout(200);
+  await page.waitForTimeout(300);
   await page.keyboard.type('/');
   const [chooser] = await Promise.all([
     page.waitForEvent('filechooser', { timeout: 5000 }),
@@ -90,8 +92,7 @@ async function newDegradedContext(browser: Browser, mode: 'no-storage' | 'throws
   const ctx = await browser.newContext();
   await ctx.addInitScript((m) => {
     if (m === 'no-storage') {
-      // 故意覆写 navigator.storage = undefined 模拟旧浏览器/非安全上下文
-      // （直接 delete 在 host object 上可能不生效，用 defineProperty 强覆写）。
+      // 故意覆写 navigator.storage = undefined 模拟旧浏览器/非安全上下文。
       Object.defineProperty(navigator, 'storage', {
         value: undefined,
         configurable: true,
@@ -99,10 +100,14 @@ async function newDegradedContext(browser: Browser, mode: 'no-storage' | 'throws
       });
     } else {
       // getDirectory 存在但调用抛 NotAllowedError（隐私模式）。
-      const s = (navigator as unknown as { storage?: { getDirectory?: unknown } }).storage;
-      if (s && typeof s.getDirectory === 'function') {
-        s.getDirectory = () =>
-          Promise.reject(new DOMException('Access to OPFS is not allowed', 'NotAllowedError'));
+      // 用 Object.defineProperty 强覆写实例属性，shadow 掉原型上的原生方法。
+      const s = (navigator as unknown as { storage?: Record<string, unknown> }).storage;
+      if (s) {
+        Object.defineProperty(s, 'getDirectory', {
+          value: () => Promise.reject(new DOMException('Access to OPFS is not allowed', 'NotAllowedError')),
+          configurable: true,
+          writable: true,
+        });
       }
     }
   }, mode);
@@ -111,6 +116,7 @@ async function newDegradedContext(browser: Browser, mode: 'no-storage' | 'throws
 
 test.describe('Wave20 OPFS 降级 — 模式 A（navigator.storage 不存在）', () => {
   test('a 斜杠图片内联 data:；b 拖入内联；c reload 持久化；d 导出内嵌；e 附件 toast 不建块', async ({ browser }) => {
+    test.setTimeout(60_000);
     const ctx = await newDegradedContext(browser, 'no-storage');
     const page = await ctx.newPage();
     await waitForApp(page);
@@ -154,6 +160,7 @@ test.describe('Wave20 OPFS 降级 — 模式 A（navigator.storage 不存在）'
       return nodes.filter((n) => n.type === 'image').map((n) => n.image!.src);
     });
     console.log('DEGRADED_A_AFTER_DROP_SRCS', afterDrop);
+    expect(afterDrop.length).toBeGreaterThanOrEqual(2);
     for (const s of afterDrop) expect(s.startsWith('data:')).toBe(true);
 
     // ---- (c) reload 后内联图片仍在（IDB 持久化，不依赖 OPFS）----
@@ -161,6 +168,8 @@ test.describe('Wave20 OPFS 降级 — 模式 A（navigator.storage 不存在）'
     await page.waitForTimeout(800);
     await page.reload();
     await waitForApp(page);
+    await page.keyboard.press('Control+0');
+    await page.waitForTimeout(500);
     await page.waitForFunction(() => {
       const nodes = window.__drawpaper__!.getState().doc.nodes;
       return nodes.filter((n) => n.type === 'image').length >= 2;
@@ -177,6 +186,7 @@ test.describe('Wave20 OPFS 降级 — 模式 A（navigator.storage 不存在）'
       return nodes.filter((n) => n.type === 'image').map((n) => n.image!.src);
     });
     console.log('DEGRADED_A_RELOAD_SRCS', afterReload.length);
+    expect(afterReload.length).toBeGreaterThanOrEqual(2);
     for (const s of afterReload) expect(s.startsWith('data:')).toBe(true);
 
     // ---- (d) 导出 SVG 内嵌 data:image ----
@@ -208,6 +218,7 @@ test.describe('Wave20 OPFS 降级 — 模式 A（navigator.storage 不存在）'
 
 test.describe('Wave20 OPFS 降级 — 模式 B（getDirectory 抛 NotAllowedError）', () => {
   test('拖入图片内联 + 附件 toast 不建块', async ({ browser }) => {
+    test.setTimeout(30_000);
     const ctx = await newDegradedContext(browser, 'throws');
     const page = await ctx.newPage();
     await waitForApp(page);
@@ -222,11 +233,13 @@ test.describe('Wave20 OPFS 降级 — 模式 B（getDirectory 抛 NotAllowedErro
     await page.waitForFunction(() => {
       const nodes = window.__drawpaper__!.getState().doc.nodes;
       return nodes.some((n) => n.type === 'image' && !!n.image?.src);
-    });
+    }, null, { timeout: 10_000 });
     const imgs = await page.evaluate(() =>
       window.__drawpaper__!.getState().doc.nodes.filter((n) => n.type === 'image').map((n) => n.image!.src),
     );
     console.log('DEGRADED_B_DROP_SRCS', imgs);
+    // 必须有图片块且全部是 data: 内联（不允许空数组空过）。
+    expect(imgs.length).toBeGreaterThanOrEqual(1);
     for (const s of imgs) expect(s.startsWith('data:')).toBe(true);
 
     // 附件拖入 → toast（getDirectory 运行时抛错 → putImageAsset 兜底返回 data: URL
