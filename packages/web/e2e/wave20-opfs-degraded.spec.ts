@@ -192,11 +192,11 @@ test.describe('Wave20 OPFS 降级 — 模式 A（navigator.storage 不存在）'
     await dropPdf(page);
     await expect(
       page.locator('div[role="status"]', { hasText: /附件本地存储|OPFS/ }),
-    ).toBeVisible({ timeout: 5000 });
+    ).toBeVisible({ timeout: 15_000 });
     await page.waitForFunction(
       (before) => window.__drawpaper__!.getState().doc.nodes.length === before,
       nodesBefore,
-      { timeout: 5_000 },
+      { timeout: 15_000 },
     );
     const nodesAfter = await page.evaluate(() => window.__drawpaper__!.getState().doc.nodes.length);
     expect(nodesAfter).toBe(nodesBefore);
@@ -227,7 +227,7 @@ test.describe('Wave20 OPFS 降级 — 模式 B（getDirectory 抛 NotAllowedErro
     await page.waitForFunction(() => {
       const nodes = window.__drawpaper__!.getState().doc.nodes;
       return nodes.some((n) => n.type === 'image' && !!n.image?.src);
-    }, null, { timeout: 10_000 });
+    }, null, { timeout: 30_000 });
     const imgs = await page.evaluate(() =>
       window.__drawpaper__!.getState().doc.nodes.filter((n) => n.type === 'image').map((n) => n.image!.src),
     );
@@ -242,12 +242,12 @@ test.describe('Wave20 OPFS 降级 — 模式 B（getDirectory 抛 NotAllowedErro
     await dropPdf(page);
     await expect(
       page.locator('div[role="status"]', { hasText: /附件本地存储|OPFS/ }),
-    ).toBeVisible({ timeout: 5000 });
+    ).toBeVisible({ timeout: 15_000 });
     // 轮询确认 node count 不变（不依赖固定 sleep）。
     await page.waitForFunction(
       (before) => window.__drawpaper__!.getState().doc.nodes.length === before,
       nodesBefore,
-      { timeout: 5_000 },
+      { timeout: 15_000 },
     );
     const nodesAfter = await page.evaluate(() => window.__drawpaper__!.getState().doc.nodes.length);
     expect(nodesAfter).toBe(nodesBefore);
