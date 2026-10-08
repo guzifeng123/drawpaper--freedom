@@ -12,6 +12,7 @@
   `{kind:'doc-embed',targetDocId,targetNodeId,titleSnapshot}`），不另造数据结构；触发字符随选定
   一并从正文删除。代码块/行内代码内不触发，空库显示空态不崩，IME 组合期不误选。`[[双链]]`
   浮层同步补上代码上下文守卫，两个触发入口行为一致。详见 `docs/wave22/embed-trigger.md`。
+
 ### 手机窄屏外壳（≤640px，Wave22 B 路）
 
 - **手机 PWA 窄屏响应式外壳**：首个响应式断点（640px），纯 web 表现层、零新依赖、
@@ -24,6 +25,7 @@
 - **RF Controls 可访问性挂账收口（docs/wave9 §9）**：缩放四按钮（放大 / 缩小 /
   适应视图 / 锁定视口）补中文 aria-label，axe 区域扫描零 violation。
   详见 `docs/wave22/mobile-narrow-shell.md`。
+
 ### 布局
 
 - **逻辑流分层（flow-layered）层内交叉最小化（Wave22）**：在最长路径分层确定之后、
@@ -33,6 +35,7 @@
   单链/单树/多根森林维持零交叉且层序不变。纯 TS 手写、零新依赖（未引 dagre/elkjs），
   不升 schema、不改枚举；pinned 绕行、选中分支、collapsed、增量整理继续复用。
   详见 `docs/wave22/flow-barycenter.md`。
+
 ### 修复 / 性能
 
 - **撤销栈加有界历史上限，修复长会话 / 超大文档内存单调膨胀（Wave22）**：core 命令栈
