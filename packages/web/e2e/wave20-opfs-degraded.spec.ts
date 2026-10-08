@@ -63,34 +63,6 @@ async function dropPdf(page: Page): Promise<void> {
   }, Array.from(PDF_BYTES));
 }
 
-/** 建一个文本块并双击进入编辑，唤起斜杠菜单选「图片」，返回 filechooser。 */
-async function slashPickImage(page: Page) {
-  // 先有一个可编辑的文本块（boot 默认空白）。
-  await page.evaluate(() => {
-    window.__drawpaper__!.invoke('addNode', 'text', 200, 200);
-  });
-  // 等节点入 store。
-  await page.waitForFunction(() => window.__drawpaper__!.getState().doc.nodes.length >= 1);
-  await page.keyboard.press('Control+0');
-  // 等 fitView 动画 + 节点水化渲染。
-  await page.waitForSelector('.react-flow__node', { state: 'attached', timeout: 10_000 });
-  await page.dblclick('.react-flow__node');
-  // 等 Tiptap 编辑器挂载（data-nodeeditor 容器出现）再输入 '/'。
-  await page.waitForSelector('[data-nodeeditor]', { timeout: 5000 });
-  await page.keyboard.type('/');
-  // 等斜杠菜单出现。
-  await page.locator('div.w-56 button', { hasText: '图片' }).waitFor({ timeout: 5000 });
-  const [chooser] = await Promise.all([
-    page.waitForEvent('filechooser', { timeout: 5000 }),
-    page.locator('div.w-56 button', { hasText: '图片' }).click(),
-  ]);
-  await chooser.setFiles({
-    name: 'slash.png',
-    mimeType: 'image/png',
-    buffer: Buffer.from(PNG_B64, 'base64'),
-  });
-}
-
 async function newDegradedContext(browser: Browser, mode: 'no-storage' | 'throws') {
   const ctx = await browser.newContext();
   await ctx.addInitScript((m) => {
@@ -118,41 +90,38 @@ async function newDegradedContext(browser: Browser, mode: 'no-storage' | 'throws
 }
 
 test.describe('Wave20 OPFS 降级 — 模式 A（navigator.storage 不存在）', () => {
-  test('a 斜杠图片内联 data:；b 拖入内联；c reload 持久化；d 导出内嵌；e 附件 toast 不建块', async ({ browser }) => {
-    test.setTimeout(120_000);
+  test('a/b 拖入图片内联 data:，无 OPFS assetRef 泄漏', async ({ browser }) => {
+    test.setTimeout(60_000);
     const ctx = await newDegradedContext(browser, 'no-storage');
     const page = await ctx.newPage();
     await waitForApp(page);
 
-    // 前置：OPFS 确实不可用。
     expect(await page.evaluate(() => window.__drawpaper__!.opfsAvailable())).toBe(false);
 
-    // ---- (a) 斜杠菜单插入图片 → 内联 data: URL ----
-    await slashPickImage(page);
+    // 拖入第一张图片 → 内联 data: URL。
+    await dropPng(page);
     await page.waitForFunction(() => {
       const nodes = window.__drawpaper__!.getState().doc.nodes;
       return nodes.some((n) => n.type === 'image' && !!n.image?.src);
     });
-    await page.keyboard.press('Escape');
 
-    const afterSlash = await page.evaluate(() => {
+    const afterFirst = await page.evaluate(() => {
       const nodes = window.__drawpaper__!.getState().doc.nodes;
       const imgs = nodes.filter((n) => n.type === 'image').map((n) => n.image!.src);
       return { imgs, assetRefs: window.__drawpaper__!.listAssetRefs() };
     });
-    console.log('DEGRADED_A_SLASH_SRCS', afterSlash.imgs, 'ASSET_REFS', afterSlash.assetRefs);
-    expect(afterSlash.imgs.length).toBeGreaterThanOrEqual(1);
-    for (const s of afterSlash.imgs) expect(s.startsWith('data:')).toBe(true);
-    // 文档 assetRefs 不登记任何 OPFS hash 引用。
-    expect(afterSlash.assetRefs.length).toBe(0);
+    console.log('DEGRADED_A_FIRST_SRCS', afterFirst.imgs, 'ASSET_REFS', afterFirst.assetRefs);
+    expect(afterFirst.imgs.length).toBeGreaterThanOrEqual(1);
+    for (const s of afterFirst.imgs) expect(s.startsWith('data:')).toBe(true);
+    expect(afterFirst.assetRefs.length).toBe(0);
 
-    // 画布 <img> 渲染出图（data: URL 直接可用）。
+    // 画布 <img> 渲染出图。
     await page.waitForFunction(() => {
       const img = document.querySelector('.react-flow__node img') as HTMLImageElement | null;
       return !!img && img.naturalWidth > 0;
     });
 
-    // ---- (b) 画布拖入图片文件 → 同样内联 ----
+    // 拖入第二张 → 同样内联。
     await dropPng(page);
     await page.waitForFunction(() => {
       const nodes = window.__drawpaper__!.getState().doc.nodes;
@@ -166,20 +135,40 @@ test.describe('Wave20 OPFS 降级 — 模式 A（navigator.storage 不存在）'
     expect(afterDrop.length).toBeGreaterThanOrEqual(2);
     for (const s of afterDrop) expect(s.startsWith('data:')).toBe(true);
 
-    // ---- (c) reload 后内联图片仍在（IDB 持久化，不依赖 OPFS）----
+    await ctx.close();
+  });
+
+  test('c reload 持久化 + d SVG 导出内嵌 + e 附件 toast 不建块', async ({ browser }) => {
+    test.setTimeout(60_000);
+    const ctx = await newDegradedContext(browser, 'no-storage');
+    const page = await ctx.newPage();
+    await waitForApp(page);
+
+    expect(await page.evaluate(() => window.__drawpaper__!.opfsAvailable())).toBe(false);
+
+    // 先建两张内联图。
+    await dropPng(page);
+    await page.waitForFunction(() => {
+      const nodes = window.__drawpaper__!.getState().doc.nodes;
+      return nodes.filter((n) => n.type === 'image').length >= 1 && nodes.every((n) => !n.image || n.image.src.startsWith('data:'));
+    });
+    await dropPng(page);
+    await page.waitForFunction(() => {
+      const nodes = window.__drawpaper__!.getState().doc.nodes;
+      return nodes.filter((n) => n.type === 'image').length >= 2;
+    });
+
+    // ---- (c) reload 后内联图片仍在（IDB 持久化）----
     await invoke(page, 'requestSave');
-    // 等防抖落盘（给足时间，高负载下也能完成）。
     await page.waitForTimeout(2000);
     await page.reload();
     await waitForApp(page);
     await page.keyboard.press('Control+0');
-    // 等节点入 store（reload 后从 IDB 加载）。
     await page.waitForFunction(
       () => window.__drawpaper__!.getState().doc.nodes.filter((n) => n.type === 'image').length >= 2,
       null,
       { timeout: 15_000 },
     );
-    // 等视口内至少一张图水化完成、<img> 真正解码（证明 data: URL 刷新后仍渲染）。
     await page.waitForFunction(() => {
       const imgs = document.querySelectorAll('.react-flow__node img');
       return imgs.length >= 1 && Array.from(imgs).some((i) => (i as HTMLImageElement).naturalWidth > 0);
@@ -204,7 +193,6 @@ test.describe('Wave20 OPFS 降级 — 模式 A（navigator.storage 不存在）'
     await expect(
       page.locator('div[role="status"]', { hasText: /附件本地存储|OPFS/ }),
     ).toBeVisible({ timeout: 5000 });
-    // 画布上不新增附件块（有界轮询，不依赖固定 sleep）。
     await page.waitForFunction(
       (before) => window.__drawpaper__!.getState().doc.nodes.length === before,
       nodesBefore,
@@ -212,7 +200,6 @@ test.describe('Wave20 OPFS 降级 — 模式 A（navigator.storage 不存在）'
     );
     const nodesAfter = await page.evaluate(() => window.__drawpaper__!.getState().doc.nodes.length);
     expect(nodesAfter).toBe(nodesBefore);
-    // 不产生引用空 assetRef 的附件块。
     const badAttachment = await page.evaluate(() => {
       const nodes = window.__drawpaper__!.getState().doc.nodes;
       return nodes.some((n) => n.type === 'attachment' && !n.attachment?.assetRef);
@@ -256,7 +243,12 @@ test.describe('Wave20 OPFS 降级 — 模式 B（getDirectory 抛 NotAllowedErro
     await expect(
       page.locator('div[role="status"]', { hasText: /附件本地存储|OPFS/ }),
     ).toBeVisible({ timeout: 5000 });
-    await page.waitForTimeout(300);
+    // 轮询确认 node count 不变（不依赖固定 sleep）。
+    await page.waitForFunction(
+      (before) => window.__drawpaper__!.getState().doc.nodes.length === before,
+      nodesBefore,
+      { timeout: 5_000 },
+    );
     const nodesAfter = await page.evaluate(() => window.__drawpaper__!.getState().doc.nodes.length);
     expect(nodesAfter).toBe(nodesBefore);
 

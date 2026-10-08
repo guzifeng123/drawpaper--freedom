@@ -131,23 +131,29 @@ test.describe('P1 验收加固', () => {
   });
 
   test('导出：SVG 与 Markdown 真实下载文件', async ({ page }) => {
+    test.setTimeout(60_000);
     await boot(page);
     await page.evaluate((d) => window.__drawpaper__!.loadFixture(d), baseDoc([n('a', 100, 100, '# 标题\n正文段落')]));
     await page.waitForTimeout(300);
     await page.keyboard.press('Control+p');
     await page.waitForSelector('text=导出 / 打印', { timeout: 5000 });
 
-    // Markdown 下载。
+    // 高负载下对话框 footer 按钮渲染有延迟：先 bounded wait 到 visible+enabled。
+    const mdBtn = page.getByRole('button', { name: /Markdown/ });
+    await mdBtn.waitFor({ state: 'visible', timeout: 15_000 });
+    await expect(mdBtn).toBeEnabled({ timeout: 15_000 });
     const mdPromise = page.waitForEvent('download');
-    await page.getByRole('button', { name: /Markdown/ }).click();
+    await mdBtn.click();
     const md = await mdPromise;
     const mdPath = `${OUT}/${md.suggestedFilename()}`;
     await md.saveAs(mdPath);
     console.log('MD_DOWNLOAD', md.suggestedFilename());
 
-    // SVG 下载。
+    const svgBtn = page.getByRole('button', { name: /矢量 SVG/ });
+    await svgBtn.waitFor({ state: 'visible', timeout: 15_000 });
+    await expect(svgBtn).toBeEnabled({ timeout: 15_000 });
     const svgPromise = page.waitForEvent('download');
-    await page.getByRole('button', { name: /矢量 SVG/ }).click();
+    await svgBtn.click();
     const svg = await svgPromise;
     const svgPath = `${OUT}/${svg.suggestedFilename()}`;
     await svg.saveAs(svgPath);
