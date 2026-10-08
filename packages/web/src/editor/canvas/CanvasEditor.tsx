@@ -66,9 +66,32 @@ const LayoutGhostNode = memo(function LayoutGhostNode() {
 
 const allNodeTypes = { ...nodeTypes, 'layout-ghost': LayoutGhostNode };
 
-/** 节点数超过此阈值时不挂载 MiniMap：MiniMap 为每个节点渲染一个 SVG 元素，
- *  2000 节点 = 2000+ SVG DOM，首屏挂载即可阻塞主线程 ~60s。大文档下以最小代价关闭概览。 */
+// ── 大规模画布渲染预算（Wave21 标定）────────────────────────
+//  所有阈值按「2k 块日常流畅 / 10k 块不崩」标定，见 docs/wave21/large-doc-perf.md。
+
+/**
+ * MiniMap 节点数硬上限：超过则不挂载 MiniMap 组件。
+ *
+ * MiniMap 为每个节点渲染一个独立 SVG `<circle>` 元素；300 节点 ≈ 300 SVG DOM
+ * 挂载成本可忽略（<5ms），但 2000+ 节点时 MiniMap 自身的每次 zoom/pan 重渲染
+ * 会成为主线程瓶颈（全量 diff 2000 SVG 元素）。
+ *
+ * 标定依据：
+ *  - ≤300 节点：MiniMap 全开（pannable + zoomable），渲染 ~300 SVG 元素 < 10ms；
+ *  - 301–2000 节点：MiniMap 关闭，用户用右下角自建缩放控件导航（无 SVG 开销）；
+ *  - ≥2000 节点：同 301–2000 策略，MiniMap 关闭。
+ *
+ * 为什么不做「节点抽样缩略」：MiniMap 的价值是全局位置感知，抽样后缩略图与
+ * 实际节点密度不符反而误导；直接关闭 + 提供缩放控件更诚实。
+ */
 const MINIMAP_NODE_LIMIT = 300;
+
+/**
+ * 边渲染无额外抽样：ReactFlow 的 `onlyRenderVisibleElements` 已按视口裁剪
+ * 屏幕外边（只渲染与可见节点相连的边），无需应用层再做几何抽样。
+ * 实测 2000 节点（~1999 边）下，视口内可见边通常 < 50 条，BaseEdge 成本可忽略。
+ * 若未来开启 MiniMap edgeColor，需另加 MINIMAP_EDGE_LIMIT 同类阈值。
+ */
 
 function CanvasInner({ api }: { api: EditorApi }) {
   const snap = useEditorSnapshot();
