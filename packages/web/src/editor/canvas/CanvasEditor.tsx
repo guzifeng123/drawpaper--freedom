@@ -32,6 +32,7 @@ import { isOpfsAvailable } from '@/storage/opfs';
 import { nodeMatchesFilter } from '../lib/filter-match';
 import { insertBendPoint, type EdgeEnd } from '../edges/edge-geometry';
 import { ConflictDialog } from '../ui/ConflictDialog';
+import { ConnectTargetPicker } from '../connect/ConnectTargetPicker';
 import { toast } from '../ui/toast';
 import { setActiveBendAnchor } from '../edges/bend-active';
 import { PaneContextMenu, type PaneContextMenuProps } from './PaneContextMenu';
@@ -689,6 +690,13 @@ function CanvasInner({ api }: { api: EditorApi }) {
       </ReactFlow>
 
       <ConflictDialog />
+
+      {/* Wave23 纯键盘连线目标选择器：确认时复用同一 onConnect 校验（自环/重复边/addEdge）。 */}
+      <ConnectTargetPicker
+        onConfirm={(source, target) =>
+          onConnect({ source, target, sourceHandle: 'right', targetHandle: 'left' } as Connection)
+        }
+      />
 
       {menu && menuActions && (
         <PaneContextMenu
