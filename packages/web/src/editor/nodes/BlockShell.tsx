@@ -9,6 +9,7 @@ import { createBlockEditor } from '../tiptap/createBlockEditor';
 import { SlashMenu, type SlashCommand } from '../tiptap/slash-menu';
 import { DocRefMention } from '../tiptap/doc-ref-mention';
 import { DocEmbedPicker } from '../tiptap/doc-embed-picker';
+import { DocEmbedTrigger } from '../tiptap/doc-embed-trigger';
 import type { DocRefTarget } from '../../storage/doc-ref-search';
 import type { DocEmbedData } from '../content-defaults';
 import { BlockHoverToolbar } from './block-hover-toolbar';
@@ -203,8 +204,8 @@ const BlockShellFull = memo(function BlockShellFull({
   };
 
   // 选定嵌入目标：host type 切 note，content.data 写入嵌入 payload（只存引用）。
-  const onPickEmbed = (target: DocRefTarget) => {
-    setEmbedPickerOpen(false);
+  // 斜杠菜单「嵌入其他画布的块」与块内 `{{` 触发共用同一条插入路径，不另造 payload 结构。
+  const applyEmbedTarget = (target: DocRefTarget) => {
     api.setBlockType(block.id, 'note');
     const payload: DocEmbedData = {
       kind: 'doc-embed',
@@ -213,6 +214,18 @@ const BlockShellFull = memo(function BlockShellFull({
       titleSnapshot: target.nodeTitle,
     };
     api.updateContent(block.id, payload);
+  };
+
+  const onPickEmbed = (target: DocRefTarget) => {
+    setEmbedPickerOpen(false);
+    applyEmbedTarget(target);
+  };
+
+  // Wave22：块内 `{{` 浮层选定后——`{{query` 触发文本已由 DocEmbedTrigger 内部删除，
+  // 先退出编辑态（斜杠路径在 onSlashCommand 里已退过），再走与斜杠完全相同的 payload 写入。
+  const onPickEmbedFromBrace = (target: DocRefTarget) => {
+    api.setEditingNode(null);
+    applyEmbedTarget(target);
   };
 
   const shellStyle: React.CSSProperties = {
@@ -299,6 +312,12 @@ const BlockShellFull = memo(function BlockShellFull({
             </div>
             <SlashMenu editor={editor} onCommand={onSlashCommand} />
             <DocRefMention editor={editor} />
+            <DocEmbedTrigger
+              editor={editor}
+              currentDoc={api.getState().doc}
+              excludeNodeId={block.id}
+              onPick={onPickEmbedFromBrace}
+            />
           </>
         ) : (
           renderStatic()

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { Editor } from '@tiptap/react';
 import { FileText } from 'lucide-react';
 import { searchDocRefTargets, type DocRefTarget } from '../../storage/doc-ref-search';
+import { isInCodeContext } from './doc-embed-trigger';
 
 /**
  * docRef 提及浮层：在块内输入 `[[`（可继续输查询词）唤起，
@@ -24,6 +25,11 @@ export function DocRefMention({ editor }: { editor: Editor }) {
       const { state } = editor.view;
       const $head = state.selection.$head;
       if (!$head.parent.isTextblock) {
+        close();
+        return;
+      }
+      // 代码块/行内代码内不弹双链浮层（与 `{{` 嵌入触发同一约定）。
+      if (isInCodeContext($head)) {
         close();
         return;
       }
