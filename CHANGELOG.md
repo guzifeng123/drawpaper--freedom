@@ -4,7 +4,17 @@
 
 ## 未发布（Unreleased）
 
-（暂无）
+- **P1 修复：含环父子边导致主线程同步死锁、「连线冲突」弹窗不可达（Wave23.5）**。
+  已有父子边 `A→B` 时再连 `B→A` 成环，页面主线程卡死、冲突裁决弹窗永远挂不出。
+  根因：分页虚线叠加层在每次 doc 变化时同步跑 `paginateFit → activeNodeSet.isFoldedDescendant`，
+  该函数沿 `buildParentOf` 的 parent 指针上行**无 visited 守卫**，而 `buildParentOf` 又不像
+  `buildMainTree` 那样跳过闭合环的边——含环 edges 下 `parentOf` 自成交，上行 `A↔B` 无限循环。
+  修法：`buildParentOf` 改为环安全（闭合环的边跳过，与 `buildMainTree` 同策略），
+  `isFoldedDescendant` 补 visited 双保险；core 布局/分页/图纯函数对含环/多父输入一律有界退化
+  （不依赖调用方先裁决）。补 core 单测（含环/多父喂 `layoutTree` 全 5 mode、`paginate*`、
+  子树/祖先遍历，断言有界且确定）与 e2e（指针连接 + 触屏长按两条路径：弹窗有界可达、
+  取消精确回退、断开裁决可撤销/重放）。防护不变量：任何从原始 edges 构造 parent/child 树再
+  上行/递归的路径必须自带环防护，core 不允许在含环中间态死锁。详见 `docs/wave23/cycle-layout-hang.md`。
 
 ## 0.1.0-rc.14（2026-10-08）
 

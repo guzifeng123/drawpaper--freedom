@@ -507,3 +507,69 @@ describe('paginate / flow', () => {
     }
   });
 });
+
+/* ------------------------------------------------------------------ *
+ * P1 Wave23.5 环/多父输入有界退化硬ening（cycle-layout-hang）。
+ * 根因：activeNodeSet→isFoldedDescendant 沿 buildParentOf 结果上行，
+ * 含环 edges 下 parentOf 自成交、无 visited 守卫 → 主线程死锁（P1）。
+ * 现 buildParentOf 环安全 + isFoldedDescendant visited 双守卫。
+ * ------------------------------------------------------------------ */
+describe('cycle hardening / paginate bounded on cyclic & multi-parent', () => {
+  function pnode(id: string): BlockNode {
+    return {
+      id, type: 'text', x: 0, y: 0, width: 200, height: 80,
+      content: { format: 'tiptap-json', data: { type: 'doc' } },
+      parentId: null, pinned: false, locked: false, collapsed: false, tags: [], style: {},
+    } as BlockNode;
+  }
+  function pedge(id: string, s: string, t: string): Edge {
+    return makeEdge(id, s, t);
+  }
+  function pinput(nodes: BlockNode[], edges: Edge[], collapsed: Record<string, boolean> = {}) {
+    const positions: Record<string, { x: number; y: number }> = {};
+    const measured: Record<string, MeasuredSize> = {};
+    for (const n of nodes) {
+      positions[n.id] = { x: n.x, y: n.y };
+      measured[n.id] = { width: n.width, height: n.height };
+    }
+    return {
+      layout: makeLayout(positions),
+      measured,
+      settings: makeSettings(),
+      nodes,
+      edges,
+      collapsed,
+    };
+  }
+
+  it('cyclic A→B,B→A : fit/tiles/flow 全部有界返回且确定', () => {
+    const nodes = [pnode('A'), pnode('B')];
+    const edges = [pedge('ab', 'A', 'B'), pedge('ba', 'B', 'A')];
+    for (const fn of [paginateFit, paginateTiles, paginateFlow]) {
+      const r1 = fn(pinput(nodes, edges));
+      const r2 = fn(pinput(nodes, edges));
+      // 有界：能返回；确定：两次结果一致。
+      expect(r1.pages.length).toBeGreaterThan(0);
+      expect(r1.pages).toEqual(r2.pages);
+    }
+  });
+
+  it('cyclic + 折叠：isFoldedDescendant 不再死锁（visited 守卫）', () => {
+    // A 折叠、B 在环上：折叠剔除逻辑曾沿 parentOf 上行死循环。
+    const nodes = [pnode('A'), pnode('B')];
+    const edges = [pedge('ab', 'A', 'B'), pedge('ba', 'B', 'A')];
+    const r = paginateFit(pinput(nodes, edges, { A: true }));
+    expect(r.pages.length).toBeGreaterThan(0);
+  });
+
+  it('multi-parent A→C,B→C : 有界返回（首条入边 wins，上行必终止）', () => {
+    const nodes = [pnode('A'), pnode('B'), pnode('C')];
+    const edges = [pedge('ac', 'A', 'C'), pedge('bc', 'B', 'C')];
+    for (const fn of [paginateFit, paginateTiles, paginateFlow]) {
+      const r1 = fn(pinput(nodes, edges));
+      const r2 = fn(pinput(nodes, edges));
+      expect(r1.pages.length).toBeGreaterThan(0);
+      expect(r1.pages).toEqual(r2.pages);
+    }
+  });
+});
