@@ -3,6 +3,7 @@ import type { BlockNode, Edge } from '../model/index.js';
 import {
   layoutTree,
   layoutTreeIncremental,
+  countLayerCrossings,
   DEFAULT_NODE_SIZE,
   type LayoutInput,
   type LayoutPosition,
@@ -549,5 +550,227 @@ describe('layout / flow-layered 逻辑流分层（Wave21）', () => {
       expect(inc.positions[id]).toEqual(positions0[id]);
     }
     expect(inc.positions['h']).toBeDefined();
+  });
+});
+
+/**
+ * 从布局结果反推分层 order（同层顶对齐 → y 严格聚成一行；行内按 x 排序）。
+ * 供 countLayerCrossings 黑盒校验「迭代后交叉数」。
+ */
+function layerOrderFromResult(positions: Record<string, LayoutPosition>): {
+  order: Map<number, string[]>;
+  rankOf: Map<string, number>;
+} {
+  const yToIds = new Map<number, string[]>();
+  for (const [id, p] of Object.entries(positions)) {
+    const arr = yToIds.get(p.y) ?? [];
+    arr.push(id);
+    yToIds.set(p.y, arr);
+  }
+  const rows = [...yToIds.entries()].sort((a, b) => a[0] - b[0]);
+  const order = new Map<number, string[]>();
+  const rankOf = new Map<string, number>();
+  rows.forEach(([, ids], rank) => {
+    ids.sort((a, b) => positions[a]!.x - positions[b]!.x);
+    order.set(rank, ids);
+    for (const id of ids) rankOf.set(id, rank);
+  });
+  return { order, rankOf };
+}
+
+/**
+ * 多父 DAG（Wave22 barycenter 验证）：
+ *        A
+ *    /   |   \
+ *   B    C    F
+ *   |\  / \   |
+ *   | \/   \  |
+ *   D  E    G
+ *
+ * 主树（首条入边 wins）：A→B,C,F；B→D；C→E；F→G。
+ * 额外多父边：B→E、C→D、C→G、F→D（制造相邻层父子边交叉）。
+ * 贪心父序层2 = [D,E,G] 时相邻层交叉 = 4；barycenter 排序后 = 2。
+ */
+function buildMultiParentDag(): { nodes: BlockNode[]; edges: Edge[] } {
+  const nodes = ['A', 'B', 'C', 'F', 'D', 'E', 'G'].map(makeNode);
+  const edges = [
+    makeEdge('e_AB', 'A', 'B'),
+    makeEdge('e_AC', 'A', 'C'),
+    makeEdge('e_AF', 'A', 'F'),
+    // 主父（首条入边 wins）
+    makeEdge('e_BD', 'B', 'D'),
+    makeEdge('e_CE', 'C', 'E'),
+    makeEdge('e_FG', 'F', 'G'),
+    // 多父边
+    makeEdge('e_BE', 'B', 'E'),
+    makeEdge('e_CD', 'C', 'D'),
+    makeEdge('e_CG', 'C', 'G'),
+    makeEdge('e_FD', 'F', 'D'),
+  ];
+  return { nodes, edges };
+}
+
+describe('layout / flow-layered 层内 barycenter 交叉最小化（Wave22）', () => {
+  it('countLayerCrossings：纯函数正确数相邻层父子边交叉', () => {
+    // 层1 [B,C]；层2 [D,E]。边 B→D,B→E,C→D,C→E（K2,2）→ 交叉 = 1。
+    const order = new Map<number, string[]>([
+      [1, ['B', 'C']],
+      [2, ['D', 'E']],
+    ]);
+    const rankOf = new Map<string, number>([
+      ['B', 1], ['C', 1], ['D', 2], ['E', 2],
+    ]);
+    const edges = [
+      { source: 'B', target: 'D' },
+      { source: 'B', target: 'E' },
+      { source: 'C', target: 'D' },
+      { source: 'C', target: 'E' },
+    ];
+    expect(countLayerCrossings(order, edges, rankOf)).toBe(1);
+
+    // 同序层内无交叉：层2 调成 [E,D] 后 K2,2 交叉仍 = 1（对偶）。
+    const order2 = new Map<number, string[]>([
+      [1, ['B', 'C']],
+      [2, ['E', 'D']],
+    ]);
+    expect(countLayerCrossings(order2, edges, rankOf)).toBe(1);
+
+    // 非相邻层边不计数。
+    const longEdge = [...edges, { source: 'A', target: 'E' }];
+    expect(countLayerCrossings(order, longEdge, rankOf)).toBe(1);
+  });
+
+  it('多父 DAG：barycenter 迭代后相邻层父子边交叉严格下降', () => {
+    const { nodes, edges } = buildMultiParentDag();
+    const input: LayoutInput = { nodes, edges, rankSpacing: 90, nodeSpacing: 28, measured: {} };
+
+    // 迭代前 = 贪心父序铺栏（层0[A]，层1[B,C,F]，层2 按主父列 [D,E,G]）。
+    const greedyOrder = new Map<number, string[]>([
+      [0, ['A']],
+      [1, ['B', 'C', 'F']],
+      [2, ['D', 'E', 'G']],
+    ]);
+    const rankOfGreedy = new Map<string, number>([
+      ['A', 0], ['B', 1], ['C', 1], ['F', 1], ['D', 2], ['E', 2], ['G', 2],
+    ]);
+    const before = countLayerCrossings(greedyOrder, edges, rankOfGreedy);
+    expect(before).toBe(4);
+
+    const r = layoutTree(input, 'flow-layered');
+    const { order, rankOf } = layerOrderFromResult(r.positions);
+    const after = countLayerCrossings(order, edges, rankOf);
+    expect(after).toBeLessThan(before);
+    expect(after).toBe(2);
+    expect(r.notes.some((n) => n.includes('barycenter'))).toBe(true);
+    // 无残留重叠。
+    expect(r.collisions.overlappingPairs).toHaveLength(0);
+  });
+
+  it('单树：零交叉、子树仍按父序聚拢（barycenter 不动点）、确定性', () => {
+    const r1 = layoutTree(baseInput(), 'flow-layered');
+    const r2 = layoutTree(baseInput(), 'flow-layered');
+    expect(r1).toEqual(r2);
+    const { order, rankOf } = layerOrderFromResult(r1.positions);
+    expect(countLayerCrossings(order, baseInput().edges, rankOf)).toBe(0);
+    // 层1 = [b, c]；层2 = [d, e, g]（d/e 父 b 聚拢、在 g 前）——与改造前一致。
+    expect(order.get(1)).toEqual(['b', 'c']);
+    expect(order.get(2)).toEqual(['d', 'e', 'g']);
+  });
+
+  it('单链 DAG：逐层加深、零交叉、确定性', () => {
+    const ids = ['a', 'b', 'c', 'd', 'e'];
+    const nodes = ids.map(makeNode);
+    const edges = ids.slice(1).map((t, i) => makeEdge(`e${i}`, ids[i]!, t));
+    const r = layoutTree({ nodes, edges, rankSpacing: 90, nodeSpacing: 28, measured: {} }, 'flow-layered');
+    const { order, rankOf } = layerOrderFromResult(r.positions);
+    expect(countLayerCrossings(order, edges, rankOf)).toBe(0);
+    expect(r.collisions.overlappingPairs).toHaveLength(0);
+  });
+
+  it('多根森林：零交叉、根块互不穿插；跨根多父边不致子树交错', () => {
+    const nodes = ['r1', 'r2', 'a1', 'b1', 'c1'].map(makeNode);
+    const edges = [
+      makeEdge('e1', 'r1', 'a1'),
+      makeEdge('e2', 'r2', 'b1'),
+      makeEdge('e3', 'b1', 'c1'),
+      makeEdge('e4', 'r2', 'a1'), // 跨根额外父：试图把 a1 拉向 r2 块
+    ];
+    const r = layoutTree({ nodes, edges, rankSpacing: 90, nodeSpacing: 28, measured: {} }, 'flow-layered');
+    const { order, rankOf } = layerOrderFromResult(r.positions);
+    expect(countLayerCrossings(order, edges, rankOf)).toBe(0);
+    // rank0 根字典序 [r1, r2]；层1 a1（r1 块）仍在 b1（r2 块）之前——块隔离。
+    expect(order.get(0)).toEqual(['r1', 'r2']);
+    expect(order.get(1)).toEqual(['a1', 'b1']);
+  });
+
+  it('诱导震荡输入：有界终止、交叉不反弹、确定性', () => {
+    // K2,2 完全二分：任意层2排列交叉恒为 1（下界），barycenter 首轮无严格改善即停。
+    const nodes = ['A', 'B', 'C', 'D', 'E'].map(makeNode);
+    const edges = [
+      makeEdge('ab', 'A', 'B'),
+      makeEdge('ac', 'A', 'C'),
+      makeEdge('bd', 'B', 'D'),
+      makeEdge('be', 'B', 'E'),
+      makeEdge('cd', 'C', 'D'),
+      makeEdge('ce', 'C', 'E'),
+    ];
+    const input: LayoutInput = { nodes, edges, rankSpacing: 90, nodeSpacing: 28, measured: {} };
+    const r1 = layoutTree(input, 'flow-layered');
+    const r2 = layoutTree(input, 'flow-layered');
+    expect(r1).toEqual(r2); // 确定性、必然终止
+    const { order, rankOf } = layerOrderFromResult(r1.positions);
+    expect(countLayerCrossings(order, edges, rankOf)).toBe(1); // 下界，不反弹
+  });
+
+  it('组合：成环退化不死循环、pinned 坐标不变、collapsed 剔除后代、不回退', () => {
+    // 成环：a→b→c→a，字典序强取 a 为根。
+    const cycleNodes = ['a', 'b', 'c'].map(makeNode);
+    const cycleEdges = [
+      makeEdge('ab', 'a', 'b'),
+      makeEdge('bc', 'b', 'c'),
+      makeEdge('ca', 'c', 'a'),
+    ];
+    const rc = layoutTree(
+      { nodes: cycleNodes, edges: cycleEdges, rankSpacing: 90, nodeSpacing: 28, measured: {} },
+      'flow-layered',
+    );
+    expect(Object.keys(rc.positions).sort()).toEqual(['a', 'b', 'c']);
+    expect(rc.positions['a']!.y).toBeLessThan(rc.positions['b']!.y);
+
+    // pinned：b 钉 (0,0)，坐标严格不变、无残留重叠。
+    const { nodes: fn, edges: fe } = buildFixture();
+    const bNode = fn.find((n) => n.id === 'b')!;
+    bNode.x = 0;
+    bNode.y = 0;
+    const rp = layoutTree(
+      { nodes: fn, edges: fe, rankSpacing: 90, nodeSpacing: 28, measured: {}, pinned: new Set(['b']) },
+      'flow-layered',
+    );
+    expect(rp.positions['b']).toEqual({ x: 0, y: 0 });
+    expect(rp.collisions.overlappingPairs).toHaveLength(0);
+
+    // collapsed：折叠 b → d/e/f 后代无位置。
+    const rt = layoutTree(baseInput({ collapsed: { b: true } }), 'flow-layered');
+    expect(rt.positions['b']).toBeDefined();
+    expect(rt.positions['d']).toBeUndefined();
+    expect(rt.positions['e']).toBeUndefined();
+  });
+
+  it('多父 DAG + pinned：仍能压低交叉且 pinned 不动、不崩溃', () => {
+    const { nodes, edges } = buildMultiParentDag();
+    // 把根 A 钉在左上角。
+    const aNode = nodes.find((n) => n.id === 'A')!;
+    aNode.x = 0;
+    aNode.y = 0;
+    const r = layoutTree(
+      { nodes, edges, rankSpacing: 90, nodeSpacing: 28, measured: {}, pinned: new Set(['A']) },
+      'flow-layered',
+    );
+    expect(r.positions['A']).toEqual({ x: 0, y: 0 });
+    expect(r.collisions.overlappingPairs).toHaveLength(0);
+    const { order, rankOf } = layerOrderFromResult(r.positions);
+    // 非钉节点仍有排布，交叉 ≤ 贪心基线 4。
+    expect(order.size).toBeGreaterThan(0);
+    expect(countLayerCrossings(order, edges, rankOf)).toBeLessThanOrEqual(4);
   });
 });
