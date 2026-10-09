@@ -388,6 +388,18 @@ fn set_window_title(window: tauri::WebviewWindow, title: String) -> Result<(), S
     window.set_title(&title).map_err(|e| e.to_string())
 }
 
+/// Wave24 路1: the conf window starts hidden (`visible:false`). The frontend calls
+/// this command as soon as React has mounted (host/desktop-bridge) so the window
+/// reveals already-painted — no white/blank frame flash. Idempotent: safe to call
+/// even after the Rust safety-net (setup) has already shown the window.
+#[tauri::command]
+fn reveal_window(app: tauri::AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
 /// Frontend tells the shell whether the current document is bound to a native
 /// `.kbnote` on disk. `Some(path)` = bound; `None` = IDB-only doc (closing it
 /// never prompts — IndexedDB auto-save is the durability net).
@@ -1182,22 +1194,23 @@ pub fn run() {
         .manage(native_autosave::AutosaveState::default())
         .setup(|app| {
             // Wave24 路1: the window starts hidden (tauri.conf app.windows[0].visible=false).
-            // Register FIRST, before any other setup work, so we don't miss the
-            // initial page-load event. We reveal the window only when the WebView2
-            // page has FINISHED loading (React mounted) — this kills the white/blank
-            // native frame that used to flash between process start and first paint.
-            // It is orthogonal to StartupQueue / single-instance / argv delivery: the
-            // open-file pump below emits to the webview regardless of visibility, and
-            // the webview listener registers when React mounts, independent of show().
-            if let Some(win) = app.get_webview_window("main") {
-                win.on_page_load(|w, payload| {
-                    if matches!(
-                        payload.event(),
-                        tauri::webview::PageLoadEvent::Finished
-                    ) {
-                        let _ = w.show();
-                        let _ = w.set_focus();
-                    }
+            // tauri 2.12 has NO Rust-side "webview ready" event on a conf-declared window
+            // (WebviewWindow::on_page_load landed in a later minor; WindowEvent has no
+            // Ready variant), so we reveal with a two-layer scheme:
+            //   (1) a Rust safety net shows + focuses the window after a bounded delay,
+            //       so a hidden window can NEVER leave the app invisible even if the
+            //       frontend never calls back;
+            //   (2) the frontend calls the `reveal_window` command as soon as React has
+            //       mounted, which wins the race and reveals the already-painted window
+            //       immediately — this is what actually kills the white/blank frame flash.
+            // Either path is idempotent (show() on an already-visible window is a no-op).
+            // Orthogonal to StartupQueue / single-instance / argv delivery.
+            if let Some(w) = app.get_webview_window("main") {
+                let net = w.clone();
+                tauri::async_runtime::spawn(async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+                    let _ = net.show();
+                    let _ = net.set_focus();
                 });
             }
 
@@ -1360,6 +1373,7 @@ pub fn run() {
             bind_native_file,
             set_native_dirty,
             force_quit,
+            reveal_window,
             // Wave17: 原生文件夹自动保存（实现在 native_autosave.rs）。
             native_autosave::autosave_pick_dir,
             native_autosave::autosave_clear_dir,
