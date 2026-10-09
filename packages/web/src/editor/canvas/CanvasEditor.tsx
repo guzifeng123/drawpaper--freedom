@@ -24,6 +24,7 @@ import { nodeTypes, resolveNodeType } from '../nodes';
 import { edgeTypes } from '../edges';
 import { useKeyboardShortcuts } from '../state/useKeyboardShortcuts';
 import { registerViewActionHandler } from '../state/view-bus';
+import { mark } from '@/wiring/cold-starts';
 import { useCoarsePointer } from '../state/use-coarse-pointer';
 import { computeSnap } from '../lib/geometry';
 import { collectFocusSet, collectConnectedSet, collectEdgeChain, applyManualFixed } from '../lib/graph-trace';
@@ -402,6 +403,24 @@ function CanvasInner({ api }: { api: EditorApi }) {
 
   // 【Wave8】大规模文档渐进水化：视口邻近升级/远离降级 + 分批调度。
   useHydrationScheduler(api, snap.doc, snap.viewport, paneEl);
+
+  // Wave24 路 3：首画布首帧 = 挂载后双 rAF（浏览器已完成首次绘制）。
+  // StrictMode 双跑：cleanup 取消首帧未燃的 rAF，二次 effect 重新武装，最终只落一个 mark。
+  const coldFrameRef = useRef(false);
+  useEffect(() => {
+    if (coldFrameRef.current) return;
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        coldFrameRef.current = true;
+        mark('canvas-frame');
+      });
+    });
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+    };
+  }, []);
 
   useEffect(() => {
     const el = wrapRef.current;

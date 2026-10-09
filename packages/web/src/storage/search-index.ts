@@ -39,14 +39,19 @@ function tokenize(text: string): string[] {
 
 export type NoteIndex = MiniSearch;
 
-/** 为整份文档构建索引。 */
-export function buildIndex(doc: KBNoteDoc): NoteIndex {
-  const ms = new MiniSearch({
+/** MiniSearch 构造参数（buildIndex / 空索引占位 / 分片喂入共用同一形状）。 */
+export function createEmptyIndex(): MiniSearch {
+  return new MiniSearch({
     fields: ['nodeId', 'body'],
     storeFields: ['nodeId', 'body'],
     searchOptions: { prefix: true, combineWith: 'AND', tokenize },
     tokenize,
   });
+}
+
+/** 为整份文档构建索引。 */
+export function buildIndex(doc: KBNoteDoc): NoteIndex {
+  const ms = createEmptyIndex();
   const docs = doc.nodes.map((n) => ({
     id: n.id,
     nodeId: n.id,
@@ -54,6 +59,46 @@ export function buildIndex(doc: KBNoteDoc): NoteIndex {
   }));
   ms.addAll(docs);
   return ms;
+}
+
+/**
+ * Wave24：分片喂入索引——立即返回一个空索引占位，节点按 chunkSize 片
+ * 在 requestIdleCallback 空隙逐片 addAll（无 rIC 时 setTimeout(0) 兜底）。
+ * 2k 块下同步 buildIndex ~865ms 长任务被拆成 ≤30ms 的小片，不再阻塞首帧后
+ * 的可交互窗口；onReady 在喂完时回调（同一索引对象）。
+ * 返回 cancel()：文档提前切换时取消未跑的分片。
+ */
+export function feedIndexChunked(
+  index: NoteIndex,
+  doc: KBNoteDoc,
+  onReady: () => void,
+  opts?: { chunkSize?: number },
+): { cancel: () => void } {
+  const size = opts?.chunkSize ?? 60;
+  const nodes = doc.nodes;
+  let i = 0;
+  let cancelled = false;
+  const w = window as unknown as {
+    requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number;
+  };
+  const step = () => {
+    if (cancelled) return;
+    const slice = nodes.slice(i, i + size);
+    if (slice.length) {
+      index.addAll(
+        slice.map((n) => ({ id: n.id, nodeId: n.id, body: extractPlainText(n.content.data) })),
+      );
+    }
+    i += size;
+    if (i < nodes.length) {
+      if (typeof w.requestIdleCallback === 'function') w.requestIdleCallback(step, { timeout: 500 });
+      else setTimeout(step, 0);
+    } else {
+      onReady();
+    }
+  };
+  step();
+  return { cancel: () => { cancelled = true; } };
 }
 
 export interface SearchHit {
