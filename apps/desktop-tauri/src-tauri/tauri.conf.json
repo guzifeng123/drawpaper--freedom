@@ -57,7 +57,7 @@
         "headerImage": "icons/installer-header.bmp",
         "sidebarImage": "icons/installer-sidebar.bmp",
         "webviewInstallMode": {
-          "embedBootstrapper": true
+          "type": "embedBootstrapper"
         }
       },
       "wix": {

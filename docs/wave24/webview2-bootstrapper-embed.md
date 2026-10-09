@@ -21,8 +21,13 @@ Wave24 的目标是：**把 bootstrapper stub 打进安装包**（`embedBootstra
 | 模式 | 安装包内 | 安装时联网？ | 包体积 x64 | 首装失败面 |
 |---|---|---|---|---|
 | `downloadBootstrapper`（Wave15 默认） | 无 bootstrapper、无运行时 | **是**（下 bootstrapper + 运行时） | 4.65 MB（Wave15 实测） | bootstrapper 下载失败（exit 18）→ 安装直接非零 |
-| `embedBootstrapper`（**本路切换**） | 内嵌 bootstrapper stub（~2 MB） | 是（bootstrapper 本地执行，仍从微软 CDN 下 ~200 MB 运行时） | 见 §3 实测 | 仅运行时下载失败（bootstrapper 本身已本地） |
-| `offlineInstaller`（全离线附加资产） | 内嵌完整 Evergreen Standalone 运行时安装器 | **否** | ~200 MB（Wave15 x86 实测 202.52 MB） | 无（运行时已打包） |
+| `embedBootstrapper`（**本路切换**） | 内嵌 bootstrapper stub（Tauri schema 注明约 +1.8 MB） | 是（bootstrapper 本地执行，仍从微软 CDN 下运行时） | 见 §3 实测 | 仅运行时下载失败（bootstrapper 本身已本地） |
+| `offlineInstaller`（全离线附加资产） | 内嵌完整 Evergreen Standalone 运行时安装器（Tauri schema 注明约 +127 MB） | **否** | ~130–200 MB（构建期实测） | 无（运行时已打包） |
+
+配置格式（Tauri 2.1 schema）：`webviewInstallMode` 是带 `type` 字段的对象，
+如 `{"type": "embedBootstrapper"}`；Wave15 内联 `--config` 用的
+`{"embedBootstrapper": true}` 不符合 schema（这也是当时 Measure(b) continue-on-error
+未产包的原因）。
 
 关键区别：
 - `embedBootstrapper` **不是**离线方案——运行时组件（~200 MB）仍在安装时从
@@ -90,10 +95,10 @@ _待本路 CI run 落数后填写：wv2Destroyed / bootstrapperSeen / windowTitl
 
 | 维度 | 评估 | 结论 |
 |---|---|---|
-| 体积 | ~200 MB（Wave15 x86 实测 202.52 MB） | GitHub Release 单文件硬上限 2 GB，200 MB 远低于上限；180 MB 是 Wave15 自设预算，非平台限制 |
-| CI 时长 | 构建期下载 ~200 MB 运行时 + 增量打包，独立 job 并行 | 不阻塞 publish（publish.needs 仍只 build） |
-| runner 磁盘 | windows-latest ~14 GB 可用 | ~200 MB 运行时 + Rust target ~3 GB，充裕 |
-| 稳定性 | fwlink 偶发抖动（Measure(c) 已 continue-on-error） | Tauri 内部下载失败会让 job 变红——这是预期的硬门，不掩盖 |
+| 体积 | Tauri schema 注明 offlineInstaller 约 +127 MB；Wave15 x86 完整 Standalone 安装器 202.52 MB | GitHub Release 单文件硬上限 2 GB，远低于上限；180 MB 是 Wave15 自设预算，非平台限制 |
+| CI 时长 | 构建期 Tauri 自动下载 Evergreen Standalone + 增量打包，独立 job 并行 | 不阻塞 publish（publish.needs 仍只 build） |
+| runner 磁盘 | windows-latest ~14 GB 可用 | ~130–200 MB 运行时 + Rust target ~3 GB，充裕 |
+| 稳定性 | fwlink 偶发抖动 | Tauri 内部下载失败会让 job 变红——这是预期的硬门，不掩盖 |
 | 用户价值 | 内网隔离 / 离线 Windows 机器可直接装 | 真实需求（Wave15 用户指南 §4 已写明手动装运行时的 workaround） |
 
 **决策：实现为独立附加资产**，不进 6 包主矩阵、不阻塞 publish、不与主包 artifact

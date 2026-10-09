@@ -2600,7 +2600,7 @@ jobs:
           # offlineInstaller:true makes Tauri download the Evergreen Standalone
           # (~200 MB from Microsoft) at build time and embed it into the NSIS exe.
           ./node_modules/.bin/tauri build --ci --bundles nsis \
-            --config '{"bundle":{"windows":{"nsis":{"webviewInstallMode":{"offlineInstaller":true}}}}}' 2>&1 | tr '\r' '\n' | tee /tmp/tauri-offline.log
+            --config '{"bundle":{"windows":{"nsis":{"webviewInstallMode":{"type":"offlineInstaller"}}}}}' 2>&1 | tr '\r' '\n' | tee /tmp/tauri-offline.log
           echo "tauri build exit=0 elapsed=$(( $(date +%s)-start_ts ))s"
 
       - name: Rename offline installer and print size
