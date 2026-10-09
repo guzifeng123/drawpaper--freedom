@@ -1312,7 +1312,18 @@ pub fn run() {
         })
         // Wave12 close-guard: when the user closes the window while a native
         // .kbnote is bound AND dirty, intercept and ask the frontend.
+        // Wave24 路1: the window starts hidden (tauri.conf app.windows[0].visible=false)
+        // and is shown ONLY here, on the `Ready` event (WebView2 has rendered its
+        // first frame). This removes the white/blank native frame that used to flash
+        // between process start and React mount. It does NOT touch StartupQueue /
+        // single-instance / argv delivery: the open-file pump runs in setup() and
+        // emits to the webview regardless of window visibility; the webview listener
+        // registers when React mounts, independent of show().
         .on_window_event(|window, event| {
+            if let tauri::WindowEvent::Ready = event {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let state = window.state::<AppState>();
                 let bound = *state.native_bound.lock().unwrap();
