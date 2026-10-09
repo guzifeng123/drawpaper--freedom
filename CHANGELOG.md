@@ -4,6 +4,23 @@
 
 ## 未发布（Unreleased）
 
+### 桌面外壳
+
+- **启动白屏消除（Wave24 路1）**：主窗口改为 `visible:false` 启动，不再先弹一个空白原生框再换
+  WebView2 内容；React 挂载并双帧后经 `reveal_window` 提前显示已渲染窗口，Rust setup 另起
+  1.5s 安全网兜底 show，保证窗口永不致盲。CI 同口径实测：冷启动到主窗口中位数 77→68ms
+  （min 63→59 / max 145→129），且出现的窗口已渲染；NSIS/MSI 与安装目录体积零实质变化
+  （<0.06% 重编译噪声）。argv/StartupQueue/single-instance/双击 .kbnote/welcome/
+  native-autosave/global-shortcuts 等既有启动行为冒烟全绿零回归。详见
+  `docs/wave24/native-binary-startup.md`。
+
+### 内部工程
+
+- **原生体积/冷启动测量基线（Wave24 路1）**：release-windows 新增三步纯测量（NSIS/MSI 精确字节、
+  安装目录+exe 字节、冷启动 7 采样中位数/min/max + 私有内存），before/after 同口径可比；
+  依赖审计确认 reqwest/hyper/rustls/ring 由 tauri 核心自带、无安全裁剪空间，profile 已最激进
+  （panic=abort/codegen-units=1/lto/opt-level=s/strip），不为改而改。
+
 （暂无）
 
 ## 0.1.0-rc.15（2026-10-09）
