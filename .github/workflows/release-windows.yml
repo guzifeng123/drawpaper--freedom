@@ -39,8 +39,12 @@ on:
       - 'chore/arm64-runner-smoke'
       - 'feat/updater-fallback-probe'
       - 'chore/arm64-cli-smoke'
+<<<<<<< HEAD
       # Wave24 路1: native binary size + cold-start instrumentation/optimization.
       - 'fix/native-binary-startup'
+=======
+      - 'feat/webview2-bootstrapper-embed'
+>>>>>>> origin/feat/webview2-bootstrapper-embed
   workflow_dispatch:
 
 permissions:
@@ -169,32 +173,37 @@ jobs:
           fi
 
       # ------------------------------------------------------------------
-      # Wave15 C: WebView2 离线策略实测取数。See docs/wave15/webview2-offline.md.
-      #   (a) baseline NSIS package size (current conf = downloadBootstrapper,
-      #       installs the runtime over the network at install time).
-      #   (b) embedBootstrapper variant size delta — built via `tauri build
-      #       --config` JSON override into a separate target dir, WITHOUT
-      #       touching the committed tauri.conf.json.
-      #   (c) Microsoft Evergreen Standalone (offline) Runtime installer sizes
-      #       for x64/x86/arm64 — the artifact Tauri `offlineInstaller` would
-      #       embed.
+      # Wave24: webviewInstallMode 已正式切换为 embedBootstrapper（落盘在
+      # tauri.conf.json bundle.windows.nsis.webviewInstallMode）。
+      #   (a) NSIS package size AFTER the switch (embedBootstrapper stub bundled
+      #       into setup.exe). The "before" number (downloadBootstrapper = 4.65 MB
+      #       x64) is from Wave15 run 37609717113, see docs/wave24/webview2-bootstrapper-embed.md.
+      #   (c) Microsoft Evergreen Standalone (offline) Runtime installer sizes —
+      #       kept as the restore source for the no-WebView2 smoke below and as
+      #       the size reference for the offline-runtime job.
+      # Wave15's Measure(b) (inline --config override build) is gone:
+      # embedBootstrapper is now the committed default, so the normal tauri
+      # build above already produces the embed package; no override/restore-rebuild
+      # cycle is needed.
       # ------------------------------------------------------------------
-      - name: 'Measure (a): baseline NSIS installer size'
+      - name: 'Measure (a): NSIS installer size (embedBootstrapper, after)'
         shell: pwsh
         run: |
           $installer = Get-ChildItem -Path 'apps/desktop-tauri/src-tauri/target' -Recurse -Filter '*-setup.exe' -File |
             Where-Object { $_.FullName -match '[\\/]bundle[\\/]nsis[\\/]' } | Select-Object -First 1
           $mb = [math]::Round($installer.Length / 1MB, 2)
-          Write-Host "::notice title=wv2-baseline-${{ matrix.arch }}::NSIS baseline setup.exe = $mb MB ($($installer.Name))"
-          Write-Host "BASELINE_NSIS_MB_${{ matrix.arch }}=$mb"
+          Write-Host "::notice title=wv2-embedAfter-${{ matrix.arch }}::NSIS setup.exe (embedBootstrapper) = $mb MB ($($installer.Name))"
+          Write-Host "EMBED_NSIS_MB_${{ matrix.arch }}=$mb"
 
       - name: 'Measure (c): download Evergreen Standalone Runtime installers, print sizes'
         shell: bash
         timeout-minutes: 10
         # Informational data collection only (records offline runtime sizes for
-        # the WebView2 bundling decision). Microsoft fwlinks occasionally drop
-        # the transfer on shared runners (curl exit 18); a failed download must
-        # never gate the release: retry, then warn and continue.
+        # the WebView2 bundling decision AND serves as the restore source for the
+        # no-WebView2 smoke). Microsoft fwlinks occasionally drop the transfer on
+        # shared runners (curl exit 18); a failed download must never gate the
+        # release: retry, then warn and continue. The no-WebView2 smoke below uses
+        # these files to REINSTALL WebView2 after the environment-prep uninstall.
         continue-on-error: true
         run: |
           set -uo pipefail
@@ -214,40 +223,6 @@ jobs:
             echo "::notice title=wv2-standalone-$arch::HTTP $code, Evergreen Standalone $arch = $mb MB ($sz bytes)"
           done
           ls -la /tmp/wv2 || true
-
-      - name: 'Measure (b): embedBootstrapper variant build + size (x64)'
-        if: matrix.arch == 'x64'
-        continue-on-error: true
-        working-directory: apps/desktop-tauri
-        shell: bash
-        timeout-minutes: 25
-        run: |
-          set -uo pipefail
-          # Measurement step (data collection, not a gate). Reuse the warm default
-          # target dir so this is an incremental relink+rebundle (fast) instead of a
-          # clean rebuild; the conf override is passed inline to `tauri build --config`,
-          # tauri.conf.json on disk is NOT modified. A failure here must NOT fail the
-          # release job — it only costs the (b) number, and the baseline installer the
-          # smoke consumes is the one from the earlier normal build.
-          echo "::group::tauri build --config embedBootstrapper"
-          ./node_modules/.bin/tauri build --ci --bundles nsis \
-            --config '{"bundle":{"windows":{"nsis":{"webviewInstallMode":{"embedBootstrapper":true}}}}}' 2>&1 | tr '\r' '\n' | tee /tmp/tauri-embed.log
-          code=${PIPESTATUS[0]}
-          echo "::endgroup::"
-          if [ "$code" != "0" ]; then
-            echo "::warning title=embed-build-failed::tauri build --config embedBootstrapper exited $code (non-fatal measurement)"
-            tail -n 30 /tmp/tauri-embed.log
-            exit 0
-          fi
-          installer=$(find apps/desktop-tauri/src-tauri/target -path '*bundle/nsis/*-setup.exe' -type f | head -n1)
-          sz=$(stat -c %s "$installer")
-          mb=$(awk "BEGIN{printf \"%.2f\", $sz/1048576}")
-          echo "::notice title=wv2-embedBootstrapper::embedBootstrapper setup.exe = $mb MB ($(basename "$installer"))"
-          # Restore the baseline (downloadBootstrapper) bundle for the install/canary
-          # smoke below: rebuild once more without the override (incremental, fast).
-          echo "::group::restore baseline bundle for smoke"
-          ./node_modules/.bin/tauri build --ci --bundles nsis 2>&1 | tr '\r' '\n' | tail -5
-          echo "::endgroup::"
 
       # ------------------------------------------------------------------
       # Wave24 路1: exact-byte bundle measurement (data collection, no gate).
@@ -356,6 +331,185 @@ jobs:
           }
           Write-Host "Smoke OK: bundled web assets are fresh"
           Write-Host "::endgroup::"
+
+      # ------------------------------------------------------------------
+      # Wave24 HARD GATE: no-WebView2 -> embedded bootstrapper -> main window.
+      #
+      # This proves the embedBootstrapper package actually rescues a machine
+      # that has NO WebView2 runtime installed: the NSIS setup.exe must run its
+      # bundled bootstrapper, install the Evergreen runtime from Microsoft CDN,
+      # and launch the drawpaper main window.
+      #
+      # Env prep (uninstall WebView2) is best-effort (try/catch, never throws)
+      # because hosted runners may protect the preinstalled runtime; the
+      # install / exit-code / main-window assertions below are HARD gates.
+      # See docs/wave24/webview2-bootstrapper-embed.md.
+      # ------------------------------------------------------------------
+      - name: 'Smoke (x64): no-WebView2 -> embedded bootstrapper -> main window (HARD GATE)'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          function Test-WebView2Present {
+            # Evergreen runtime marker: msedgewebview2.exe under Application dir,
+            # or the EdgeUpdate client-state registry key.
+            $exe = Get-ChildItem -Path 'C:\Program Files (x86)\Microsoft\EdgeWebView\Application' -Filter 'msedgewebview2.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($exe) { return $true }
+            $reg = Get-ItemProperty -Path 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue
+            if ($reg) { return $true }
+            return $false
+          }
+
+          # ---- env prep (best-effort, never throws) ----
+          $beforeWv2 = Test-WebView2Present
+          Write-Host "WebView2 present BEFORE env prep: $beforeWv2"
+          $wv2Destroyed = $false
+          try {
+            Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 1
+            $uninst = Get-ChildItem -Path 'C:\Program Files (x86)\Microsoft\EdgeWebView\Application' -Recurse -Filter 'setup.exe' -ErrorAction SilentlyContinue |
+              Where-Object { $_.FullName -match '[\\/]Installer[\\/]setup\.exe$' } | Select-Object -First 1
+            if ($uninst) {
+              Write-Host "Running WebView2 uninstaller: $($uninst.FullName)"
+              $u = Start-Process -FilePath $uninst.FullName -ArgumentList '--uninstall','--mswebview-runtime','--system-level','/silent','/norestart' -PassThru -Wait
+              Write-Host "WebView2 uninstaller exit code: $($u.ExitCode)"
+            } else {
+              Write-Host "::warning title=wv2-uninstaller::No EdgeWebView setup.exe found (runner may lack WebView2 or layout changed)"
+            }
+            Start-Sleep -Seconds 3
+            $afterWv2 = Test-WebView2Present
+            Write-Host "WebView2 present AFTER uninstall attempt: $afterWv2"
+            if ($beforeWv2 -and -not $afterWv2) { $wv2Destroyed = $true }
+            Write-Host "wv2Destroyed = $wv2Destroyed (before=$beforeWv2 after=$afterWv2)"
+          } catch {
+            Write-Host "::warning title=wv2-env-prep::WebView2 env prep threw (best-effort, continuing): $_"
+          }
+
+          # ---- HARD GATE: silent install of the embed package ----
+          $installer = Get-ChildItem -Path 'apps/desktop-tauri/src-tauri/target' -Recurse -Filter '*-setup.exe' -File |
+            Where-Object { $_.FullName -match '[\\/]bundle[\\/]nsis[\\/]' } | Select-Object -First 1
+          if (-not $installer) { Write-Error 'Smoke FAIL: NSIS *-setup.exe not found under target/**/bundle/nsis' }
+          Write-Host "Embed setup.exe = $($installer.FullName) ($([math]::Round($installer.Length/1MB,2)) MB)"
+
+          Write-Host "Running silent embed install: /S /CURRENTUSER"
+          $p = Start-Process -FilePath $installer.FullName -ArgumentList '/S','/CURRENTUSER' -PassThru
+          $bootstrapperSeen = $false
+          for ($w = 0; $w -lt 150; $w++) {
+            Start-Sleep -Milliseconds 500
+            $p.Refresh()
+            if (-not $p.HasExited) {
+              $bv = Get-Process -ErrorAction SilentlyContinue | Where-Object {
+                $_.ProcessName -match '(?i)(webview.*boot|MicrosoftEdgeWebView2RuntimeInstaller)' -or
+                ($_.Path -and $_.Path -match '(?i)WebView2.*Bootstrapper')
+              }
+              if ($bv) {
+                $bootstrapperSeen = $true
+                Write-Host ("t={0,3}s bootstrapper child seen: {1} (pid {2}) path={3}" -f ($w/2), $bv[0].ProcessName, $bv[0].Id, $bv[0].Path)
+              }
+            }
+            if ($p.HasExited) { break }
+          }
+          Write-Host "Installer exited = $($p.HasExited)"
+          if (-not $p.HasExited) { Write-Error 'Smoke FAIL: embed installer did not exit within 75s (likely a blocking dialog)' }
+          Write-Host "Installer exit code = $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { Write-Error "Smoke FAIL: embed installer exited $($p.ExitCode)" }
+
+          Write-Host "bootstrapper process observed during install: $bootstrapperSeen"
+          if ($wv2Destroyed -and -not $bootstrapperSeen) {
+            Write-Host "::warning title=wv2-bootstrapper-anchor::WebView2 was destroyed but no bootstrapper child process observed (pattern may have missed; install/exit still green)"
+          }
+          if (-not $wv2Destroyed) {
+            Write-Host "::notice title=wv2-bootstrapper-anchor::WebView2 was pre-installed (env-prep could not remove it); bootstrapper anchor not exercised. Installer exit 0 still proven."
+          }
+
+          # ---- HARD GATE: drawpaper installed ----
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'drawpaper'),
+            (Join-Path $env:ProgramFiles 'drawpaper')
+          )
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'drawpaper') }
+          $installDir = $null
+          foreach ($c in $candidates) { if ($c -and (Test-Path $c)) { $installDir = $c; break } }
+          if (-not $installDir) {
+            foreach ($root in @((Join-Path $env:LOCALAPPDATA 'Programs'), $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+              if ($root -and (Test-Path $root)) {
+                $hit = Get-ChildItem $root -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { $installDir = $hit.FullName; break }
+              }
+            }
+          }
+          if (-not $installDir) { Write-Error 'Smoke FAIL: drawpaper install dir not found after embed install' }
+          $exe = Join-Path $installDir 'drawpaper.exe'
+          if (-not (Test-Path $exe)) { $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName }
+          if (-not $exe -or -not (Test-Path $exe)) { Write-Error "Smoke FAIL: drawpaper.exe not found under $installDir" }
+          Write-Host "Installed drawpaper.exe = $exe"
+
+          # ---- HARD GATE: main window title contains drawpaper (bounded 30s) ----
+          Write-Host "Launching drawpaper.exe for main-window assertion"
+          $proc = Start-Process -FilePath $exe -PassThru
+          $ok = $false
+          for ($i = 1; $i -le 30; $i++) {
+            Start-Sleep -Seconds 1
+            $dp = Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($dp) {
+              $dp.Refresh()
+              $title = $dp.MainWindowTitle
+              if ($i % 5 -eq 0 -or $title) {
+                Write-Host ("t={0,2}s pid={1} MainWindowTitle='{2}'" -f $i, $dp.Id, $title)
+              }
+              if ($title -and $title.ToLower().Contains('drawpaper')) { $ok = $true; break }
+            }
+          }
+          Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$installDir*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          if (-not $ok) {
+            Write-Error 'Smoke FAIL: drawpaper main window title did not contain "drawpaper" within 30s after embed-install first launch'
+          }
+          Write-Host "Smoke OK: embed bootstrapper first-install — installer exit 0, drawpaper.exe present, main window title contains 'drawpaper'"
+
+          # ---- cleanup: uninstall drawpaper so the standard smoke flow starts clean ----
+          $uninst = Get-ChildItem $installDir -Filter 'uninst*.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $uninst) { $uninst = Get-ChildItem $installDir -Filter 'Uninstall*.exe' -File -ErrorAction SilentlyContinue | Select-Object -First 1 }
+          if ($uninst) {
+            Write-Host "Cleanup: running uninstaller $($uninst.FullName) /S"
+            $u = Start-Process -FilePath $uninst.FullName -ArgumentList '/S' -PassThru
+            for ($w = 0; $w -lt 60; $w++) { Start-Sleep -Seconds 1; $u.Refresh(); if ($u.HasExited) { break } }
+            Write-Host "Uninstaller exited = $($u.HasExited) code = $($u.ExitCode)"
+            Start-Sleep -Seconds 2
+          } else {
+            Write-Host "::warning title=wv2-cleanup-uninst::No uninstaller in $installDir (subsequent smoke will install over)"
+          }
+
+          # ---- restore WebView2 for downstream smokes ----
+          $afterRestore = Test-WebView2Present
+          Write-Host "WebView2 present after smoke (before restore): $afterRestore"
+          if (-not $afterRestore) {
+            $standalone = 'C:\tmp\wv2\MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
+            # Measure(c) writes to /tmp/wv2 under bash shell, which maps to C:\Users\runneradmin\AppData\Local\Temp on Windows.
+            if (-not (Test-Path $standalone)) {
+              $standalone = Join-Path $env:RUNNER_TEMP 'wv2\MicrosoftEdgeWebView2RuntimeInstallerX64.exe'
+            }
+            if (-not (Test-Path $standalone)) {
+              # Fallback: search common temp locations.
+              $found = Get-ChildItem -Path $env:TEMP -Recurse -Filter 'MicrosoftEdgeWebView2RuntimeInstallerX64.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($found) { $standalone = $found.FullName }
+            }
+            if (Test-Path $standalone) {
+              Write-Host "Restoring WebView2 via Evergreen Standalone: $standalone"
+              $r = Start-Process -FilePath $standalone -ArgumentList '/silent','/norestart' -PassThru -Wait
+              Write-Host "Standalone installer exit code: $($r.ExitCode)"
+              Start-Sleep -Seconds 3
+            } else {
+              Write-Host "::warning title=wv2-restore::WebView2 missing and standalone installer not found (Measure(c) download may have failed)"
+            }
+          }
+          $finalWv2 = Test-WebView2Present
+          Write-Host "WebView2 present FINAL: $finalWv2"
+          Write-Host "::notice title=wv2-embed-smoke::no-WebView2 embed-install smoke complete (wv2Destroyed=$wv2Destroyed bootstrapperSeen=$bootstrapperSeen windowTitleOK=$ok wv2Final=$finalWv2)"
 
       - name: 'Smoke (x64): silent NSIS install, exe present, ProductVersion matches tauri.conf'
         if: matrix.arch == 'x64'
@@ -2544,6 +2698,101 @@ jobs:
           path: apps/desktop-tauri/tauri-build.log
           if-no-files-found: ignore
           retention-days: 7
+
+  # ------------------------------------------------------------------
+  # Wave24: independent offline-runtime job.
+  #
+  # Builds a FULLY OFFLINE NSIS installer by embedding the WebView2 Evergreen
+  # Standalone Runtime (~200 MB) via Tauri `offlineInstaller: true`. This job is
+  # intentionally INDEPENDENT:
+  #   - no `needs:` — it runs in parallel with build/arm64-native;
+  #   - publish.needs stays `build` only, so this asset NEVER blocks or feeds
+  #     the GitHub Release;
+  #   - artifact name `nsis-offline-x64` does NOT collide with `nsis-x64`.
+  #
+  # On branch pushes the artifact stays on the run page (evidence). A maintainer
+  # can later attach *-offline-setup.exe to a release manually for air-gapped
+  # users. 200 MB is well under GitHub's 2 GB per-file release limit.
+  # ------------------------------------------------------------------
+  offline-runtime:
+    runs-on: windows-latest
+    env:
+      npm_config_registry: https://registry.npmjs.org/
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+          run_install: false
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install JS dependencies
+        run: pnpm install --frozen-lockfile --registry=https://registry.npmjs.org/
+
+      - name: Install Tauri CLI (desktop shell, outside the pnpm workspace)
+        working-directory: apps/desktop-tauri
+        run: pnpm install --ignore-workspace --registry=https://registry.npmjs.org/
+
+      - name: Add Rust target
+        run: rustup target add x86_64-pc-windows-msvc
+
+      - name: Build web frontend
+        run: pnpm -r build
+
+      - name: Tauri build (offline NSIS, x64 — embeds WebView2 Evergreen Standalone)
+        working-directory: apps/desktop-tauri
+        shell: bash
+        timeout-minutes: 40
+        env:
+          TAURI_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_KEY }}
+          TAURI_SIGNING_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -n "${TAURI_SIGNING_KEY:-}" ]; then
+            export TAURI_SIGNING_PRIVATE_KEY="$TAURI_SIGNING_KEY"
+            export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="${TAURI_SIGNING_KEY_PASSWORD:-}"
+          fi
+          echo "::group::tauri CLI version"
+          ./node_modules/.bin/tauri --version
+          echo "::endgroup::"
+          start_ts=$(date +%s)
+          # offlineInstaller:true makes Tauri download the Evergreen Standalone
+          # (~200 MB from Microsoft) at build time and embed it into the NSIS exe.
+          ./node_modules/.bin/tauri build --ci --bundles nsis \
+            --config '{"bundle":{"windows":{"webviewInstallMode":{"type":"offlineInstaller"}}}}' 2>&1 | tr '\r' '\n' | tee /tmp/tauri-offline.log
+          echo "tauri build exit=0 elapsed=$(( $(date +%s)-start_ts ))s"
+
+      - name: Rename offline installer and print size
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -Path 'apps/desktop-tauri/src-tauri/target' -Recurse -Filter '*-setup.exe' -File |
+            Where-Object { $_.FullName -match '[\\/]bundle[\\/]nsis[\\/]' } | Select-Object -First 1
+          if (-not $installer) { Write-Error 'offline FAIL: NSIS *-setup.exe not found after offline build' }
+          $mb = [math]::Round($installer.Length / 1MB, 2)
+          Write-Host "::notice title=wv2-offline-size::Fully-offline setup.exe = $mb MB ($($installer.Name))"
+          # Rename to *-offline-setup.exe so it is unmistakable on the run page.
+          $newName = $installer.Name -replace '-setup\.exe$', '-offline-setup.exe'
+          $newPath = Join-Path $installer.DirectoryName $newName
+          Copy-Item -Path $installer.FullName -Destination $newPath -Force
+          Write-Host "Renamed copy: $newPath = $([math]::Round((Get-Item $newPath).Length/1MB,2)) MB"
+
+      - name: Upload offline NSIS installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nsis-offline-x64
+          path: |
+            apps/desktop-tauri/src-tauri/target/**/release/bundle/nsis/*-offline-setup.exe
+          if-no-files-found: error
+          retention-days: 30
 
   publish:
     needs: build
