@@ -39,6 +39,8 @@ on:
       - 'chore/arm64-runner-smoke'
       - 'feat/updater-fallback-probe'
       - 'chore/arm64-cli-smoke'
+      # Wave24 路1: native binary size + cold-start instrumentation/optimization.
+      - 'fix/native-binary-startup'
   workflow_dispatch:
 
 permissions:
@@ -248,6 +250,65 @@ jobs:
           echo "::endgroup::"
 
       # ------------------------------------------------------------------
+      # Wave24 路1: exact-byte bundle measurement (data collection, no gate).
+      # Prints exact byte counts (not rounded MB) for the NSIS setup.exe and
+      # every *.msi under target/**/bundle, so before/after optimization runs
+      # compare at byte granularity. Runs on BOTH arches; arm64 artifacts are
+      # produced by the arm64 matrix build step.
+      # ------------------------------------------------------------------
+      - name: 'Measure (w24): bundle artifact exact bytes'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Write-Host "::group::Wave24 bundle exact bytes ($env:RUNTIME_ARCH)"
+          $roots = @('apps/desktop-tauri/src-tauri/target')
+          $nsis = Get-ChildItem -Path $roots -Recurse -Filter '*-setup.exe' -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '[\\/]bundle[\\/]nsis[\\/]' }
+          $msi  = Get-ChildItem -Path $roots -Recurse -Filter '*.msi' -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match '[\\/]bundle[\\/]msi[\\/]' }
+          foreach ($f in ($nsis | Sort-Object Name)) {
+            Write-Host ("NSIS_SETUP_BYTES ${{ matrix.arch }}={0}  {1}" -f $f.Length, $f.Name)
+            Write-Host "::notice title=w24-nsis-${{ matrix.arch }}::$($f.Name) = $($f.Length) bytes"
+          }
+          foreach ($f in ($msi | Sort-Object Name)) {
+            Write-Host ("MSI_BYTES ${{ matrix.arch }}={0}  {1}" -f $f.Length, $f.Name)
+            Write-Host "::notice title=w24-msi-${{ matrix.arch }}::$($f.Name) = $($f.Length) bytes"
+          }
+          if (-not $nsis) { Write-Error 'w24: no *-setup.exe found under target/**/bundle/nsis' }
+          if (-not $msi)  { Write-Error 'w24: no *.msi found under target/**/bundle/msi' }
+          Write-Host "::endgroup::"
+
+      # ------------------------------------------------------------------
+      # Wave24 路1: cargo dependency audit (informational, x64 only). Prints
+      # the heaviest crates in the final linked binary via `cargo bloat`-free
+      # proxy (feature-unlocked tree) so the before/after doc can cite what
+      # actually lives in the dep graph. Non-fatal: a missing cargo/bloat must
+      # never gate the build; this only feeds the optimization decision.
+      # ------------------------------------------------------------------
+      - name: 'Measure (w24): cargo dep feature audit (informational, x64)'
+        if: matrix.arch == 'x64'
+        working-directory: apps/desktop-tauri/src-tauri
+        shell: bash
+        timeout-minutes: 6
+        run: |
+          # Informational only. No `set -e` and every cargo call is `|| echo`-guarded
+          # so the script always exits 0; we deliberately do NOT add a new
+          # continue-on-error (Wave24 red line: only the pre-existing Measure b/c
+          # steps may carry one).
+          set -uo pipefail
+          echo "::group::Wave24 cargo feature audit"
+          echo "--- cargo tree (top 40 edges by reverse-depth) ---"
+          cargo tree --depth 2 2>&1 | head -120 || echo "(cargo tree failed)"
+          echo "--- who pulls reqwest / hyper / rustls / ring (reverse) ---"
+          for c in reqwest hyper rustls ring brotli; do
+            echo "### cargo tree -i $c"
+            cargo tree -i "$c" --edges normal 2>&1 | head -25 || echo "(n/a)"
+          done
+          echo "--- tauri features actually enabled ---"
+          cargo tree -e features -p tauri 2>&1 | head -40 || echo "(n/a)"
+          echo "::endgroup::"
+
+      # ------------------------------------------------------------------
       # Smoke tests (Wave 12 C). See docs/wave12/windows-smoke.md for design.
       #
       # - "fresh web assets" runs on BOTH arches: it only inspects files on
@@ -408,6 +469,110 @@ jobs:
             Write-Error ("Smoke FAIL: version mismatch. tauri.conf='$expectedVersion' vs ProductVersion='$productVersion'")
           }
           Write-Host "Smoke OK: installed exe present and numeric version tokens match"
+
+      # ------------------------------------------------------------------
+      # Wave24 路1: post-install footprint + cold-start-to-window measurement.
+      # Same-caliber across before/after runs: fixed 7 samples, bounded 30s
+      # wait/sample, Stopwatch from Start-Process to MainWindowHandle!=0 AND
+      # title contains 'drawpaper' (reuses the existing smoke window-wait手法).
+      # Data is PRINTED, not gated (no threshold gate); but a sample that never
+      # shows a window within its bound IS a red (measurement infra / boot
+      # regression), so the step fails loudly on a real boot break.
+      # ------------------------------------------------------------------
+      - name: 'Measure (w24): installed footprint + cold-start to window (7 samples, median)'
+        if: matrix.arch == 'x64'
+        shell: pwsh
+        timeout-minutes: 6
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # --- Resolve install dir (identical probe to the install smoke) ---
+          $candidates = @(
+            (Join-Path $env:LOCALAPPDATA 'Programs\drawpaper'),
+            (Join-Path $env:LOCALAPPDATA 'drawpaper'),
+            (Join-Path $env:ProgramFiles 'drawpaper')
+          )
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'drawpaper') }
+          $installDir = $null
+          foreach ($c in $candidates) { if (Test-Path $c) { $installDir = $c; break } }
+          if (-not $installDir) {
+            foreach ($root in @($env:LOCALAPPDATA, $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+              if ($root -and (Test-Path $root)) {
+                $hit = Get-ChildItem $root -Filter 'drawpaper' -Directory -ErrorAction SilentlyContinue | Select-Object -First 1
+                if ($hit) { $installDir = $hit.FullName; break }
+              }
+            }
+          }
+          if (-not $installDir) { Write-Error 'w24: install dir not found after NSIS install' }
+          $exe = Join-Path $installDir 'drawpaper.exe'
+          if (-not (Test-Path $exe)) { $exe = Get-ChildItem $installDir -Recurse -Filter 'drawpaper.exe' -File | Select-Object -First 1 -ExpandProperty FullName }
+          if (-not (Test-Path $exe)) { Write-Error "w24: drawpaper.exe not found under $installDir" }
+
+          # --- Footprint: install dir total bytes + exe bytes ---
+          $dirBytes = (Get-ChildItem $installDir -Recurse -File -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
+          $exeBytes = (Get-Item $exe).Length
+          Write-Host "::group::Wave24 installed footprint"
+          Write-Host ("INSTALL_DIR_BYTES=$dirBytes  ($installDir)")
+          Write-Host ("EXE_BYTES=$exeBytes  ($exe)")
+          Write-Host "::notice title=w24-footprint-x64::install-dir=$dirBytes bytes, drawpaper.exe=$exeBytes bytes"
+          Write-Host "::endgroup::"
+
+          # --- Cold-start: 7 fresh launches, time to main window ready ---
+          $N = 7
+          $samples = @()
+          # Clean slate before the first sample.
+          Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Milliseconds 400
+          for ($i = 1; $i -le $N; $i++) {
+            # Per-sample clean slate (kill leftover + its webview2 children).
+            Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue |
+              Where-Object { $_.Path -like "$installDir*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 400
+
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            $proc = Start-Process -FilePath $exe -WorkingDirectory $installDir -PassThru
+            $found = $false
+            # Bounded poll: 600 * 50ms = 30s hard cap per sample.
+            for ($s = 0; $s -lt 600; $s++) {
+              Start-Sleep -Milliseconds 50
+              $p = Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Select-Object -First 1
+              if ($p) {
+                $p.Refresh()
+                if ($p.MainWindowHandle -ne [IntPtr]::Zero -and
+                    $p.MainWindowTitle -and
+                    $p.MainWindowTitle.ToLower().Contains('drawpaper')) {
+                  $sw.Stop()
+                  $ms = $sw.ElapsedMilliseconds
+                  $ws = $p.PrivateMemorySize64
+                  Write-Host ("sample[{0}/{1}] window-up at {2} ms  pid={3}  private-mem={4:N0} bytes" -f $i, $N, $ms, $p.Id, $ws)
+                  $samples += [pscustomobject]@{ n = $i; ms = [long]$ms; ws = [long]$ws }
+                  $found = $true
+                  break
+                }
+              }
+            }
+            # Tear down this launch before the next sample.
+            Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            if (-not $found) {
+              Write-Error "w24 cold-start: sample $i/$N never presented a drawpaper main window within 30s"
+            }
+          }
+
+          # Final sweep so the next smoke starts clean.
+          Get-Process -Name 'drawpaper' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          Get-Process -Name 'msedgewebview2' -ErrorAction SilentlyContinue |
+            Where-Object { $_.Path -like "$installDir*" } | Stop-Process -Force -ErrorAction SilentlyContinue
+
+          $vals = @($samples | ForEach-Object { $_.ms } | Sort-Object)
+          $median = $vals[[math]::Floor(($vals.Count - 1) / 2)]
+          $min = $vals[0]; $max = $vals[-1]
+          $avgWs = [int64](($samples | Measure-Object ws -Average).Average)
+          Write-Host "::group::Wave24 cold-start summary (x64)"
+          Write-Host ("samples_ms = {0}" -f ($vals -join ', '))
+          Write-Host ("COLDSTART_MEDIAN_MS={0}  MIN={1}  MAX={2}" -f $median, $min, $max)
+          Write-Host ("COLDSTART_AVG_PRIVATE_MEM_BYTES={0:N0}" -f $avgWs)
+          Write-Host "::notice title=w24-coldstart-x64::median=$median ms (min=$min max=$max) samples=$($vals -join '/')"
+          Write-Host "::endgroup::"
 
       - name: 'Smoke (x64): .kbnote registry association registered (HKCU/HKLM)'
         if: matrix.arch == 'x64'
