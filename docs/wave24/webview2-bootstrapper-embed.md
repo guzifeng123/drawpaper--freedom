@@ -24,10 +24,11 @@ Wave24 的目标是：**把 bootstrapper stub 打进安装包**（`embedBootstra
 | `embedBootstrapper`（**本路切换**） | 内嵌 bootstrapper stub（Tauri schema 注明约 +1.8 MB） | 是（bootstrapper 本地执行，仍从微软 CDN 下运行时） | 见 §3 实测 | 仅运行时下载失败（bootstrapper 本身已本地） |
 | `offlineInstaller`（全离线附加资产） | 内嵌完整 Evergreen Standalone 运行时安装器（Tauri schema 注明约 +127 MB） | **否** | ~130–200 MB（构建期实测） | 无（运行时已打包） |
 
-配置格式（Tauri 2.1 schema）：`webviewInstallMode` 是带 `type` 字段的对象，
-如 `{"type": "embedBootstrapper"}`；Wave15 内联 `--config` 用的
-`{"embedBootstrapper": true}` 不符合 schema（这也是当时 Measure(b) continue-on-error
-未产包的原因）。
+配置格式（Tauri 2.1 schema）：`webviewInstallMode` 属于 `bundle.windows`（不是
+`bundle.windows.nsis`），值为带 `type` 字段的对象，如
+`{"webviewInstallMode":{"type":"embedBootstrapper"}}`。Wave15 内联 `--config` 用的
+`bundle.windows.nsis.webviewInstallMode` 路径和 `{"embedBootstrapper": true}` 简写
+都不符合 schema（这也是当时 Measure(b) continue-on-error 未产包的原因）。
 
 关键区别：
 - `embedBootstrapper` **不是**离线方案——运行时组件（~200 MB）仍在安装时从
