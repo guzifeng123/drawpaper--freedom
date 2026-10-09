@@ -39,12 +39,12 @@ on:
       - 'chore/arm64-runner-smoke'
       - 'feat/updater-fallback-probe'
       - 'chore/arm64-cli-smoke'
-<<<<<<< HEAD
       # Wave24 路1: native binary size + cold-start instrumentation/optimization.
       - 'fix/native-binary-startup'
-=======
+      # Wave24 路2: embedded WebView2 bootstrapper + optional offline runtime asset.
       - 'feat/webview2-bootstrapper-embed'
->>>>>>> origin/feat/webview2-bootstrapper-embed
+      # Wave24 路3: web cold-start instrumentation/optimization.
+      - 'fix/web-coldstart'
   workflow_dispatch:
 
 permissions:
