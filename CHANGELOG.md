@@ -4,7 +4,13 @@
 
 ## 未发布（Unreleased）
 
-（暂无）
+Windows NSIS 首装可靠性加固（Wave24 路 2）：WebView2 安装模式从 `downloadBootstrapper`
+正式切换为 `embedBootstrapper`——引导程序 stub（约 2 MB）打进安装包，安装期本地执行，
+消除「安装时从微软 CDN 拉引导失败（exit 18）」这一类首装故障；约 200 MB 的运行时组件仍
+在安装期从微软官方 CDN 自动下载（属 Tauri 标准首装行为）。新增「无 WebView2 → 引导安装
+→ 主窗口」硬门冒烟（环境准备 best-effort，安装/退出码/主窗口标题硬门）。新增独立
+`offline-runtime` CI job，构建全离线附加包 `*-offline-setup.exe`（内嵌完整 Evergreen
+运行时，约 200 MB），不进主发布矩阵、不阻塞 publish。详见 `docs/wave24/webview2-bootstrapper-embed.md`。
 
 ## 0.1.0-rc.15（2026-10-09）
 

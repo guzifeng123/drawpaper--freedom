@@ -129,8 +129,10 @@ drawpaper 也支持**不安装、直接拷到 U 盘/移动硬盘里跑**：所�
 drawpaper 的窗口用 Microsoft Edge WebView2 渲染：
 
 - **Win11**：系统自带 WebView2 运行时，装完即跑。
-- **Win10 或精简过的系统（联网）**：第一次启动 drawpaper 的安装器会自动联网下载 WebView2 Evergreen Runtime。
-- **完全离线 / 内网隔离机器**：当前安装包**不内置**运行时，需要你先在能上网的机器上，到 Microsoft 官网下载「WebView2 Evergreen Standalone Installer」（按机型选 x64 / x86 / ARM64），拷到内网先装好，再装 drawpaper。官方下载页：`https://developer.microsoft.com/microsoft-edge/webview2/`（选 *Evergreen Standalone Installer*，不是 Bootstrapper）。
+- **Win10 或精简过的系统（联网）**：安装器已内置 WebView2 引导程序（bootstrapper stub），安装时本地执行引导、从微软官方 CDN 自动下载约 200 MB 的 Evergreen Runtime；只要能联网到微软 CDN，装完即跑。
+- **完全离线 / 内网隔离机器**：标准安装包仍不内置完整运行时。两种办法：
+  1. 到能上网的机器上，从 Microsoft 官网下载「WebView2 Evergreen Standalone Installer」（按机型选 x64 / x86 / ARM64），拷到内网先装好，再装 drawpaper。官方下载页：`https://developer.microsoft.com/microsoft-edge/webview2/`（选 *Evergreen Standalone Installer*，不是 Bootstrapper）。
+  2. 若 Releases 页提供 `drawpaper_*_offline-setup.exe`（全离线附加包，已内嵌完整运行时），直接用它在内网安装，无需任何联网。
 - WebView2 崩了会表现为白屏 / 窗口卡死；关掉 drawpaper 重开即可，文档有 500ms 防抖自动保存兜底。
 
 ## 5. 检查更新
