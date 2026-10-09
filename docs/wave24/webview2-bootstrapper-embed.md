@@ -22,7 +22,7 @@ Wave24 的目标是：**把 bootstrapper stub 打进安装包**（`embedBootstra
 |---|---|---|---|---|
 | `downloadBootstrapper`（Wave15 默认） | 无 bootstrapper、无运行时 | **是**（下 bootstrapper + 运行时） | 4.65 MB（Wave15 实测） | bootstrapper 下载失败（exit 18）→ 安装直接非零 |
 | `embedBootstrapper`（**本路切换**） | 内嵌 bootstrapper stub（Tauri schema 注明约 +1.8 MB） | 是（bootstrapper 本地执行，仍从微软 CDN 下运行时） | 见 §3 实测 | 仅运行时下载失败（bootstrapper 本身已本地） |
-| `offlineInstaller`（全离线附加资产） | 内嵌完整 Evergreen Standalone 运行时安装器（Tauri schema 注明约 +127 MB） | **否** | ~130–200 MB（构建期实测） | 无（运行时已打包） |
+| `offlineInstaller`（全离线附加资产） | 内嵌完整 Evergreen 运行时安装器 | **否** | 212.13 MB（本路实测） | 无（运行时已打包） |
 
 配置格式（Tauri 2.1 schema）：`webviewInstallMode` 属于 `bundle.windows`（不是
 `bundle.windows.nsis`），值为带 `type` 字段的对象，如
@@ -42,12 +42,14 @@ Wave24 的目标是：**把 bootstrapper stub 打进安装包**（`embedBootstra
 | 指标 | 数值 | 来源 |
 |---|---|---|
 | before：downloadBootstrapper x64 | **4.65 MB** | Wave15 run `37609717113`，`wv2-baseline-x64` |
-| after：embedBootstrapper x64 | _见本路 run notice `wv2-embedAfter-x64`_ | release-windows 分支 run |
-| after：embedBootstrapper arm64 | _见本路 run notice `wv2-embedAfter-arm64`_ | release-windows 分支 run |
-| 全离线：offlineInstaller x64 | _见 offline-runtime job notice `wv2-offline-size`_ | offline-runtime job |
+| after：embedBootstrapper x64 | **6.98 MB**（+2.33 MB） | 本路 run `37888036140`，`wv2-embedAfter-x64` |
+| after：embedBootstrapper arm64 | **6.79 MB** | 本路 run `37888036140`，`wv2-embedAfter-arm64` |
+| 全离线：offlineInstaller x64 | **212.13 MB** | 本路 run `37888036140`，offline-runtime job `wv2-offline-size` |
+| Evergreen Standalone x86（完整运行时参考） | 204.17 MB | `wv2-standalone-x86` |
 
-> 注：Wave15 的 `wv2-embedBootstrapper` 测量步当时因 continue-on-error 未产包，
-> 仅按 stub 体积估 ≈ +1.7 MB。本路切换后由 Measure(a) 直接落数。
+> embedBootstrapper 增量 +2.33 MB，与 Tauri schema 注明的「around 1.8 MB」同量级
+> （差异来自 NSIS 压缩与版本漂移）。全离线包 212.13 MB，远低于 GitHub Release
+> 单文件 2 GB 硬上限。
 
 ## 4. 无 WebView2 首装硬门冒烟
 
@@ -86,9 +88,26 @@ Wave24 的目标是：**把 bootstrapper stub 打进安装包**（`embedBootstra
      重装了运行时，则复查 `Test-WebView2Present`；若仍缺失，用 Measure(c) 下载的
      Evergreen Standalone x64 安装器补装。
 
-### 4.2 结果
+### 4.2 结果（run `37888036140`）
 
-_待本路 CI run 落数后填写：wv2Destroyed / bootstrapperSeen / windowTitleOK / wv2Final。_
+```
+wv2Destroyed=False  bootstrapperSeen=False  windowTitleOK=True  wv2Final=True
+```
+
+- **wv2Destroyed=False**：hosted windows-latest runner 预装的 WebView2 Evergreen
+  被系统保护，`--uninstall --mswebview-runtime --system-level /silent` 未能真正
+  移除（env-prep 在 try/catch 内，未抛错、未硬门）。这是任务预设的特许场景。
+- **bootstrapperSeen=False**：因 WebView2 实际未被移除，安装器跳过了 bootstrapper
+  执行，进程轮询未捕获到 `MicrosoftEdgeWebView2Bootstrapper.exe`。已发 notice
+  `wv2-bootstrapper-anchor` 如实写明。
+- **windowTitleOK=True**（硬门通过）：安装退出码 0、`drawpaper.exe` 就位、
+  30 s 内主窗口标题出现 `drawpaper`。
+- **wv2Final=True**：冒烟结束后 WebView2 仍在，下游标准冒烟链路不受影响。
+
+> 硬门项（安装退出码 0 / drawpaper.exe 就位 / 主窗口标题有界出现）全部通过。
+> bootstrapper 进程锚点因 runner 环境无法真正卸载 WebView2 而未被触发——这是
+> 可接受的环境局限，已在日志和本文档如实写明，未用 continue-on-error 掩盖
+> 任何断言。
 
 ## 5. 全离线附加资产决策（offline-runtime job）
 
@@ -114,9 +133,13 @@ _待本路 CI run 落数后填写：wv2Destroyed / bootstrapperSeen / windowTitl
 - `publish.needs` 仍只 `build`，**本资产不进 GitHub Release 自动发布**——后续
   维护者可在需要时手动挂到 Release 页。
 
-### 5.3 数据
+### 5.3 数据（run `37888036140`）
 
-_待本路 CI run 落数：offline-runtime job 是否全绿、产出体积、时长。_
+- `offline-runtime` job：**全绿**（build + rename + upload 三步成功）；
+- 产出体积：**212.13 MB**（`drawpaper_0.1.0-rc.15_x64-offline-setup.exe`，
+  artifact `nsis-offline-x64`）；
+- 不进 6 包主矩阵、不阻塞 publish（`publish.needs` 仍只 `build`，branch run
+  publish skipped）。
 
 ## 6. 隐私与外联说明
 
