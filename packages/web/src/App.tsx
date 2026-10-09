@@ -40,6 +40,7 @@ import { registerExportActions } from '@/export/export-actions-bridge';
 import { initDesktopBridge } from '@/host/desktop-bridge';
 import { initNativeAutosave } from '@/host/native-autosave-adapter';
 import { CloseGuardDialog } from '@/panels/CloseGuardDialog';
+import { mark } from '@/wiring/cold-starts';
 
 /**
  * App 总装（Wave4 P1）：在 Wave2 基础上接齐大纲 / 标签筛选 / AI 面板 / 导出新选项。
@@ -88,6 +89,11 @@ export default function App() {
 
   // 全局图谱总览 provider（只读 Dexie；引用稳定）。
   const overviewProvider = useMemo(() => new DexieOverviewProvider(), []);
+
+  // Wave24 路 3：首次 commit 落 effect（= 首屏 React 树已提交，paint 前最后一个同步点）。
+  useEffect(() => {
+    mark('react-commit');
+  }, []);
 
   // 跨文档双链：docRef chip 点击 → 真实 store openDocRef（跨文档 openDoc+flyTo+高亮）。
   useEffect(() => {

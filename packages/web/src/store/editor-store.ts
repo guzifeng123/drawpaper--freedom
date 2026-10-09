@@ -2,7 +2,7 @@ import { createEditorStore, CURRENT_DOC_VERSION } from '@drawpaper/core';
 import type { KBNoteDoc } from '@drawpaper/core';
 import { DexieStorageAdapter } from '../storage/db';
 import { WebHostAdapter } from '../host/web-host';
-import { buildIndex, searchDocs } from '../storage/search-index';
+import { createEmptyIndex, feedIndexChunked, searchDocs } from '../storage/search-index';
 import { activeFileManager, setStorageQuotaWarningHook } from '../storage/fsa';
 import { TEMPLATE_REGISTRY } from '../storage/templates';
 import { createConflictBridge, type ConflictBridge } from '../wiring/conflict-bridge';
@@ -16,6 +16,7 @@ import {
   writeWelcomeFlag,
 } from '../wiring/welcome-doc';
 import { checkQuotaPressure, raiseQuotaDialog } from '../wiring/quota-watch';
+import { mark, timed } from '../wiring/cold-starts';
 
 /**
  * React 单例 editor store：注入浏览器 storage / host，启动时打开最近文档或新建空白。
@@ -84,12 +85,16 @@ setStorageQuotaWarningHook((kind) => {
 
 // Wave10 阶段 B：订阅命令管道，本地变更差量盖章（加载文档后先 adoptClockFloor 抬钟）。
 syncStamper.install(editorStore);
+mark('store');
 
 /** 启动后：列出文档 → 打开最近一份；没有则新建。桌面端首次运行先建欢迎文档。 */
 async function bootstrap(): Promise<void> {
-  await editorStore.getState().listDocs();
+  mark('bootstrap');
+  // Wave24：首次 IDB 操作 = Dexie 打开 + 全量列表读出（2k 块场景这是主线程反序列化大户之一）。
+  await timed('idb-open', 'idb-open-start', editorStore.getState().listDocs());
   // Wave13：桌面端首次运行自动创建「欢迎使用 drawpaper」。
   // 浏览器/PWA/e2e 无 __TAURI__ → shouldCreateWelcomeDoc 恒 false，永不创建。
+  mark('doc-open-start');
   if (shouldCreateWelcomeDoc({ isTauri: detectTauriHost(), flagSet: readWelcomeFlag() })) {
     editorStore.getState().loadDoc(buildWelcomeDoc());
     writeWelcomeFlag();
@@ -102,6 +107,7 @@ async function bootstrap(): Promise<void> {
       editorStore.getState().newDoc();
     }
   }
+  mark('doc-open');
   // 尝试恢复上次活动本地文件句柄（需用户重新授权；失败则保持 IndexedDB 自动保存）。
   try {
     const name = await activeFileManager.restoreActiveFile();
@@ -116,13 +122,33 @@ async function bootstrap(): Promise<void> {
   void checkQuotaPressure().catch(() => {
     /* estimate 不支持/失败时静默——防御性，不阻塞启动 */
   });
+  mark('bootstrap-done');
 }
 
-/** doc 变更防抖重建 MiniSearch；searchQuery 变化时即时查询。 */
+/** doc 变更防抖重建 MiniSearch；searchQuery 变化时即时查询。
+ *  Wave24：索引构建改为「空占位 + idle 分片喂入」——2k 块下同步 buildIndex
+ *  ~865ms 长任务不再压住首帧后的可交互窗口；分片喂完后回放当前搜索词。 */
 function startSearchSync(): void {
-  let index = buildIndex(editorStore.getState().doc);
+  let index = createEmptyIndex();
   editorStore.getState().setSearchIndex(index);
   let rebuildTimer: ReturnType<typeof setTimeout> | undefined;
+  let feedHandle: { cancel: () => void } | undefined;
+  let feedDocId = '';
+
+  const scheduleRebuild = (doc: KBNoteDoc) => {
+    feedHandle?.cancel();
+    index = createEmptyIndex();
+    feedDocId = doc.id;
+    editorStore.getState().setSearchIndex(index);
+    feedHandle = feedIndexChunked(index, doc, () => {
+      if (feedDocId !== doc.id) return; // 已被更新的文档取代，丢弃旧分片
+      mark('search-index');
+      const q = editorStore.getState().searchQuery;
+      if (q) editorStore.getState().setSearchResults(searchDocs(index, q));
+    });
+  };
+
+  scheduleRebuild(editorStore.getState().doc);
 
   editorStore.subscribe((state, prev) => {
     if (state.searchQuery !== prev.searchQuery) {
@@ -130,16 +156,7 @@ function startSearchSync(): void {
     }
     if (state.doc !== prev.doc) {
       if (rebuildTimer !== undefined) clearTimeout(rebuildTimer);
-      rebuildTimer = setTimeout(() => {
-        const pt = performance.now();
-        index = buildIndex(state.doc);
-        const dt = performance.now() - pt;
-        const w = window as unknown as { __perfStages?: Record<string, number> };
-        if (w.__perfStages) w.__perfStages.buildIndex = dt;
-        editorStore.getState().setSearchIndex(index);
-        const q = editorStore.getState().searchQuery;
-        if (q) editorStore.getState().setSearchResults(searchDocs(index, q));
-      }, 300);
+      rebuildTimer = setTimeout(() => scheduleRebuild(state.doc), 300);
     }
   });
 }

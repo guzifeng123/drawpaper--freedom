@@ -4,7 +4,16 @@
 
 ## 未发布（Unreleased）
 
-（暂无）
+### 内部工程
+
+- **前端冷启动分段量化与优化（Wave24 路 3）**：补齐冷启动关键段埋点（导航/首包 →
+  IDB 打开 → 文档载入 → MiniSearch 索引 → React 首 commit → 首画布首帧 → TTI，时间基
+  统一 `performance.timeOrigin`，零外网零新依赖，dev 与 production preview 均可经
+  `window.__coldStart.report()` 读取）。三项按数据驱动的优化：首帧品牌色占位 splash（FCP
+  −244ms）、资产 reconcile 延迟到首帧后 idle（关键路径 −1719ms）、MiniSearch 索引改
+  rIC 分片喂入（最长 Long Task 755→435ms）。2000 块 TTI 中位 2065→2048ms，不劣于基线，
+  远低于 8s 红线；§9 fps / 离线 / precache / 全量单测零回退。详见
+  `docs/wave24/web-coldstart.md`。
 
 ## 0.1.0-rc.15（2026-10-09）
 
