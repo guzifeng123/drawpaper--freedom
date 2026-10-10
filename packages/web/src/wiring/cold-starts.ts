@@ -208,3 +208,35 @@ if (typeof window !== 'undefined') {
   w.__coldStart = { report: getColdStartReport };
   startLongTaskRecorder();
 }
+
+// ── Wave25：Tauri 诊断桥（--diag-export 诊断包 coldstart.json）─────────────
+// Rust 侧 WebviewWindow::eval 是单向执行、拿不到 JS 返回值，所以用两段式握手：
+//   1. Rust eval 派发 DOM CustomEvent `drawpaper:request-coldstart`；
+//   2. 这里监听到后取 window.__coldStart.report()，经 __TAURI__.core.invoke 把
+//      JSON 字符串回传给 Rust 的 coldstart_report command；Rust 有界等待（≤2s）
+//      后写进诊断包 coldstart.json（超时/无 webview 由 Rust 写 unavailable）。
+// 仅在 Tauri 宿主（window.__TAURI__ 全局存在）下注册；浏览器 / PWA / e2e 零副作用。
+// 零新依赖：withGlobalTauri 已在 tauri.conf 开启，直接用 window.__TAURI__ 全局对象。
+if (typeof window !== 'undefined' && '__TAURI__' in window) {
+  try {
+    window.addEventListener('drawpaper:request-coldstart', () => {
+      try {
+        const t = (
+          window as unknown as {
+            __TAURI__?: {
+              core?: {
+                invoke?: (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
+              };
+            };
+          }
+        ).__TAURI__;
+        const payload = JSON.stringify(getColdStartReport());
+        void t?.core?.invoke?.('coldstart_report', { payload });
+      } catch {
+        /* 上报失败不影响 app；Rust 侧会写 unavailable 占位 */
+      }
+    });
+  } catch {
+    /* noop */
+  }
+}

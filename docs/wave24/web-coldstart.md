@@ -34,6 +34,16 @@ longTasks。**dev 与 production preview 都挂**，不依赖 `__drawpaper__` DE
 
 ### Tauri 下采集（外推限制）
 
+> **[Wave25 路2 闭环]** 本路当时红线不动 Cargo/Tauri，故未把分段接入 `--diag-export`
+> 诊断包。该缺口已在分支 `chore/coldstart-diag-bridge` 闭环：Rust 新增
+> `coldstart_report` command + `ColdStartState` 暂存槽；菜单导出时 diagnostics.rs 经
+> `webview.eval` 派发 `drawpaper:request-coldstart` DOM 事件，web 侧
+> `cold-starts.ts` 监听后把 `__coldStart.report()` 经 `window.__TAURI__.core.invoke`
+> 回传，Rust 有界等待（≤2s，50ms 轮询）+ 形状白名单清洗（只允许 number/bool/null
+> 叶子、短标识符键、64KB 上限）后写入 zip 新条目 `coldstart.json`；超时/无 webview
+> 写 `{"status":"unavailable",...}` 不阻断导出。无头 `--diag-export`（CI smoke）无
+> webview，恒写 unavailable 占位，smoke-cli.ps1 已补存在性 + 递归隐私断言。
+
 红线规定本路不动 Cargo/Tauri（路 1/2 领地），故**未**把分段接入 `--diag-export` 的 Rust
 诊断包：那需要新增一条 `#[tauri::command]` 桥 + 在 `diagnostics.rs` zip 里加条目，越界。
 Tauri WebView2 下的手动采集法：devtools Console 里 `__coldStart.report()` 即得全部分段；
