@@ -102,6 +102,11 @@ jobs:
   # 硬门：失败即红，不允许 continue-on-error / fixme / skip 凑绿。
   webkit:
     runs-on: ubuntu-latest
+    env:
+      # 取证假设：CI runner 带 http_proxy/https_proxy，WebKitGTK 可能把 127.0.0.1
+      # 也走代理导致引擎侧导航挂起（node 侧正常）。强制本地回环绕过代理。
+      no_proxy: '127.0.0.1,localhost,::1'
+      NO_PROXY: '127.0.0.1,localhost,::1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -130,11 +135,45 @@ jobs:
         working-directory: packages/web
         run: pnpm exec playwright install --with-deps webkit
 
+      # 先独立起 dev server（detach），供取证脚本与 e2e 共用（e2e 用 WEBKIT_REUSE_SERVER=1 复用）。
+      - name: Start Vite dev server (webkit)
+        working-directory: packages/web
+        run: |
+          nohup pnpm dev --host 127.0.0.1 --port 4190 --strictPort > /tmp/webkit-dev.log 2>&1 &
+          echo $! > /tmp/webkit-dev.pid
+          for i in $(seq 1 60); do
+            if curl -sf --max-time 2 http://127.0.0.1:4190/ >/dev/null; then
+              echo "dev server ready after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::dev server did not become ready in 60s"; cat /tmp/webkit-dev.log; exit 1
+
+      # 取证：node 侧 request vs 引擎侧 goto 对比 + 外网对照，全部写 GITHUB_STEP_SUMMARY。
+      # 本步退出码恒 0（取证不挡 CI）；后续 e2e 仍是硬门。
+      - name: WebKit nav forensics
+        working-directory: packages/web
+        if: always()
+        run: |
+          {
+            echo "## env proxy"
+            env | grep -iE 'proxy' || echo '(no proxy env)'
+            echo
+            echo "## curl -sI (node/普通 HTTP)"
+            curl -sI --max-time 10 http://127.0.0.1:4190/ | head -10
+            echo
+            echo "## curl HTML head"
+            curl -s --max-time 10 http://127.0.0.1:4190/ | head -30
+            echo
+            node scripts/webkit-nav-forensics.mjs
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Playwright webkit e2e (wave21 compat)
         working-directory: packages/web
         run: npx playwright test --config playwright.webkit.config.ts
         env:
           CI: '1'
+          WEBKIT_REUSE_SERVER: '1'
 
       - name: Upload Playwright report (webkit)
         if: always()

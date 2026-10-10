@@ -52,7 +52,8 @@ export default defineConfig({
   webServer: {
     command: `pnpm dev --host ${WEBKIT_HOST} --port ${WEBKIT_PORT} --strictPort`,
     url: `http://${WEBKIT_HOST}:${WEBKIT_PORT}`,
-    reuseExistingServer: !process.env['CI'],
+    // CI 下由独立 step 先起 dev server 并跑取证；WEBKIT_REUSE_SERVER=1 时 Playwright 复用。
+    reuseExistingServer: process.env.CI ? !!process.env.WEBKIT_REUSE_SERVER : true,
     timeout: 120_000,
   },
 });
