@@ -13,12 +13,12 @@ if (existsSync(LOCAL_BROWSERS_PATH)) {
  *
  *  - project 固定 webkit；testMatch 只匹配本波新增的 webkit 兼容 spec，
  *    绝不让默认 chromium 全量套件改跑 webkit；
- *  - 本配置**不被 .github/workflows/web-ci.yml 默认调用**（CI 只装 chromium），
- *    仅在具备 WebKit 系统依赖（libgtk-4 / gstreamer-codecparsers / libavif 等）
- *    的本机/真机验证环境手动跑；
+ *  - 本配置由 .github/workflows/web-ci.yml 的 `webkit` job 调用（ubuntu-latest
+ *    有 sudo，`playwright install --with-deps webkit` 装齐系统库）；与 chromium
+ *    全量 e2e 并行，互不抢端口（WEBKIT_PORT 默认 4190，独立 runner）；
  *  - webServer 走 `pnpm dev`（e2e 依赖 window.__drawpaper__ DEV 钩子）。
  *
- * 前置：packages/web 先 build；WebKit 需系统库（缺库时 minibrowser 127 退出）。
+ * 前置：packages/web 先 build（@drawpaper/core exports 指向 dist）；WebKit 需系统库。
  */
 const WEBKIT_PORT = Number(process.env['WEBKIT_PORT'] ?? 4190);
 

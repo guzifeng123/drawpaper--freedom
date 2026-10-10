@@ -15,17 +15,17 @@ concurrency:
   group: web-ci-${{ github.ref }}
   cancel-in-progress: true
 
+# .npmrc pins registry.npmmirror.com (fast for local China dev).
+# GitHub runners are in the US; override to the official registry so CI
+# doesn't flake on mirror connectivity.
+env:
+  npm_config_registry: https://registry.npmjs.org/
+
 jobs:
-  ci:
+  # ── Chromium 全量 e2e（既有门禁，零回归）──────────────────────────────
+  # install / build / typecheck / lint / unit / precache / chromium e2e / offline e2e。
+  chromium:
     runs-on: ubuntu-latest
-    env:
-      # .npmrc pins registry.npmmirror.com (fast for local China dev).
-      # GitHub runners are in the US; override to the official registry so CI
-      # doesn't flake on mirror connectivity.
-      npm_config_registry: https://registry.npmjs.org/
-    defaults:
-      run:
-        working-directory: .
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -89,7 +89,58 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          name: playwright-report-chromium
+          path: |
+            packages/web/playwright-report
+            packages/web/test-results
+          retention-days: 7
+          if-no-files-found: warn
+
+  # ── WebKit 兼容降级 e2e（Wave21 闭环）─────────────────────────────────
+  # ubuntu-latest 有 sudo，可 apt 装 WebKit 系统库（--with-deps webkit）。
+  # 与 chromium job 并行，只跑 wave21-webkit-compat.spec.ts（5 例）。
+  # 硬门：失败即红，不允许 continue-on-error / fixme / skip 凑绿。
+  webkit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+          run_install: false
+
+      - name: Setup Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --registry=https://registry.npmjs.org/ --reporter=append-only
+
+      # webServer 走 pnpm dev，但 @drawpaper/core 的 exports 指向 dist，需先构建。
+      - name: Build all packages
+        run: pnpm -r build
+
+      - name: Install Playwright webkit (+ system deps)
+        working-directory: packages/web
+        run: pnpm exec playwright install --with-deps webkit
+
+      - name: Playwright webkit e2e (wave21 compat)
+        working-directory: packages/web
+        run: npx playwright test --config playwright.webkit.config.ts
+        env:
+          CI: '1'
+
+      - name: Upload Playwright report (webkit)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-webkit
           path: |
             packages/web/playwright-report
             packages/web/test-results
