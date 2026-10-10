@@ -103,10 +103,10 @@ jobs:
   webkit:
     runs-on: ubuntu-latest
     env:
-      # 取证假设：CI runner 带 http_proxy/https_proxy，WebKitGTK 可能把 127.0.0.1
-      # 也走代理导致引擎侧导航挂起（node 侧正常）。强制本地回环绕过代理。
+      # 取证假设：CI runner 带 http_proxy/https_proxy，WebKitGTK(libsoup) 可能把
+      # 127.0.0.1 也走代理导致引擎侧导航挂起（node 侧正常）。强制本地回环绕过代理。
+      # 注意：GitHub Actions env 键大小写不敏感，no_proxy 与 NO_PROXY 不能同块出现。
       no_proxy: '127.0.0.1,localhost,::1'
-      NO_PROXY: '127.0.0.1,localhost,::1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
