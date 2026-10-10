@@ -13,14 +13,20 @@ if (existsSync(LOCAL_BROWSERS_PATH)) {
  *
  *  - project 固定 webkit；testMatch 只匹配本波新增的 webkit 兼容 spec，
  *    绝不让默认 chromium 全量套件改跑 webkit；
- *  - 本配置**不被 .github/workflows/web-ci.yml 默认调用**（CI 只装 chromium），
- *    仅在具备 WebKit 系统依赖（libgtk-4 / gstreamer-codecparsers / libavif 等）
- *    的本机/真机验证环境手动跑；
+ *  - 本配置由 .github/workflows/web-ci.yml 的 `webkit` job 调用（ubuntu-latest
+ *    有 sudo，`playwright install --with-deps webkit` 装齐系统库）；与 chromium
+ *    全量 e2e 并行（独立 runner，端口不冲突）；
  *  - webServer 走 `pnpm dev`（e2e 依赖 window.__drawpaper__ DEV 钩子）。
  *
- * 前置：packages/web 先 build；WebKit 需系统库（缺库时 minibrowser 127 退出）。
+ * 前置：packages/web 先 build（@drawpaper/core exports 指向 dist）；WebKit 需系统库。
+ *
+ * Wave25.5 根因取证：**WebKitGTK 内置受限端口黑名单包含 4190**——引擎 console 直接报
+ * 「Not allowed to use restricted network port 4190」，page.goto 连 commit/DCL 都不触发
+ * （node 侧 request 200 是因为 node 不查受限端口；chromium 允许 4190）。故本配置默认
+ * 端口用已实测安全的 **4191**（WEBKIT_PORT 可覆盖；勿改回 4190）。与代理/Vite dev
+ * 注入无关。
  */
-const WEBKIT_PORT = Number(process.env['WEBKIT_PORT'] ?? 4190);
+const WEBKIT_PORT = Number(process.env['WEBKIT_PORT'] ?? 4191);
 
 export default defineConfig({
   testDir: './e2e',
@@ -29,9 +35,11 @@ export default defineConfig({
   forbidOnly: !!process.env['CI'],
   retries: 0,
   workers: 1,
-  reporter: [['list']],
+  // CI 下同时开 github reporter：每个失败用例发 ::error annotation（含用例名+断言详情），
+  // 便于在 Actions 匿名读到逐条失败原因（与 chromium 默认 config 同款）。
+  reporter: process.env.CI ? [['list'], ['github']] : [['list']],
   use: {
-    baseURL: `http://localhost:${WEBKIT_PORT}`,
+    baseURL: `http://127.0.0.1:${WEBKIT_PORT}`,
     trace: 'retain-on-failure',
     screenshot: 'on',
   },
@@ -42,8 +50,8 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `pnpm dev --port ${WEBKIT_PORT} --strictPort`,
-    url: `http://localhost:${WEBKIT_PORT}`,
+    command: `pnpm dev --host 127.0.0.1 --port ${WEBKIT_PORT} --strictPort`,
+    url: `http://127.0.0.1:${WEBKIT_PORT}`,
     reuseExistingServer: !process.env['CI'],
     timeout: 120_000,
   },

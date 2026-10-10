@@ -53,6 +53,7 @@ import { TrashDialog } from './TrashDialog';
 import { TagManagerDialog } from './TagManagerDialog';
 import { useThemeStore, type ThemeMode } from './lib/theme';
 import { useWiringUi } from '@/wiring/ui-store';
+import { isFsaSupported } from '@/storage/fsa';
 
 function formatTime(ts: number): string {
   const d = new Date(ts);
@@ -267,7 +268,17 @@ export const TopToolbar = React.memo(function TopToolbar({ api }: { api: PanelsA
             <LayoutTemplate /> 从模板新建…
           </DropdownMenuItem>
           <DropdownMenuSeparator />
-          <DropdownMenuItem onSelect={() => api.openLocalFile()}>
+          <DropdownMenuItem
+            onSelect={() => {
+              // WebKit/Safari 无 FSA：store.openLocalFile() 内部 pickLocalFile 会因
+              // isSupported()=false 直接返回 null、不弹任何选择器（静默无反应）。
+              // 此时在本手势调用栈内同步点隐藏 input（与「导入 .kbnote」同一 input），
+              // 保住用户激活，避免 WebKit 对 input.click() 的严格用户激活要求。
+              // Chromium 有 FSA，仍走 api.openLocalFile()（句柄持久化自动保存），行为不变。
+              if (isFsaSupported()) api.openLocalFile();
+              else fileInputRef.current?.click();
+            }}
+          >
             <FolderOpen /> 打开本地 .kbnote…
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={() => fileInputRef.current?.click()}>

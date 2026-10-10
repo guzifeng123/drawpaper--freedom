@@ -98,7 +98,9 @@ test.describe('Wave21 WebKit 兼容（project=webkit）', () => {
     // 取当前文档的合法 .kbnote 文本作为待上传文件。
     const kbnote = await page.evaluate(() => window.__drawpaper__!.exportCurrent());
 
-    await page.getByRole('button', { name: '文档' }).click();
+    // exact:true——侧栏「文档」按钮与「新建文档」「收起文档列表」等做子串匹配时会命中多个，
+    // strict mode 报错；该菜单按钮名就是「文档」本身（annotation 证实首个元素即目标）。
+    await page.getByRole('button', { name: '文档', exact: true }).click();
     const [fileChooser] = await Promise.all([
       page.waitForEvent('filechooser', { timeout: 15_000 }),
       page.getByRole('menuitem', { name: '打开本地 .kbnote' }).click(),
@@ -123,7 +125,7 @@ test.describe('Wave21 WebKit 兼容（project=webkit）', () => {
 
     const [dl] = await Promise.all([
       page.waitForEvent('download', { timeout: 15_000 }),
-      page.getByRole('button', { name: '文档' }).click().then(() =>
+      page.getByRole('button', { name: '文档', exact: true }).click().then(() =>
         page.getByRole('menuitem', { name: '导出 .kbnote' }).click(),
       ),
     ]);
