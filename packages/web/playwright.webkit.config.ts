@@ -19,7 +19,13 @@ if (existsSync(LOCAL_BROWSERS_PATH)) {
  *  - webServer 走 `pnpm dev`（e2e 依赖 window.__drawpaper__ DEV 钩子）。
  *
  * 前置：packages/web 先 build（@drawpaper/core exports 指向 dist）；WebKit 需系统库。
+ *
+ * Wave25.5 取证：WebKit 下 `page.goto('/')` 等 `load` 事件会超时（Vite HMR ws /
+ * sourcemap 挂起导致 load 永不触发），故 webServer/baseURL 绑 127.0.0.1（排除
+ * localhost IPv6 解析差异），spec 内 goto 改 waitUntil=domcontentloaded 后自行
+ * 轮询 __drawpaper__（load 本就不是断言意图）。
  */
+const WEBKIT_HOST = process.env['WEBKIT_HOST'] ?? '127.0.0.1';
 const WEBKIT_PORT = Number(process.env['WEBKIT_PORT'] ?? 4190);
 
 export default defineConfig({
@@ -33,7 +39,7 @@ export default defineConfig({
   // 便于在 Actions 匿名读到逐条失败原因（与 chromium 默认 config 同款）。
   reporter: process.env.CI ? [['list'], ['github']] : [['list']],
   use: {
-    baseURL: `http://localhost:${WEBKIT_PORT}`,
+    baseURL: `http://${WEBKIT_HOST}:${WEBKIT_PORT}`,
     trace: 'retain-on-failure',
     screenshot: 'on',
   },
@@ -44,8 +50,8 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `pnpm dev --port ${WEBKIT_PORT} --strictPort`,
-    url: `http://localhost:${WEBKIT_PORT}`,
+    command: `pnpm dev --host ${WEBKIT_HOST} --port ${WEBKIT_PORT} --strictPort`,
+    url: `http://${WEBKIT_HOST}:${WEBKIT_PORT}`,
     reuseExistingServer: !process.env['CI'],
     timeout: 120_000,
   },

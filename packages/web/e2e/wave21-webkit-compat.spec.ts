@@ -1,5 +1,5 @@
 import { test, expect, devices, type Browser, type Page } from '@playwright/test';
-import { waitForApp, loadStandard } from './fixtures/load-doc';
+import { loadStandard } from './fixtures/load-doc';
 
 /**
  * Wave21 WebKit/Safari 兼容降级 —— **仅在 playwright.webkit.config.ts（project=webkit）下运行**。
@@ -13,7 +13,33 @@ import { waitForApp, loadStandard } from './fixtures/load-doc';
  *  5. 配额弹窗：无 Web Share → 导出 .kbnote + 整库 .kbpack 备份下载。
  *
  * 注意：本文件由 webkit config 的 testMatch 独占；默认 chromium 套件不跑它。
+ *
+ * Wave25.5 取证：Linux Playwright WebKit 下 `page.goto` 默认等 `load` 事件会超时
+ * （Vite HMR ws / sourcemap 请求挂起，load 永不触发；chromium 同 dev server 正常）。
+ * 故这里 goto 用 `domcontentloaded`，随后自行轮询 `window.__drawpaper__`（dev-hooks
+ * 就绪才是真正的断言意图），并挂 console/pageerror/requestfailed 取证 + 打印
+ * readyState/资源列表，便于在 Actions 日志里定位究竟哪个资源卡住。
  */
+
+/** WebKit dev server 导航：DCL 即返回，再轮询 dev-hooks；全程挂取证监听。 */
+async function gotoApp(page: Page): Promise<void> {
+  page.on('console', (m) => console.log('[webkit-console]', m.type(), m.text()));
+  page.on('pageerror', (e) => console.log('[webkit-pageerror]', (e as Error).message));
+  page.on('requestfailed', (r) => console.log('[webkit-reqfailed]', r.url(), '|', r.failure()?.errorText));
+  await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 30_000 });
+  await page.waitForFunction(
+    () => !!(window as unknown as { __drawpaper__?: unknown }).__drawpaper__,
+    null,
+    { timeout: 20_000 },
+  );
+  const diag = await page.evaluate(() => {
+    const resources = performance
+      .getEntriesByType('resource')
+      .map((e) => `${e.name} [${(e as PerformanceResourceTiming).initiatorType}]`);
+    return { readyState: document.readyState, resourceCount: resources.length, resources };
+  });
+  console.log('[webkit-diag]', JSON.stringify(diag));
+}
 
 const PNG_B64 =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
@@ -79,7 +105,7 @@ async function noOpfsContext(browser: Browser) {
 
 test.describe('Wave21 WebKit 兼容（project=webkit）', () => {
   test('能力探测：WebKit 无 FSA、无 Web Share', async ({ page }) => {
-    await waitForApp(page);
+    await gotoApp(page);
     const cap = await page.evaluate(() => ({
       fsa: window.__drawpaper__!.webFsaSupported(),
       share: window.__drawpaper__!.webCanShare(),
@@ -93,7 +119,7 @@ test.describe('Wave21 WebKit 兼容（project=webkit）', () => {
 
   test('上传兜底：文档→打开本地 .kbnote 走 <input type=file>（filechooser）', async ({ page }) => {
     test.setTimeout(60_000);
-    await waitForApp(page);
+    await gotoApp(page);
     await loadStandard(page);
     // 取当前文档的合法 .kbnote 文本作为待上传文件。
     const kbnote = await page.evaluate(() => window.__drawpaper__!.exportCurrent());
@@ -118,7 +144,7 @@ test.describe('Wave21 WebKit 兼容（project=webkit）', () => {
 
   test('下载兜底：导出 .kbnote 走 <a download>', async ({ page }) => {
     test.setTimeout(60_000);
-    await waitForApp(page);
+    await gotoApp(page);
     await loadStandard(page);
 
     const [dl] = await Promise.all([
@@ -135,7 +161,7 @@ test.describe('Wave21 WebKit 兼容（project=webkit）', () => {
     test.setTimeout(90_000);
     const ctx = await noOpfsContext(browser);
     const page = await ctx.newPage();
-    await waitForApp(page);
+    await gotoApp(page);
     expect(await page.evaluate(() => window.__drawpaper__!.opfsAvailable())).toBe(false);
 
     await dropPngAndWait(page, 1);
@@ -156,7 +182,7 @@ test.describe('Wave21 WebKit 兼容（project=webkit）', () => {
 
   test('配额弹窗：无 Web Share → 导出 .kbnote + 整库 .kbpack 备份下载', async ({ page }) => {
     test.setTimeout(60_000);
-    await waitForApp(page);
+    await gotoApp(page);
     await loadStandard(page);
     await page.evaluate(() => window.__drawpaper__!.quotaResetThrottle());
     await page.evaluate(() => window.__drawpaper__!.quotaRaise());
