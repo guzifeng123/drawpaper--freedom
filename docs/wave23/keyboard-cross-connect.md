@@ -53,23 +53,26 @@ core 侧本路**零新增逻辑**：`addEdge` 命令已有的纯校验（自环�
 - aria-live（复用既有 Toaster / 状态播报）：进入连线模式、候选数、成功连接 A→B、失败原因、已取消。
 - axe-core 对该链路无新增 violation（沿用 wave9/wave11 既有 e2e）。
 
-## 挂账（成环冲突弹窗 e2e 阻塞，非本路引入）
+## 挂账（成环冲突弹窗 e2e 阻塞）—— Wave23.5 已修复
 
-- **复现环境**：dev（vite dev）与生产构建（`vite build` 产物 + `vite preview`，minified、无 StrictMode
+> **状态：已由 `fix/cycle-layout-hang`（Wave23.5）修复。** 根因与修法见
+> [`cycle-layout-hang.md`](./cycle-layout-hang.md)。本路最初记录的 e2e 阻塞不再成立，
+> 成环 `ConflictDialog` 现已可达并被 e2e 覆盖；下方取证摘要仅作历史存档保留。
+
+- **复现环境（历史）**：dev（vite dev）与生产构建（`vite build` 产物 + `vite preview`，minified、无 StrictMode
   dev 双调用）**均复现**——A→B 存在时 `addEdge(B,A)`（或 A→C 后 `addEdge(C,A)`）**同步卡死主线程**，
   evaluate 8s 不返回、随后页面无响应、无 pageerror、`ConflictDialog` 不可达。干净基线
   `4836b69` 同样复现，与本路改动无关（已由统筹独立取证确认）。
-- **对照**：多父场景（A→C 与 B→C，无环）弹窗**正常出现、页面保持响应**——缺陷精确限定为
+- **对照（历史）**：多父场景（A→C 与 B→C，无环）弹窗**正常出现、页面保持响应**——缺陷精确限定为
   「成环形状的图」，不是冲突裁决链路本身的问题。
-- **初步假设（未经修复证实）**：布局链路（d3-hierarchy / 布局遍历）在含环图上无限循环。core 的
+- **根因（Wave23.5 定位）**：布局链路（d3-hierarchy / 布局遍历）在含环图上无限循环；core 的
   冲突裁决设计本应在 `resolveConflicts` 前不应用成环边，但 web 侧在 `pendingConflicts` 等待期间就
-  渲染了含环文档。修复方向（布局环防护，或冲突裁决前不应用边）留给专门修复波次，由 MainAgent
-  决策，不在 Wave23 范围。
-- **覆盖现状**：core 单测（`store.test.ts` 成环裁决，注入 analyzer）覆盖裁决逻辑；但当前**没有任何
-  e2e 覆盖成环 `ConflictDialog`**——这正是 e2e 里 `test.fixme` 占位的原因（每轮 CI 报告均带该标题）。
+  渲染了含环文档。修复方向（布局环防护，或冲突裁决前不应用边）已在 Wave23.5 落地。
+- **覆盖现状**：core 单测（`store.test.ts` 成环裁决，注入 analyzer）覆盖裁决逻辑；成环
+  `ConflictDialog` e2e 阻塞已随修复解除。
 
 ## 已知边界
 
 - 候选过滤会排除「已连接的子块」（它是源的后代），因此从源块再选一次直连子块不会出现——重复边在键盘入口是**结构性不可达**（不会产生第二条边）；显式「该父子关系已存在」toast 仍是 `onConnect` 的共享安全网（指针拖拽路径可达）。
 - 成环目标（从子块选父块）**会**出现在候选中（父不是子的后代），确认后递交到共享 `addEdge` 校验链；
-  真正触发成环冲突弹窗的 e2e 因基线渲染器成环死锁而 `test.fixme` 挂账，见上一节。
+  触发成环冲突弹窗的 e2e 此前因基线渲染器成环死锁而 `test.fixme` 挂账，**Wave23.5 修复后已解除**（见上一节）。

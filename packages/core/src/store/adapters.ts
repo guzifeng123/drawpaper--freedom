@@ -158,19 +158,6 @@ export interface AIDiff {
   suggestions: AISuggestion[];
 }
 
-/**
- * 把用户确认（勾选）的建议应用回文档，返回新文档。
- * 未勾选的建议丢弃；非法建议在应用前再次校验。
- * 【TODO wave1-c / P1】
- */
-export function applyAIDiff(
-  _doc: KBNoteDoc,
-  _diff: AIDiff,
-  _accepted: ReadonlySet<number>,
-): KBNoteDoc {
-  throw new Error('not implemented: P1 (applyAIDiff)');
-}
-
 // ============ File System Access 活动文件能力（web 注入；core 零 DOM）============
 
 /**
