@@ -62,7 +62,7 @@ export interface DrawpaperDevHook {
     backupEnabled: boolean;
     searchResults: unknown[];
     saveState: 'idle' | 'saving' | 'saved';
-    savedAt: number | undefined;
+    savedAt: number | null;
   };
   /** 按名调用白名单内的 store action。 */
   invoke(action: string, ...args: unknown[]): unknown;
