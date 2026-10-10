@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import type { PanelsApi, DocMeta } from './panels-api';
 import { useCollabUi } from '@/collab/collab-ui-store';
+import { useUiShell } from '@/store/ui-shell-store';
 
 /** 友好相对时间（"刚刚 / n 分钟前 / n 小时前 / MM-DD"）。 */
 function friendlyTime(ts: number): string {
@@ -175,6 +176,10 @@ export const DocsListPanel = React.memo(function DocsListPanel({ api }: { api: P
   const [collapsed, setCollapsed] = React.useState(
     () => typeof window !== 'undefined' && window.innerWidth < 640,
   );
+  const setDocsCollapsed = useUiShell((st) => st.setDocsCollapsed);
+  React.useEffect(() => {
+    setDocsCollapsed(collapsed);
+  }, [collapsed, setDocsCollapsed]);
 
   if (collapsed) {
     return (
