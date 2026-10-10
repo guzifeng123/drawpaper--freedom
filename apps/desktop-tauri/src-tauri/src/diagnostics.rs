@@ -535,7 +535,7 @@ const README_TEMPLATE: &str = "drawpaper 诊断信息包
   * logs/drawpaper.log  ：应用日志尾部（约最后 256 KB）。
   * files-manifest.json ：数据目录递归清单，仅含每个文件的相对路径 / 大小 / 修改时间。
   * coldstart.json      ：应用冷启动分段时间线（仅毫秒数字与阶段名；无 webview 或
-                          采集超时时为 {"status":"unavailable",...} 占位）。
+                          采集超时时为 {\"status\":\"unavailable\",...} 占位）。
   * README.txt          ：本说明。
 
 隐私边界（重要）：
