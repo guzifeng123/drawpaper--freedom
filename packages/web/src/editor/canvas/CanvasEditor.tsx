@@ -38,6 +38,8 @@ import { toast } from '../ui/toast';
 import { setActiveBendAnchor } from '../edges/bend-active';
 import { PaneContextMenu, type PaneContextMenuProps } from './PaneContextMenu';
 import { MousePointer2, Spline, Hand } from 'lucide-react';
+import { useUiShell } from '@/store/ui-shell-store';
+import { cn } from '@/lib/utils';
 
 /** 折叠节点的后代集合（折叠后映射给 React Flow 时剔除）。 */
 function hiddenAfterCollapse(doc: { nodes: BlockNode[]; edges: CoreEdge[] }): Set<string> {
@@ -106,6 +108,7 @@ function CanvasInner({ api }: { api: EditorApi }) {
   const [hoverEdgeId, setHoverEdgeId] = useState<string | null>(null);
   const rafRef = useRef<number>(0);
   const coarse = useCoarsePointer();
+  const docsCollapsed = useUiShell((st) => st.docsCollapsed);
   const [dragOver, setDragOver] = useState(false);
   // 【Wave14 D】空白处上下文菜单：鼠标右键 / 触屏长按共用这一个受控菜单。
   const [menu, setMenu] = useState<{ x: number; y: number; flowX: number; flowY: number } | null>(null);
@@ -636,7 +639,10 @@ function CanvasInner({ api }: { api: EditorApi }) {
         defaultViewport={snap.viewport}
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1.2} color="var(--editor-grid, #cbd5e1)" />
-        <Controls position="bottom-left" />
+        <Controls
+          position="bottom-left"
+          className={cn(docsCollapsed ? 'ml-[72px]' : 'ml-[248px] max-sm:ml-[72px]')}
+        />
 
         {/* 粗指针（触屏/手写笔）：显式工具按钮组（选择/连线/平移），≥44px 触控热区 */}
         {coarse && (
@@ -692,7 +698,7 @@ function CanvasInner({ api }: { api: EditorApi }) {
         )}
 
         {/* 右下角自建缩放控件（百分比 + 适应/100%） */}
-        <Panel position="bottom-right" className="!mb-16 mr-2 flex items-center gap-1 rounded border bg-[hsl(var(--popover))] text-[hsl(var(--popover-foreground))] px-1 py-0.5 text-[10px] shadow">
+        <Panel position="bottom-right" className={cn("mr-2 flex items-center gap-1 rounded border bg-[hsl(var(--popover))] text-[hsl(var(--popover-foreground))] px-1 py-0.5 text-[10px] shadow", snap.doc.nodes.length <= MINIMAP_NODE_LIMIT ? "!mb-[168px] max-sm:!mb-[180px]" : "!mb-2")}>
           <button className="px-1" title="缩小" onClick={() => rf.zoomOut()}>
             −
           </button>
