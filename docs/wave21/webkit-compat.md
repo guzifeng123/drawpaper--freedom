@@ -54,9 +54,33 @@ PWA 跑在 Safari（含 iPadOS）时，与 Chromium 存在三处关键差异：
 - `e2e/wave21-webkit-compat.spec.ts` + `playwright.webkit.config.ts`：**独立 webkit 配置**
   （project=webkit，testMatch 仅此 spec），覆盖 WebKit 无 FSA 上传/下载兜底、OPFS 不可用
   图片内联+附件 toast、配额弹窗动作。默认 `playwright.config.ts` 已把该 spec 加入
-  testIgnore，chromium 套件不会误跑；web-ci 不改、也不调它。
+  testIgnore，chromium 套件不会误跑；**Wave25.5 起 web-ci 的 `webkit` job 在
+  ubuntu-latest（有 sudo，`playwright install --with-deps webkit`）上并行跑它**，与
+  chromium 全量 e2e 互为独立 job、硬门。
 
-## webkit e2e 本机实跑证据
+## CI 自动化闭环（Wave25.5）
+
+webkit 兼容 e2e 已在 web-ci（GitHub ubuntu-latest hosted）真实跑通，5/5 通过：
+
+1. 能力探测：WebKit 无 FSA、无 Web Share；
+2. 上传兜底：文档 → 打开本地 .kbnote 走 `<input type=file>`（filechooser）；
+3. 下载兜底：导出 .kbnote 走 `<a download>`；
+4. OPFS 不可用（addInitScript 模拟）：图片 dataURL 内联 + 附件 toast 不建坏块；
+5. 配额弹窗：无 Web Share → 导出 .kbnote + 整库 .kbpack 备份下载。
+
+**根因取证（为何此前一直没跑通）**：WebKitGTK 内置**受限端口黑名单包含 4190**。
+引擎 console 直接报 `Not allowed to use restricted network port 4190`，`page.goto` 连
+commit/DCL 都不触发；而 node 侧 `ctx.request.get` 拿到 200（node 不查受限端口）、
+chromium 允许 4190，故长期误诊为代理/Vite HMR 问题。取证矩阵（node request vs 引擎
+goto + preview/proxy 对照）锁定后，`playwright.webkit.config.ts` 默认端口从 4190 改为
+**4191**（实测安全，WEBKIT_PORT 可覆盖；勿改回 4190）。
+
+**附带修复**：该 spec 历史上从未在任何引擎真跑过（webkit 一直没跑通、chromium 又
+testIgnore），潜伏一处选择器写法问题——`getByRole('button',{name:'文档'})` 会子串命中
+「文档」「新建文档」「收起文档列表」三个按钮（strict mode 报错），已改 `{name:'文档',
+exact:true}`；断言意图未放宽。
+
+## webkit e2e 本机实跑证据（Wave21 当时）
 
 **结论：webkit 引擎二进制已下载成功，但本机缺系统库无法启动，未跑通（按止损规则挂账）。**
 
@@ -72,8 +96,9 @@ minibrowser-wpe/bin/MiniBrowser: error while loading shared libraries:
   `libavif.so.13`、`libmanette-0.2.so.0`、`libsecret-1.so.0`。
 - 本机无 sudo、系统目录只读，无法 `apt install` 这些系统库；全盘检索未发现可复用副本。
 
-因此：webkit e2e spec 已写好但**本机未跑**；chromium 下同形降级路径（无 FSA/无 Share 的
-addInitScript 模拟）已 4/4 通过，作为 WebKit 行为的等价代理。
+本机沙箱无 sudo，WebKit 系统库装不上，故 webkit e2e 以 web-ci ubuntu-latest runner 为
+唯一真实验证环境（见上节「CI 自动化闭环」）；chromium 下同形降级路径（无 FSA/无 Share 的
+addInitScript 模拟）在 chromium 套件回归通过。
 
 ## 手动走查步骤（真机 Safari / iPad 必做）
 
@@ -96,6 +121,30 @@ addInitScript 模拟）已 4/4 通过，作为 WebKit 行为的等价代理。
 
 - [ ] 真机 macOS Safari（最新）按「手动走查」1–5 全过。
 - [ ] 真机 iPadOS Safari 按「手动走查」1–5 全过（重点验 Web Share 真面板）。
-- [ ] 有 WebKit 系统依赖的 CI/本机 runner 上跑
-  `WEBKIT_PORT=4190 npx playwright test --config=playwright.webkit.config.ts`，把结果回填本文件。
+- [x] ~~有 WebKit 系统依赖的 CI runner 上跑 webkit config 回填~~ **已闭环（Wave25.5）**：
+  web-ci `webkit` job（ubuntu-latest，`playwright install --with-deps webkit`）真实跑通
+  `playwright.webkit.config.ts`，5/5 通过。根因=WebKit 受限端口黑名单含 4190，已改 4191；
+  另修了潜伏的 `getByRole('button',{name:'文档'})` strict-mode 选择器（exact:true）。
 - [ ] 旧 Safari（<15.4，无 estimate()）验证弹窗用量区显示「未提供用量查询」兜底文案、不崩。
+
+## 仍保留手动项与引擎差异取证
+
+**仍需真机手动（CI 无法覆盖）：**
+
+- 真机 macOS Safari（最新）、真机 iPadOS Safari 按「手动走查」1–5 全过——重点验
+  iPadOS 上 Web Share **真系统分享面板**（headless Linux WebKit 无 navigator.share，
+  只验证到「无 Share → 下载 .kbpack 兜底」这条分支）；
+- 旧 Safari（<15.4，无 `navigator.storage.estimate()`）验证弹窗用量区显示「未提供用量
+  查询」兜底文案、不崩；
+- Tauri 桌面端不弹浏览器配额引导（回归确认）。
+
+**引擎差异取证（headless Linux WebKit 与真机 Safari 的边界）：**
+
+- headless Linux WebKit（WPE/minibrowser）实测：无 FSA（`showOpenFilePicker` 等不存在）、
+  无 `navigator.share`——与桌面 Safari 同形，故 spec ①⑤按「无 FSA / 无 Share」断言。
+- OPFS：spec ④ 不依赖引擎真实 OPFS 支持，而是 `addInitScript` 把 `navigator.storage`
+  覆写为 `undefined` 主动模拟降级（旧 WebKit/隐私模式），验证图片 dataURL 内联 + 附件 toast；
+  真机 OPFS 参差/隐私模式拒绝的场景仍需手动走查第 5 条。
+- WebKit 受限端口：dev server 必须用非黑名单端口（4191，勿用 4190）。
+- filechooser/download/配额弹窗均走 Playwright 有界等待（`waitForEvent` 15s /
+  `waitForFunction` 8–30s），无固定 sleep 凑时序。
