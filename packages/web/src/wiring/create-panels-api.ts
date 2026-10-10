@@ -124,10 +124,17 @@ export function createPanelsApi(store: EditorStoreApi): PanelsApi {
       } else {
         // 重命名非当前打开的文档：直接改 storage 记录。
         void (async () => {
-          const d = await storageAdapter.loadDoc(id);
-          if (d) {
+          try {
+            const d = await storageAdapter.loadDoc(id);
+            if (!d) {
+              pushToast('error', '重命名失败：找不到原文档');
+              return;
+            }
             await storageAdapter.saveDoc({ ...d, title });
             await store.getState().listDocs();
+            pushToast('success', `已重命名为「${title}」`);
+          } catch (err) {
+            pushToast('error', `重命名失败：${err instanceof Error ? err.message : '未知错误'}`);
           }
         })();
       }
@@ -137,14 +144,19 @@ export function createPanelsApi(store: EditorStoreApi): PanelsApi {
         void store.getState().duplicateDoc();
       } else {
         void (async () => {
-          const src = await storageAdapter.loadDoc(id);
-          if (!src) return;
-          const copy: KBNoteDoc = JSON.parse(JSON.stringify(src)) as KBNoteDoc;
-          copy.id = `doc_${Date.now()}`;
-          copy.title = `${src.title} 副本`;
-          copy.board = { createdAt: Date.now(), updatedAt: Date.now() };
-          await storageAdapter.saveDoc(copy);
-          await store.getState().listDocs();
+          try {
+            const src = await storageAdapter.loadDoc(id);
+            if (!src) return;
+            const copy: KBNoteDoc = JSON.parse(JSON.stringify(src)) as KBNoteDoc;
+            copy.id = `doc_${Date.now()}`;
+            copy.title = `${src.title} 副本`;
+            copy.board = { createdAt: Date.now(), updatedAt: Date.now() };
+            await storageAdapter.saveDoc(copy);
+            await store.getState().listDocs();
+            pushToast('success', `已创建副本「${copy.title}」`);
+          } catch (err) {
+            pushToast('error', `创建副本失败：${err instanceof Error ? err.message : '未知错误'}`);
+          }
         })();
       }
     },

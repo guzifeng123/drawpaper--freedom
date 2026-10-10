@@ -10,12 +10,13 @@ export const CURRENT_DOC_VERSION = 4 as const;
 
 /**
  * 知识块类型联合。
- * P0 已实现：text / heading / todo / bullet / image / note / group
+ * P0 已实现：text / heading / todo / bullet / image / note / group / table
  *   - bullet：无序列表块（一条目即一块，区别于块内富文本里的列表）
  *   - note：便签块
  *   - group：分组容器块（视觉嵌套，子块 parentId 指向它）
+ *   - table：表格块（Wave20 落地：schema/emptyTableDoc/TableToolbar/拖放合并）
  * P1 预留字符串字面量（类型层面占位，UI/渲染尚未实现）：
- *   table / code / equation / bookmark / attachment / reminder
+ *   code / equation / bookmark / attachment / reminder
  */
 export type BlockType =
   | 'text'
@@ -25,8 +26,8 @@ export type BlockType =
   | 'image'
   | 'note'
   | 'group'
-  // --- P1 预留（未实现）---
   | 'table'
+  // --- P1 预留（未实现）---
   | 'code'
   | 'equation'
   | 'bookmark'
@@ -42,6 +43,7 @@ export const P0_BLOCK_TYPES: readonly BlockType[] = [
   'image',
   'note',
   'group',
+  'table',
 ] as const;
 
 /** 连线端点（Handle）位置。边 sourceHandle / targetHandle 取值。 */

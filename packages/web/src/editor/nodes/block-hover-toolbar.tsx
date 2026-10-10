@@ -10,8 +10,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { findParentId, findChildIds } from '../lib/focus-nav';
 
-/** P1 新块型（块类型切换器与 P0 并列）。 */
-const P1_BLOCK_TYPES: readonly BlockType[] = ['table', 'code', 'equation', 'bookmark', 'attachment', 'reminder'];
+/** P1 新块型（块类型切换器与 P0 并列）。table 已于 Wave20 落地，移入 P0_BLOCK_TYPES。 */
+const P1_BLOCK_TYPES: readonly BlockType[] = ['code', 'equation', 'bookmark', 'attachment', 'reminder'];
 const ALL_BLOCK_TYPES: readonly BlockType[] = [...P0_BLOCK_TYPES, ...P1_BLOCK_TYPES];
 
 /** 8 色标签色板（块背景色；第一项为无色）。 */
