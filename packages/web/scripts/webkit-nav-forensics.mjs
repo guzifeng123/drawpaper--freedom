@@ -1,90 +1,92 @@
-// Wave25.5 WebKit 导航取证（一次性，结果写 GITHUB_STEP_SUMMARY）。
+/* eslint-disable no-undef -- page.evaluate / waitForFunction 回调跑在浏览器上下文
+   （document/performance），本文件其余部分跑在 Node；一次性取证脚本，不接运行时代码。 */
+
+// Wave25.5 WebKit 导航取证（一次性；结果用 ::warning annotation 输出，匿名可读）。
 //
-// 判读逻辑：
-//  - context.request.get() 走 node 侧网络（不经 WebKit 引擎）；
-//  - page.goto() 走 WebKit 引擎网络栈。
-// 若 node 侧 200 而引擎 commit 挂起 → 锁定 WebKit 引擎代理层拦截（CI runner 带
-//    http_proxy/https_proxy，WebKitGTK 可能把 127.0.0.1 也走代理）。
-// 同时 goto https://example.com 对照：引擎能否访问外网（区分是本地代理还是全无网）。
+// 判读矩阵：每个 URL 都做
+//   (a) ctx.request.get() —— node 侧网络，不经 WebKit 引擎；
+//   (b) page.goto(url, {waitUntil:'commit', timeout:10s}) —— WebKit 引擎网络栈。
+// 等 8s 后 dump readyState / outerHTML 500 字 / 收集到的 requestfailed·console·pageerror。
+// 若 (a)=200 而 (b) 挂 → 引擎代理/网络栈拦截；dev 挂而 preview 通 → Vite dev 注入
+// （/@vite/client、HMR ws）与 WebKit 的交互；连 example.com 都挂 → 引擎全无网。
 import { webkit } from '@playwright/test';
-import fs from 'node:fs';
 
-const SUMMARY = process.env.GITHUB_STEP_SUMMARY || '/tmp/webkit-nav-summary.md';
-const BASE = process.env.WEBKIT_BASE || 'http://127.0.0.1:4190';
-const out = (s) => fs.appendFileSync(SUMMARY, s + '\n');
+const TARGETS = [
+  { name: 'dev-127', url: 'http://127.0.0.1:4190/' },
+  { name: 'dev-localhost', url: 'http://localhost:4190/' },
+  { name: 'preview-127', url: 'http://127.0.0.1:4191/' },
+  { name: 'external', url: 'https://example.com/' },
+];
 
-out('## WebKit nav forensics');
-out('');
-out(`- base: ${BASE}`);
-out(`- proxy env: http_proxy=${process.env.http_proxy || '(unset)'} https_proxy=${process.env.https_proxy || '(unset)'} no_proxy=${process.env.no_proxy || '(unset)'}`);
-out('');
-
-const browser = await webkit.launch({ headless: true });
-const ctx = await browser.newContext();
-
-// 1) node 侧网络（不经引擎）
-try {
-  const resp = await ctx.request.get(`${BASE}/`, { timeout: 10_000 });
-  out(`### context.request.get('/')  (node 侧)`);
-  out(`- status: ${resp.status()} ${resp.statusText()}`);
-  const body = await resp.text();
-  out(`- body head: \`\`\`html\n${body.slice(0, 400)}\n\`\`\``);
-} catch (e) {
-  out(`### context.request.get('/')  FAILED`);
-  out(`- ${e?.message}`);
+/** 发一条 ::warning annotation（标题/正文编码；每条 <1500 字符）。 */
+function ann(title, body) {
+  const t = String(title).replace(/%/g, '%25').replace(/:/g, '%3A').replace(/\r?\n/g, ' ').slice(0, 200);
+  const b = String(body).replace(/%/g, '%25').replace(/\r/g, '').replace(/\n/g, '%0A').slice(0, 1400);
+  process.stdout.write(`::warning title=${t}::${b}\n`);
 }
-out('');
 
-// 2) 引擎侧导航
-const page = await ctx.newPage();
-const events = [];
-page.on('console', (m) => events.push(`[console ${m.type()}] ${m.text()}`));
-page.on('pageerror', (e) => events.push(`[pageerror] ${e.message}`));
-page.on('requestfailed', (r) => events.push(`[requestfailed] ${r.url()} | ${r.failure()?.errorText}`));
-page.on('request', (r) => events.push(`[request] ${r.url()}`));
+async function probe(browser, target) {
+  const ctx = await browser.newContext();
+  const page = await ctx.newPage();
+  const events = [];
+  page.on('console', (m) => events.push(`[console ${m.type()}] ${m.text()}`));
+  page.on('pageerror', (e) => events.push(`[pageerror] ${e.message}`));
+  page.on('requestfailed', (r) => events.push(`[requestfailed] ${r.url()} | ${r.failure()?.errorText}`));
 
-out(`### page.goto('${BASE}/', waitUntil=commit)`);
-try {
-  await page.goto(`${BASE}/`, { waitUntil: 'commit', timeout: 10_000 });
-  out('- commit: OK');
-} catch (e) {
-  out(`- commit: THREW — ${e?.message}`);
+  // (a) node 侧
+  let nodeStatus = 'ERR';
+  try {
+    const resp = await ctx.request.get(target.url, { timeout: 10_000 });
+    nodeStatus = String(resp.status());
+  } catch (e) {
+    nodeStatus = `THROW ${e?.message?.slice(0, 120)}`;
+  }
+
+  // (b) 引擎侧
+  let commit = 'OK';
+  try {
+    await page.goto(target.url, { waitUntil: 'commit', timeout: 10_000 });
+  } catch (e) {
+    commit = `THROW ${e?.message?.slice(0, 120)}`;
+  }
+  await page.waitForTimeout(8_000);
+
+  let state = {};
+  try {
+    state = await page.evaluate(() => ({
+      readyState: document.readyState,
+      title: document.title,
+      html: document.documentElement?.outerHTML?.slice(0, 500) ?? '(no documentElement)',
+    }));
+  } catch (e) {
+    state = { evalErr: e.message };
+  }
+
+  ann(
+    `probe ${target.name}`,
+    `url=${target.url}\nnode.request.status=${nodeStatus}\nengine.commit=${commit}\nreadyState=${state.readyState ?? '?'}\ntitle=${state.title ?? '?'}\nhtml=${state.html ?? state.evalErr ?? '?'}\nevents=${events.slice(0, 12).join(' ;; ') || '(none)'}`,
+  );
+  await ctx.close();
 }
-await page.waitForTimeout(8_000);
 
-let state = {};
-try {
-  state = await page.evaluate(() => ({
-    readyState: document.readyState,
-    title: document.title,
-    html: document.documentElement?.outerHTML?.slice(0, 600) ?? '(no documentElement)',
-    nav: performance.getEntriesByType('navigation').map((n) => ({
-      type: n.type,
-      domContentLoaded: n.domContentLoadedEventEnd,
-      load: n.loadEventEnd,
-    })),
-  }));
-} catch (e) {
-  state = { evalError: e.message };
-}
-out(`- after 8s: readyState=${state.readyState ?? '?'} title=${state.title ?? '?'}`);
-out(`- nav: \`\`\`json\n${JSON.stringify(state.nav || state.evalError, null, 2)}\n\`\`\``);
-out(`- html: \`\`\`html\n${state.html}\n\`\`\``);
-out('');
-
-// 3) 外网对照
-out(`### page.goto('https://example.com/', waitUntil=commit)  (外网对照)`);
-try {
-  await page.goto('https://example.com/', { waitUntil: 'commit', timeout: 10_000 });
-  out('- external commit: OK');
-} catch (e) {
-  out(`- external commit: THREW — ${e?.message}`);
-}
-out('');
-
-out('### collected events');
-out(`\`\`\`\n${events.join('\n') || '(none)'}\n\`\`\``);
-
-await browser.close();
-out('');
-out('Forensics done.');
+(async () => {
+  try {
+    ann(
+      'proxy-env',
+      `http_proxy=${process.env.http_proxy || '(unset)'} https_proxy=${process.env.https_proxy || '(unset)'} no_proxy=${process.env.no_proxy || '(unset)'} HTTP_PROXY=${process.env.HTTP_PROXY || '(unset)'}`,
+    );
+    const browser = await webkit.launch({ headless: true });
+    for (const t of TARGETS) {
+      try {
+        await probe(browser, t);
+      } catch (e) {
+        ann(`probe ${t.name} FATAL`, String(e?.message || e));
+      }
+    }
+    await browser.close();
+    ann('forensics-done', 'all probes finished');
+  } catch (e) {
+    ann('forensics-crash', String(e?.message || e));
+  }
+  process.exit(0);
+})();
