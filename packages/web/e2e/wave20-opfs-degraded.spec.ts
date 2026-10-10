@@ -172,26 +172,25 @@ test.describe('Wave20 OPFS 降级 — 模式 A（navigator.storage 不存在）'
     for (const s of beforeReload) expect(s.startsWith('data:')).toBe(true);
 
     // ---- (c) reload 后内联图片仍在（IDB 持久化）----
-    // requestSave 触发防抖落盘；reload 本身等待页面重载，期间 IDB flush 完成。
+    // requestSave 触发落盘；必须等 saveState 真正变为 'saved'（IDB put 完成）再
+    // reload——高负载 runner 上 flush 可能慢于 reload，导致落盘的是旧文档。
     await invoke(page, 'requestSave');
+    await page.waitForFunction(
+      () => window.__drawpaper__!.getState().saveState === 'saved',
+      null,
+      { timeout: 20_000 },
+    );
     await page.reload();
     await waitForApp(page);
-    // 有界重试（不放宽断言）：reload 后 IDB 恢复偶发慢 / Control+0 时序抖动，
-    // 15s 内未出现 2 张图则再 fit 一次（最多 2 次）；最终 afterReload 断言仍要求 ≥2。
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await page.keyboard.press('Control+0');
-      try {
-        await page.waitForFunction(
-          () =>
-            window.__drawpaper__!.getState().doc.nodes.filter((n) => n.type === 'image').length >= 2,
-          null,
-          { timeout: 15_000 },
-        );
-        break;
-      } catch {
-        if (attempt === 1) throw new Error('after reload: image nodes never reached 2 within retries');
-      }
-    }
+    // 有界等待 IDB 水合恢复 2 张图（断言不放宽）：reload 后水合在高负载下可能慢；
+    // Control+0 只是 fitView、与图片恢复无关——图就位后再 fit 一次。
+    await page.waitForFunction(
+      () =>
+        window.__drawpaper__!.getState().doc.nodes.filter((n) => n.type === 'image').length >= 2,
+      null,
+      { timeout: 45_000 },
+    );
+    await page.keyboard.press('Control+0');
     await page.waitForFunction(() => {
       const imgs = document.querySelectorAll('.react-flow__node img');
       return imgs.length >= 1 && Array.from(imgs).some((i) => (i as HTMLImageElement).naturalWidth > 0);

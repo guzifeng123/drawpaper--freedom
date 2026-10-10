@@ -61,6 +61,8 @@ export interface DrawpaperDevHook {
     layoutUi: { scopeSelected: boolean; tighten: boolean };
     backupEnabled: boolean;
     searchResults: unknown[];
+    saveState: 'idle' | 'saving' | 'saved';
+    savedAt: number | undefined;
   };
   /** 按名调用白名单内的 store action。 */
   invoke(action: string, ...args: unknown[]): unknown;
@@ -318,6 +320,8 @@ export function installDevHooks(): void {
         backupEnabled: s.backupEnabled,
         searchResults: s.searchResults,
         searchQuery: s.searchQuery,
+        saveState: s.saveState,
+        savedAt: s.savedAt,
       };
     },
     invoke(action: string, ...args: unknown[]) {
