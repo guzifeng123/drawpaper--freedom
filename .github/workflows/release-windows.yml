@@ -45,6 +45,8 @@ on:
       - 'feat/webview2-bootstrapper-embed'
       # Wave24 路3: web cold-start instrumentation/optimization.
       - 'fix/web-coldstart'
+      # Wave25 路2: wire web cold-start timeline into --diag-export diagnostic zip.
+      - 'chore/coldstart-diag-bridge'
   workflow_dispatch:
 
 permissions:

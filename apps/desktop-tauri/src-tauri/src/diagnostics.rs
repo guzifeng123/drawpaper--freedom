@@ -9,6 +9,9 @@
 //!   * `system.json`            —— app 版本 / OS 版本与架构 / WebView2 Runtime 版本 / 时间戳
 //!   * `logs/drawpaper.log`     —— 日志尾部（约最后 256 KB，日志是唯一被打包字节的文件）
 //!   * `files-manifest.json`    —— 数据目录递归清单，**仅**相对路径 / 大小 / 修改时间
+//!   * `coldstart.json`         —— Wave25：web 冷启动分段时间线（仅数字/阶段名；
+//!                                  无 webview / 超时 / 形状不合格时写 `{"status":"unavailable",...}`，
+//!                                  绝不阻断整个导出）
 //!   * `README.txt`             —— 说明本包内容与隐私边界
 //!
 //! 收集逻辑刻意拆成可在 Linux 上 `cargo test` 的纯函数：清单 walk 只取元数据
@@ -20,6 +23,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
+use tauri::Manager;
 use zip::write::SimpleFileOptions;
 
 /// Tauri bundle identifier —— app_data_dir / app_config_dir 的末段。
@@ -31,6 +35,140 @@ const LOG_TAIL_BYTES: u64 = 256 * 1024;
 
 /// 诊断包内 logs/ 条目的路径（zip 内固定名，不依赖原始日志文件名）。
 const LOG_ZIP_ENTRY: &str = "logs/drawpaper.log";
+
+// ---------------------------------------------------------------------------
+// Wave25: web 冷启动分段时间线 → coldstart.json
+// ---------------------------------------------------------------------------
+//
+// 数据流（Tauri 2 里 `WebviewWindow::eval` 是单向执行、拿不到 JS 返回值，所以用
+// 「Rust eval 派发 DOM 事件 → web 监听后 invoke 回传」的两段式握手）：
+//
+//   1. 用户在 GUI 菜单点「导出诊断信息」→ `collect_coldstart_json` 先清空暂存槽，
+//      再 `webview.eval("window.dispatchEvent(new CustomEvent('drawpaper:request-coldstart'))")`。
+//   2. web 侧 `cold-starts.ts` 监听该 DOM 事件，取 `window.__coldStart.report()`
+//      （Wave24 路 3 的分段时间线 JSON：marks/measures/navigation/fcp/...，
+//      叶子只有 number/bool/null，键全是阶段名/固定字段名），经
+//      `window.__TAURI__.core.invoke('coldstart_report', { payload })` 回传。
+//   3. Rust command `coldstart_report` 把 payload 字符串存进 `ColdStartState` 暂存槽。
+//   4. `collect_coldstart_json` 有界轮询该槽（≤2s，50ms 一次）：拿到即过形状清洗
+//      （递归白名单：只允许 number/bool/null、短标识符键、64KB 上限）后写入 zip
+//      `coldstart.json`；超时/无 webview/eval 失败/形状不合格一律回退
+//      `{"status":"unavailable","reason":...}` 占位，**绝不**让整个诊断导出失败。
+//
+// 无头 CLI `--diag-export` 路径没有 webview（进程在构建 Tauri 之前就退出），
+// 直接写 unavailable 占位——这正是 smoke-cli.ps1 在 CI 上断言的形状。
+
+/// web 上报冷启动时间线的暂存槽（manage 进 app；command 写、导出时读）。
+#[derive(Default)]
+pub struct ColdStartState(pub std::sync::Mutex<Option<String>>);
+
+/// web 侧 `drawpaper:request-coldstart` 事件的应答：把 `window.__coldStart.report()`
+/// 的序列化 JSON 存进暂存槽。任何失败都不报错回 web（诊断导出绝不因上报而炸）。
+#[tauri::command]
+pub fn coldstart_report(state: tauri::State<'_, ColdStartState>, payload: String) {
+    if let Ok(mut g) = state.0.lock() {
+        *g = Some(payload);
+    }
+}
+
+/// coldstart.json 单条目字节上限。时间线只含数字/阶段名，实测 <2 KB；
+/// 64 KB 是 defense-in-depth 硬顶——超过即判定为异常载荷，拒收写 unavailable。
+const COLDSTART_MAX_BYTES: usize = 64 * 1024;
+
+/// 等待 web 应答的总预算（2s）与轮询间隔（50ms）。
+const COLDSTART_WAIT_BUDGET_MS: u64 = 2_000;
+const COLDSTART_POLL_MS: u64 = 50;
+
+/// 可控占位字节：`{"status":"unavailable","reason":"<受控短词>"}`。
+/// reason 全部来自本文件内的枚举短词，绝不来自用户数据/web 载荷。
+fn unavailable_bytes(reason: &str) -> Vec<u8> {
+    serde_json::json!({ "status": "unavailable", "reason": reason })
+        .to_string()
+        .into_bytes()
+}
+
+/// 菜单导出诊断时调用：eval 派发请求事件 → 有界等待 web 上报 → 形状清洗。
+///
+/// 任何分支失败都回退 unavailable 占位字节；本函数绝不 panic、绝不返回 Err。
+pub async fn collect_coldstart_json(app: &tauri::AppHandle) -> Vec<u8> {
+    let Some(w) = app.get_webview_window("main") else {
+        return unavailable_bytes("no-webview");
+    };
+    // 清空上次导出后的残留，只接受本次 eval 之后新报上来的快照。
+    if let Some(state) = app.try_state::<ColdStartState>() {
+        if let Ok(mut g) = state.0.lock() {
+            *g = None;
+        }
+    }
+    if w.eval(
+        "window.dispatchEvent(new CustomEvent('drawpaper:request-coldstart'));",
+    )
+    .is_err()
+    {
+        return unavailable_bytes("eval-failed");
+    }
+    let started = std::time::Instant::now();
+    let budget = std::time::Duration::from_millis(COLDSTART_WAIT_BUDGET_MS);
+    let poll = std::time::Duration::from_millis(COLDSTART_POLL_MS);
+    while started.elapsed() < budget {
+        if let Some(state) = app.try_state::<ColdStartState>() {
+            if let Ok(mut g) = state.0.lock() {
+                if let Some(payload) = g.take() {
+                    return sanitize_coldstart_payload(&payload);
+                }
+            }
+        }
+        tokio::time::sleep(poll).await;
+    }
+    unavailable_bytes("timeout")
+}
+
+/// web 报上来的原始 JSON 字符串 → 可打包字节。形状不合法 / 超尺寸 / 非 JSON
+/// 一律回退 unavailable（隐私 defense-in-depth：就算 web 侧误把正文拼进来，
+/// Rust 这一关也会拒收，绝不会进 zip）。
+fn sanitize_coldstart_payload(raw: &str) -> Vec<u8> {
+    if raw.len() > COLDSTART_MAX_BYTES {
+        return unavailable_bytes("payload-too-large");
+    }
+    let v: serde_json::Value = match serde_json::from_str(raw) {
+        Ok(v) => v,
+        Err(_) => return unavailable_bytes("bad-json"),
+    };
+    if !coldstart_shape_ok(&v) {
+        return unavailable_bytes("shape-rejected");
+    }
+    match serde_json::to_vec_pretty(&v) {
+        Ok(b) => b,
+        Err(_) => unavailable_bytes("reserialize-failed"),
+    }
+}
+
+/// 冷启动报告的递归白名单形状：
+///   * 叶子只允许 number / boolean / null（**不允许任何字符串**）；
+///   * 数组叶子只允许 number（longTasks 是 number[]）；
+///   * 对象键必须是短标识符（阶段名 / 固定导航字段名）。
+/// 任何长字符串 / 未知结构直接拒收。
+fn coldstart_shape_ok(v: &serde_json::Value) -> bool {
+    match v {
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => true,
+        serde_json::Value::Array(arr) => arr.iter().all(|item| item.is_number()),
+        serde_json::Value::Object(map) => {
+            map.iter().all(|(k, val)| stage_key_ok(k) && coldstart_shape_ok(val))
+        }
+        serde_json::Value::String(_) => false,
+    }
+}
+
+/// 阶段名 / 固定字段名白名单：字母开头，仅字母数字连字符，≤32 字符。
+/// 覆盖 marks/measures 的动态阶段名（canvas-frame 等）与 navigation 固定键。
+fn stage_key_ok(k: &str) -> bool {
+    let mut chars = k.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() => {}
+        _ => return false,
+    }
+    k.len() <= 32 && chars.all(|c| c.is_ascii_alphanumeric() || c == '-')
+}
 
 // ---------------------------------------------------------------------------
 // 数据形状
@@ -81,6 +219,9 @@ pub struct DiagnosticReport {
 ///
 /// `data_dir` 是 app_data_dir（%APPDATA%\com.drawpaper.app）；`log_path` 指向
 /// drawpaper.log（可能不存在，缺失时写一条说明而非失败）。
+/// `coldstart_json` 是预收集好的 `coldstart.json` 字节：GUI 菜单路径由
+/// [`collect_coldstart_json`] 产出（web 应答或 unavailable 占位）；无头 CLI 路径
+/// 直接传 `unavailable_bytes("headless-cli-no-webview")`。
 ///
 /// 隐私保证：除 `log_path` 外，本函数从不 `File::open` 任何业务文件；数据目录 walk
 /// 只调用 `read_dir` / `metadata` 取元数据。
@@ -88,6 +229,7 @@ pub fn write_diagnostic_zip(
     data_dir: &Path,
     log_path: &Path,
     out_zip: &Path,
+    coldstart_json: &[u8],
 ) -> std::io::Result<DiagnosticReport> {
     // 1) system.json（注册表探测在 #[cfg(windows)] 内，其它平台给 "unknown"）。
     let sys = SystemInfo {
@@ -145,6 +287,7 @@ pub fn write_diagnostic_zip(
     put!("system.json", &sys_bytes);
     put!(LOG_ZIP_ENTRY, &log_tail);
     put!("files-manifest.json", &manifest_bytes);
+    put!("coldstart.json", coldstart_json);
     put!("README.txt", readme.as_bytes());
     zip.finish().map_err(zerr)?;
 
@@ -176,7 +319,13 @@ pub fn diag_export_cli(out_zip: &str) -> i32 {
         log_path.display(),
         out_zip
     );
-    match write_diagnostic_zip(&data_dir, &log_path, Path::new(out_zip)) {
+    match write_diagnostic_zip(
+        &data_dir,
+        &log_path,
+        Path::new(out_zip),
+        // 无头 CLI 路径不构建 Tauri、没有 webview 可应答，直接写 unavailable 占位。
+        &unavailable_bytes("headless-cli-no-webview"),
+    ) {
         Ok(report) => {
             eprintln!("[diag-export] OK entries={} manifest_files={}",
                 report.entry_names.len(), report.manifest_count);
@@ -385,6 +534,8 @@ const README_TEMPLATE: &str = "drawpaper 诊断信息包
   * system.json         ：app 版本、操作系统版本/架构、WebView2 Runtime 版本、收集时间。
   * logs/drawpaper.log  ：应用日志尾部（约最后 256 KB）。
   * files-manifest.json ：数据目录递归清单，仅含每个文件的相对路径 / 大小 / 修改时间。
+  * coldstart.json      ：应用冷启动分段时间线（仅毫秒数字与阶段名；无 webview 或
+                          采集超时时为 {\"status\":\"unavailable\",...} 占位）。
   * README.txt          ：本说明。
 
 隐私边界（重要）：
@@ -392,6 +543,8 @@ const README_TEMPLATE: &str = "drawpaper 诊断信息包
   * 本包【不包含】任何 assets/ 图片 / 附件字节。
   * files-manifest.json 只记录文件的相对路径、大小、修改时间三项元数据，
     用于说明数据目录里有什么，不含任何文件内容。
+  * coldstart.json 只含性能数字与阶段名（经 Rust 形状白名单清洗：不允许任何字符串
+    叶子），不含文档标题、正文、URL 或文件路径。
   * 唯一被打包字节的文件是应用自身日志 logs/drawpaper.log。
 
 发送前请打开 files-manifest.json 与 logs/drawpaper.log 自行确认无敏感信息。
@@ -437,10 +590,14 @@ mod tests {
         fs::write(data_dir.join("drawpaper-recents.json"), "[]").unwrap();
 
         let out_zip = tmp.join("out.zip");
+        // 模拟一次 GUI 菜单导出：coldstart.json 是已过形状清洗的合法报告字节。
+        const COLDSTART_SAMPLE: &[u8] =
+            b"{\"marks\": {\"boot\": 12, \"canvas-frame\": 300}, \"fcp\": 88, \"swControlled\": true}";
         let report = write_diagnostic_zip(
             &data_dir,
             &data_dir.join("logs").join("drawpaper.log"),
             &out_zip,
+            COLDSTART_SAMPLE,
         )
         .unwrap();
 
@@ -449,6 +606,7 @@ mod tests {
         assert!(names.contains("system.json"), "missing system.json: {names}");
         assert!(names.contains("logs/drawpaper.log"), "missing log: {names}");
         assert!(names.contains("files-manifest.json"), "missing manifest: {names}");
+        assert!(names.contains("coldstart.json"), "missing coldstart.json: {names}");
         assert!(names.contains("README.txt"), "missing readme: {names}");
 
         // 2) 打开 zip，逐条目断言。
@@ -518,6 +676,18 @@ mod tests {
         assert!(sys.get("webview2_runtime_version").is_some());
         assert!(sys.get("os").is_some());
 
+        // 6) coldstart.json 原样落包（菜单路径传入的清洗后字节不被改写）。
+        let cs_entry = zip
+            .by_name("coldstart.json")
+            .unwrap()
+            .bytes()
+            .collect::<Result<Vec<u8>, _>>()
+            .unwrap();
+        let cs: serde_json::Value = serde_json::from_slice(&cs_entry).unwrap();
+        assert_eq!(cs["marks"]["boot"].as_u64(), Some(12));
+        assert_eq!(cs["fcp"].as_u64(), Some(88));
+        assert_eq!(cs["swControlled"].as_bool(), Some(true));
+
         let _ = fs::remove_dir_all(&tmp);
     }
 
@@ -536,7 +706,13 @@ mod tests {
         f.write_all(marker).unwrap();
 
         let out_zip = tmp.join("out.zip");
-        write_diagnostic_zip(&data_dir, &data_dir.join("logs").join("drawpaper.log"), &out_zip).unwrap();
+        write_diagnostic_zip(
+            &data_dir,
+            &data_dir.join("logs").join("drawpaper.log"),
+            &out_zip,
+            b"{\"status\":\"unavailable\",\"reason\":\"test\"}",
+        )
+        .unwrap();
         let file = fs::File::open(&out_zip).unwrap();
         let mut zip = ZipArchive::new(file).unwrap();
         let mut e = zip.by_name("logs/drawpaper.log").unwrap();

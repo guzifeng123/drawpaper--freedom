@@ -50,7 +50,11 @@
            secret string has ZERO hits across every extracted file;
          - system.json present with non-empty version / arch and a
            webview2_runtime_version field;
-         - files-manifest.json entries each have EXACTLY name/size/mtime.
+         - files-manifest.json entries each have EXACTLY name/size/mtime;
+         - coldstart.json present (Wave25): headless CLI has no webview, so it
+           must be the controlled {"status":"unavailable","reason":...} shape;
+           if a real report ever appears, recursively assert only
+           number/bool/null leaves + short identifier keys (no body strings).
 
   Exit code 0 = all assertions passed; non-zero = first failure (with
   diagnostics dumped and a ::error annotation).
@@ -308,6 +312,50 @@ if ($bad.Count -gt 0) { Fail ("manifest entries with unexpected fields: " + ($ba
 $names = $man | ForEach-Object { $_.name }
 Write-Host "  manifest still lists canary by name (metadata-only): $($names -contains 'SECRET-canary.kbnote')"
 Ok "manifest entries are exactly name/size/mtime"
+
+# 4g: coldstart.json（Wave25）— 诊断包新条目：web 冷启动分段时间线。
+# 无头 CLI 无 webview 可应答 → 合法占位 {"status":"unavailable","reason":...}；
+# 若哪天真由 GUI 菜单导出（有 webview），则递归断言只含 number/bool/null
+# 与短标识符键——禁止任何字符串叶子（正文类长串绝不能进包）。
+Banner '3b. coldstart.json — presence + privacy shape'
+$csPath = Join-Path $extract 'coldstart.json'
+if (-not (Test-Path -LiteralPath $csPath)) { Fail 'coldstart.json missing from diag zip' }
+$csRaw = Get-Content -Raw -LiteralPath $csPath
+Write-Host ("coldstart.json ({0} bytes): {1}" -f $csRaw.Length, $csRaw.Trim())
+if ($csRaw.Length -gt 65536) { Fail ("coldstart.json implausibly large ({0} bytes) — body leak?" -f $csRaw.Length) }
+$cs = $csRaw | ConvertFrom-Json
+
+function Test-ColdStartShape([object]$node, [string]$path) {
+    if ($null -eq $node) { return }
+    if ($node -is [bool] -or $node -is [int] -or $node -is [long] -or $node -is [double] -or $node -is [decimal]) { return }
+    if ($node -is [string]) {
+        $preview = $node.ToString(); if ($preview.Length -gt 80) { $preview = $preview.Substring(0, 80) + '...' }
+        Fail "coldstart.json unexpected string leaf at ${path}: '$preview'"
+    }
+    if ($node -is [System.Collections.IEnumerable]) {
+        foreach ($item in $node) { Test-ColdStartShape $item ($path + '[]') }
+        return
+    }
+    foreach ($p in $node.PSObject.Properties) {
+        if ($p.Name -notmatch '^[A-Za-z][A-Za-z0-9-]{0,31}$') {
+            Fail "coldstart.json disallowed key at ${path}: '$($p.Name)'"
+        }
+        Test-ColdStartShape $p.Value ($path + '.' + $p.Name)
+    }
+}
+
+$csProps = @($cs.PSObject.Properties.Name)
+if ($csProps -contains 'status') {
+    if ($cs.status -ne 'unavailable') { Fail "coldstart.json.status unexpected: '$($cs.status)'" }
+    # 排序后比集合，与 JSON 键序无关（serde_json 默认 BTreeMap 字母序）。
+    if (($csProps | Sort-Object) -join ',' -ne 'reason,status') {
+        Fail ("coldstart.json unavailable shape must be exactly status+reason, got: " + ($csProps -join ','))
+    }
+    Ok "coldstart.json present with controlled status='unavailable' (headless CLI has no webview to answer)"
+} else {
+    Test-ColdStartShape $cs '$'
+    Ok "coldstart.json present; recursive shape check passed (numbers/bools/null + short identifier keys only)"
+}
 
 # --- Assertion 3b: no drawpaper process survived the headless call ----------
 Banner '4. no residual process'

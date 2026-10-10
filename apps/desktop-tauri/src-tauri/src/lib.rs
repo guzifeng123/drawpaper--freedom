@@ -1192,6 +1192,9 @@ pub fn run() {
         .manage(AppState::default())
         // Wave17: 原生文件夹自动保存的独立状态（选定目录）。
         .manage(native_autosave::AutosaveState::default())
+        // Wave25: web 冷启动分段时间线上报暂存槽（菜单导出诊断时 eval 派发请求事件，
+        // web 应答经 coldstart_report command 写入；见 diagnostics.rs）。
+        .manage(diagnostics::ColdStartState::default())
         .setup(|app| {
             // Wave24 路1: the window starts hidden (tauri.conf app.windows[0].visible=false).
             // tauri 2.12 has NO Rust-side "webview ready" event on a conf-declared window
@@ -1290,8 +1293,17 @@ pub fn run() {
                             .unwrap_or_else(|_| std::path::PathBuf::from("."));
                         let log_path =
                             data_dir.join("logs").join("drawpaper.log");
-                        let result =
-                            diagnostics::write_diagnostic_zip(&data_dir, &log_path, &out);
+                        // Wave25: 有界等待 web 把冷启动分段时间线报上来（≤2s）。
+                        // 超时 / 无 webview / 形状不合格一律写 unavailable 占位，
+                        // 绝不阻断整个诊断导出。
+                        let coldstart_json =
+                            diagnostics::collect_coldstart_json(&app).await;
+                        let result = diagnostics::write_diagnostic_zip(
+                            &data_dir,
+                            &log_path,
+                            &out,
+                            &coldstart_json,
+                        );
                         match result {
                             Ok(report) => {
                                 let msg = format!(
@@ -1380,6 +1392,8 @@ pub fn run() {
             native_autosave::autosave_get_dir,
             native_autosave::autosave_dir_writable,
             native_autosave::autosave_write_file,
+            // Wave25: web 冷启动分段时间线上报（实现在 diagnostics.rs）。
+            diagnostics::coldstart_report,
         ])
         .run(context)
         .expect("error while running drawpaper desktop shell");
