@@ -97,7 +97,7 @@ pub async fn collect_coldstart_json(app: &tauri::AppHandle) -> Vec<u8> {
     // 清空上次导出后的残留，只接受本次 eval 之后新报上来的快照。
     if let Some(state) = app.try_state::<ColdStartState>() {
         if let Ok(mut g) = state.0.lock() {
-            g.take();
+            *g = None;
         }
     }
     if w.eval(
