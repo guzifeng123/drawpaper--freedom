@@ -102,11 +102,6 @@ jobs:
   # 硬门：失败即红，不允许 continue-on-error / fixme / skip 凑绿。
   webkit:
     runs-on: ubuntu-latest
-    env:
-      # 取证假设：CI runner 带 http_proxy/https_proxy，WebKitGTK(libsoup) 可能把
-      # 127.0.0.1 也走代理导致引擎侧导航挂起（node 侧正常）。强制本地回环绕过代理。
-      # 注意：GitHub Actions env 键大小写不敏感，no_proxy 与 NO_PROXY 不能同块出现。
-      no_proxy: '127.0.0.1,localhost,::1'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -135,41 +130,12 @@ jobs:
         working-directory: packages/web
         run: pnpm exec playwright install --with-deps webkit
 
-      # 先独立起 dev server（4190, detach）+ preview server（4191, 生产构建产物），
-      # 供取证脚本对比 dev vs preview，e2e 复用 dev（WEBKIT_REUSE_SERVER=1）。
-      - name: Start dev + preview servers (webkit forensics)
-        working-directory: packages/web
-        run: |
-          nohup pnpm dev --host 127.0.0.1 --port 4190 --strictPort > /tmp/webkit-dev.log 2>&1 &
-          echo $! > /tmp/webkit-dev.pid
-          nohup pnpm preview --host 127.0.0.1 --port 4191 --strictPort > /tmp/webkit-preview.log 2>&1 &
-          echo $! > /tmp/webkit-preview.pid
-          for i in $(seq 1 60); do
-            D=$(curl -sf --max-time 2 http://127.0.0.1:4190/ >/dev/null && echo ok)
-            P=$(curl -sf --max-time 2 http://127.0.0.1:4191/ >/dev/null && echo ok)
-            if [ "$D" = ok ] && [ "$P" = ok ]; then echo "dev+preview ready after ${i}s"; exit 0; fi
-            sleep 1
-          done
-          echo "::error::servers did not become ready in 60s"; echo '--- dev log ---'; cat /tmp/webkit-dev.log; echo '--- preview log ---'; cat /tmp/webkit-preview.log; exit 1
-
-      # 取证：node 侧 request vs 引擎侧 goto 对比（dev-127/dev-localhost/preview-127/example.com）。
-      # 结果全部用 ::warning annotation 输出（匿名可读）；本步退出码恒 0（不挡 CI）；e2e 仍是硬门。
-      - name: WebKit nav forensics
-        working-directory: packages/web
-        if: always()
-        run: |
-          curl_safe() { curl -sI --max-time 10 "$1" 2>&1 | head -8 | tr '\n' '|'; }
-          echo "::warning title=curl-dev-127::$(curl_safe http://127.0.0.1:4190/)"
-          echo "::warning title=curl-preview-127::$(curl_safe http://127.0.0.1:4191/)"
-          node scripts/webkit-nav-forensics.mjs
-          exit 0
-
+      # Playwright webServer 自管 dev server（端口 4191，避开 WebKit 受限端口黑名单）。
       - name: Playwright webkit e2e (wave21 compat)
         working-directory: packages/web
         run: npx playwright test --config playwright.webkit.config.ts
         env:
           CI: '1'
-          WEBKIT_REUSE_SERVER: '1'
 
       - name: Upload Playwright report (webkit)
         if: always()

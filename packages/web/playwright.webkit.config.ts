@@ -15,18 +15,18 @@ if (existsSync(LOCAL_BROWSERS_PATH)) {
  *    绝不让默认 chromium 全量套件改跑 webkit；
  *  - 本配置由 .github/workflows/web-ci.yml 的 `webkit` job 调用（ubuntu-latest
  *    有 sudo，`playwright install --with-deps webkit` 装齐系统库）；与 chromium
- *    全量 e2e 并行，互不抢端口（WEBKIT_PORT 默认 4190，独立 runner）；
+ *    全量 e2e 并行（独立 runner，端口不冲突）；
  *  - webServer 走 `pnpm dev`（e2e 依赖 window.__drawpaper__ DEV 钩子）。
  *
  * 前置：packages/web 先 build（@drawpaper/core exports 指向 dist）；WebKit 需系统库。
  *
- * Wave25.5 取证：WebKit 下 `page.goto('/')` 等 `load` 事件会超时（Vite HMR ws /
- * sourcemap 挂起导致 load 永不触发），故 webServer/baseURL 绑 127.0.0.1（排除
- * localhost IPv6 解析差异），spec 内 goto 改 waitUntil=domcontentloaded 后自行
- * 轮询 __drawpaper__（load 本就不是断言意图）。
+ * Wave25.5 根因取证：**WebKitGTK 内置受限端口黑名单包含 4190**——引擎 console 直接报
+ * 「Not allowed to use restricted network port 4190」，page.goto 连 commit/DCL 都不触发
+ * （node 侧 request 200 是因为 node 不查受限端口；chromium 允许 4190）。故本配置默认
+ * 端口用已实测安全的 **4191**（WEBKIT_PORT 可覆盖；勿改回 4190）。与代理/Vite dev
+ * 注入无关。
  */
-const WEBKIT_HOST = process.env['WEBKIT_HOST'] ?? '127.0.0.1';
-const WEBKIT_PORT = Number(process.env['WEBKIT_PORT'] ?? 4190);
+const WEBKIT_PORT = Number(process.env['WEBKIT_PORT'] ?? 4191);
 
 export default defineConfig({
   testDir: './e2e',
@@ -39,7 +39,7 @@ export default defineConfig({
   // 便于在 Actions 匿名读到逐条失败原因（与 chromium 默认 config 同款）。
   reporter: process.env.CI ? [['list'], ['github']] : [['list']],
   use: {
-    baseURL: `http://${WEBKIT_HOST}:${WEBKIT_PORT}`,
+    baseURL: `http://127.0.0.1:${WEBKIT_PORT}`,
     trace: 'retain-on-failure',
     screenshot: 'on',
   },
@@ -50,10 +50,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: `pnpm dev --host ${WEBKIT_HOST} --port ${WEBKIT_PORT} --strictPort`,
-    url: `http://${WEBKIT_HOST}:${WEBKIT_PORT}`,
-    // CI 下由独立 step 先起 dev server 并跑取证；WEBKIT_REUSE_SERVER=1 时 Playwright 复用。
-    reuseExistingServer: process.env.CI ? !!process.env.WEBKIT_REUSE_SERVER : true,
+    command: `pnpm dev --host 127.0.0.1 --port ${WEBKIT_PORT} --strictPort`,
+    url: `http://127.0.0.1:${WEBKIT_PORT}`,
+    reuseExistingServer: !process.env['CI'],
     timeout: 120_000,
   },
 });
