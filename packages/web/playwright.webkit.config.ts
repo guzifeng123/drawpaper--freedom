@@ -29,7 +29,9 @@ export default defineConfig({
   forbidOnly: !!process.env['CI'],
   retries: 0,
   workers: 1,
-  reporter: [['list']],
+  // CI 下同时开 github reporter：每个失败用例发 ::error annotation（含用例名+断言详情），
+  // 便于在 Actions 匿名读到逐条失败原因（与 chromium 默认 config 同款）。
+  reporter: process.env.CI ? [['list'], ['github']] : [['list']],
   use: {
     baseURL: `http://localhost:${WEBKIT_PORT}`,
     trace: 'retain-on-failure',
